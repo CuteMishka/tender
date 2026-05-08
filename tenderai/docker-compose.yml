@@ -1,0 +1,24 @@
+# Хост-порт по умолчанию 5433: на macOS часто занят локальный Postgres на 5432.
+# Свой порт: POSTGRES_PORT=5432 docker compose up -d
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tender-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tender}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tender}
+      # Имя создаваемой БД; в DATABASE_URL должно быть ...:порт/<это_имя> (не путать со служебной БД postgres)
+      POSTGRES_DB: ${POSTGRES_DB:-tender}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tender} -d ${POSTGRES_DB:-tender}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
