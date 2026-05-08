@@ -1,0 +1,38 @@
+services:
+  # ─── Go backend ───────────────────────────────────────────────────
+  - type: web
+    name: tenderai
+    runtime: docker
+    dockerfilePath: ./tenderai/Dockerfile
+    dockerContext: ./tenderai
+    envVars:
+      - key: TENDERPLUS_URL
+        value: https://api.tenderplus.kz/graphql
+      - key: TENDERPLUS_TOKEN
+        sync: false          # задаётся в Render Dashboard
+      - key: TENDERS_KEYWORDS
+        value: "IaaS,сервер,хостинг"
+      - key: LOCAL_DB_DSN
+        sync: false          # Neon PostgreSQL connection string
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false          # ваш Vercel URL, напр. https://tender.vercel.app
+
+  # ─── Python RAG backend ───────────────────────────────────────────
+  - type: web
+    name: tender-rag
+    runtime: docker
+    dockerfilePath: ./tender-rag/Dockerfile
+    dockerContext: ./tender-rag
+    envVars:
+      - key: DATABASE_URL
+        sync: false          # Neon PostgreSQL connection string (с pgvector)
+      - key: GEMINI_API_KEY
+        sync: false          # ваш ключ из Google AI Studio
+      - key: CHAT_MODEL
+        value: gemini-1.5-flash-8b
+      - key: EMBEDDING_MODEL
+        value: intfloat/multilingual-e5-small
+      - key: EMBEDDING_DIM
+        value: "384"
+      - key: CORS_ORIGINS
+        sync: false          # ваш Vercel URL, напр. https://tender.vercel.app

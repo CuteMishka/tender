@@ -29,13 +29,27 @@ type graphqlRequest struct {
 	Query string `json:"query"`
 }
 
-// LotDocument — файл/вложение лота в GraphQL TenderPlus.
+// LotDocument — файл/вложение лота.
 type LotDocument struct {
 	Name         *string `json:"name"`
 	DownloadLink *string `json:"downloadLink"`
 }
 
-// Lot — одна запись лота из GraphQL.
+// LotName — объект с полем name (регион, партнёр, статус).
+type LotName struct {
+	Name *string `json:"name"`
+}
+
+// LotBuy — блок закупки (поля подтверждены из документации TenderPlus).
+type LotBuy struct {
+	BeginDate   *string  `json:"begin_date"`
+	EndDate     *string  `json:"end_date"`
+	Partner     *LotName `json:"partner"`
+	LotStatusID *int     `json:"lot_status_id"`
+	LotStatus   *LotName `json:"lotStatus"`
+}
+
+// Lot — одна запись лота из GraphQL TenderPlus.
 type Lot struct {
 	ID          int           `json:"id"`
 	Lot         *string       `json:"lot"`
@@ -43,10 +57,13 @@ type Lot struct {
 	Title       *string       `json:"title"`
 	Description *string       `json:"description"`
 	Cost        *float64      `json:"cost"`
+	OneCost     *float64      `json:"one_cost"`
+	Counts      *int          `json:"counts"`
 	PartnerLink *string       `json:"partnerLink"`
 	Place       *string       `json:"place"`
 	BuyID       *int          `json:"buy_id"`
 	Documents   []LotDocument `json:"documents"`
+	Region      *LotName      `json:"region"`
 	LotBuy      *LotBuy       `json:"lotBuy"`
 }
 
@@ -85,6 +102,8 @@ func (c *Client) ListLotsByKeywords(ctx context.Context, keywords []string, page
 		title
 		description
 		cost
+		one_cost
+		counts
 		partnerLink
 		place
 		buy_id
@@ -92,10 +111,18 @@ func (c *Client) ListLotsByKeywords(ctx context.Context, keywords []string, page
 			name
 			downloadLink
 		}
+		region {
+			name
+		}
 		lotBuy {
-			documents {
+			begin_date
+			end_date
+			partner {
 				name
-				downloadLink
+			}
+			lot_status_id
+			lotStatus {
+				name
 			}
 		}
 	} }`, limit, page, string(keys))
@@ -129,4 +156,27 @@ func (c *Client) ListLotsByKeywords(ctx context.Context, keywords []string, page
 		return nil, nil, fmt.Errorf("tenderplus: status %d", resp.StatusCode)
 	}
 	return out.Data.Lot, out.Extensions, nil
+}
+
+// GetLotByID ищет конкретный лот по ID, перебирая страницы.
+func (c *Client) GetLotByID(ctx context.Context, id int, keywords []string) (*Lot, error) {
+	if keywords == nil {
+		keywords = []string{"IaaS", "сервер"}
+	}
+	const maxPages = 50
+	for page := 1; page <= maxPages; page++ {
+		lots, _, err := c.ListLotsByKeywords(ctx, keywords, page, 50)
+		if err != nil {
+			return nil, err
+		}
+		for i := range lots {
+			if lots[i].ID == id {
+				return &lots[i], nil
+			}
+		}
+		if len(lots) < 50 {
+			break
+		}
+	}
+	return nil, fmt.Errorf("лот с ID %d не найден", id)
 }

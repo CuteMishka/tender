@@ -1,3 +1,29 @@
+// ─── Viewed-tenders tracker ───────────────────────────────────────────────────
+
+const VIEWED_KEY = "viewed_tenders";
+
+export function markTenderViewed(id: number): void {
+  try {
+    const set = getViewedTenders();
+    set.add(id);
+    // Keep at most 500 entries to avoid localStorage bloat
+    const arr = [...set].slice(-500);
+    localStorage.setItem(VIEWED_KEY, JSON.stringify(arr));
+  } catch { /* ignore */ }
+}
+
+export function getViewedTenders(): Set<number> {
+  try {
+    const raw = localStorage.getItem(VIEWED_KEY);
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw) as number[]);
+  } catch {
+    return new Set();
+  }
+}
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
 export type TenderDocument = {
   name: string;
   downloadLink: string;
@@ -10,15 +36,39 @@ export type TenderItem = {
   title: string;
   description: string;
   cost: number;
+  one_cost?: number | null;
+  counts?: number | null;
   partnerLink: string;
   place: string;
   buy_id: number;
+  endDate?: string | null;
+  startDate?: string | null;
+  region?: string | null;
+  partner?: string | null;
+  status?: string | null;
+  purchaseType?: string | null;
   documents?: TenderDocument[];
-  /** Текст из файла тендера (техническая спецификация), если отдаёт API. */
   technical_specification?: string;
-  /** Текст ИИ-анализа тендера, если отдаёт API. */
   ai_analysis?: string;
 };
+
+/** Вычисляет «виртуальный» статус лота на основе endDate. */
+export function getTenderStatus(endDate: string | null | undefined): {
+  label: string;
+  color: "green" | "red" | "orange" | "gray";
+  daysLeft: number | null;
+} {
+  if (!endDate) return { label: "Неизвестно", color: "gray", daysLeft: null };
+  const end = new Date(endDate);
+  if (isNaN(end.getTime())) return { label: "Неизвестно", color: "gray", daysLeft: null };
+  const now = new Date();
+  const diffMs = end.getTime() - now.getTime();
+  const daysLeft = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+  if (daysLeft < 0) return { label: "Завершён", color: "gray", daysLeft };
+  if (daysLeft <= 3) return { label: `${daysLeft} дн.`, color: "red", daysLeft };
+  if (daysLeft <= 14) return { label: `${daysLeft} дн.`, color: "orange", daysLeft };
+  return { label: `${daysLeft} дн.`, color: "green", daysLeft };
+}
 
 export type TendersListResponse = {
   items: TenderItem[];
@@ -33,13 +83,24 @@ export type TendersListResponse = {
 
 const DEFAULT_API_BASE = "https://tenderai-production-70a1.up.railway.app";
 
-/** Прямой URL API: `VITE_BACK_API` или дефолтный Railway. */
 function getTenderApiBase(): string {
   const fromEnv =
     (typeof import.meta !== "undefined" && import.meta.env?.VITE_BACK_API) ||
     (typeof process !== "undefined" && process.env?.VITE_BACK_API);
   const base = (typeof fromEnv === "string" && fromEnv.trim()) || DEFAULT_API_BASE;
   return base.replace(/\/$/, "");
+}
+
+/** База для локальных эндпоинтов (дашборд, заявки).
+ *  Читает VITE_LOCAL_API, иначе падает на VITE_BACK_API, иначе localhost:8082. */
+export function getLocalApiBase(): string {
+  if (typeof import.meta !== "undefined" && import.meta.env) {
+    const local = import.meta.env.VITE_LOCAL_API;
+    if (typeof local === "string" && local.trim()) return local.trim().replace(/\/$/, "");
+    const back = import.meta.env.VITE_BACK_API;
+    if (typeof back === "string" && back.trim()) return back.trim().replace(/\/$/, "");
+  }
+  return "http://localhost:8082";
 }
 
 function normalizeInput(input: { page: number; limit?: number }): { page: number; limit: number } {
@@ -108,6 +169,12 @@ function normalizeTenderPayload(body: unknown): TenderItem | null {
     return {
       ...(o as unknown as TenderItem),
       documents,
+      purchaseType: typeof o.purchaseType === "string" ? o.purchaseType : null,
+      endDate: typeof o.endDate === "string" ? o.endDate : null,
+      startDate: typeof o.startDate === "string" ? o.startDate : null,
+      region: typeof o.region === "string" ? o.region : null,
+      partner: typeof o.partner === "string" ? o.partner : null,
+      status: typeof o.status === "string" ? o.status : null,
       ...(technical_specification !== undefined ? { technical_specification } : {}),
       ...(ai_analysis !== undefined ? { ai_analysis } : {}),
     };
@@ -182,7 +249,6 @@ function readListMetaFromEnvelope(
   return defaultListMeta(items, limit);
 }
 
-/** Приводит ответ списка к `{ items, meta }` — бэкенд может отдавать `data`, вложенный объект и т.д. */
 function normalizeTendersListResponse(raw: unknown, limit: number): TendersListResponse {
   const arr = getItemsArrayFromListBody(raw);
   const items: TenderItem[] = [];
@@ -194,7 +260,6 @@ function normalizeTendersListResponse(raw: unknown, limit: number): TendersListR
   return { items, meta };
 }
 
-/** Загрузка тендеров напрямую с бэкенда (браузер → Railway). Нужен CORS на API. */
 export async function fetchTendersList(input: {
   page: number;
   limit?: number;
@@ -220,15 +285,13 @@ export async function fetchTendersList(input: {
   return normalizeTendersListResponse(raw, limit);
 }
 
-/**
- * Сначала GET `/api/v1/tenders/:id`; если нет тела в ожидаемом виде или 404/405 —
- * ищет в списке по страницам (тот же контракт, что у списка).
- */
 export async function fetchTenderById(id: number): Promise<TenderItem> {
   if (!Number.isFinite(id) || id < 1) {
     throw new Error("Некорректный ID тендера");
   }
   const base = getTenderApiBase();
+
+  // Сначала пробуем прямой GET /api/v1/tenders/:id
   const detailRes = await fetch(`${base}/api/v1/tenders/${id}`);
   if (detailRes.ok) {
     let body: unknown;
@@ -244,6 +307,7 @@ export async function fetchTenderById(id: number): Promise<TenderItem> {
     throw new Error(`Tenders API ${detailRes.status}: ${text.slice(0, 240)}`);
   }
 
+  // Фолбек: ищем по страницам
   const maxPages = 50;
   for (let page = 1; page <= maxPages; page++) {
     const list = await fetchTendersList({ page, limit: 50 });
@@ -254,7 +318,6 @@ export async function fetchTenderById(id: number): Promise<TenderItem> {
   throw new Error("Тендер не найден");
 }
 
-/** Декодирует типичные HTML-сущности из API и схлопывает переносы (как в твоём JSON). */
 export function sanitizeApiText(s: string): string {
   if (!s) return "";
   let t = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -265,7 +328,6 @@ export function sanitizeApiText(s: string): string {
   return t.replace(/\s+/g, " ").trim();
 }
 
-/** Как `sanitizeApiText`, но сохраняет переносы строк — для длинного текста из файла. */
 export function sanitizeApiTextMultiline(s: string): string {
   if (!s) return "";
   let t = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -285,13 +347,21 @@ export function formatTenderAmount(cost: number): string {
   }).format(cost);
 }
 
-/** RAG + анализ лота: локально обычно порт 8083. */
+export function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleString("ru-KZ", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 const DEFAULT_LOT_ANALYZE_BASE = "http://127.0.0.1:8083";
 
-/**
- * База `{VITE_RAG_API}` для POST `/v1/lots/{lot_id}/index-document` и остального RAG.
- * Важно: обращение к `import.meta.env.VITE_*` — прямое, иначе Vite может не подставить значение.
- */
 function readRagServiceBaseFromEnv(): string | undefined {
   if (typeof import.meta !== "undefined" && import.meta.env) {
     const rag = import.meta.env.VITE_RAG_API;
@@ -308,24 +378,16 @@ function readRagServiceBaseFromEnv(): string | undefined {
   return undefined;
 }
 
-/** `{VITE_RAG_API}` без завершающего `/` — сюда же уходит файл ТЗ на `.../index-document`. */
 export function getRagApiBase(): string {
   const base = readRagServiceBaseFromEnv() || DEFAULT_LOT_ANALYZE_BASE;
   return base.replace(/\/$/, "");
 }
 
-/**
- * То же, что `getRagApiBase` (историческое имя для `/v1/lot/analyze`).
- * @deprecated предпочтительно `getRagApiBase`
- */
+/** @deprecated предпочтительно getRagApiBase */
 export function getLotAnalyzeApiBase(): string {
   return getRagApiBase();
 }
 
-/**
- * Текст лота для POST `/v1/lot/analyze` — кратко, как в примере:
- * «Услуги хостинга… Астана, сумма 50000 тг.»
- */
 export function buildLotText(t: TenderItem): string {
   const main =
     sanitizeApiText(t.description) || sanitizeApiText(t.title) || sanitizeApiText(t.lot);
@@ -359,10 +421,6 @@ function extractLotAnalyzeBody(raw: unknown): string | null {
   return null;
 }
 
-/**
- * POST `{ "lot_text": "..." }` на `/v1/lot/analyze`.
- * Ответ: JSON с текстовым полем или обычный текст.
- */
 export async function fetchLotAnalyze(lotText: string): Promise<string | null> {
   const trimmed = lotText.trim();
   if (!trimmed) return null;
@@ -394,14 +452,6 @@ export async function fetchLotAnalyze(lotText: string): Promise<string | null> {
   return t;
 }
 
-/**
- * Полный URL прокси скачивания вложений с площадки (обход CORS в браузере).
- * Задаётся как `VITE_FETCH_DOCUMENT_PROXY_URL`, например `http://localhost:8082/api/v1/fetch-document`
- * (тот же хост, что `VITE_BACK_API`, путь как на бэкенде).
- *
- * Контракт бэкенда: `POST /api/v1/fetch-document`, тело `{"url":"https://..."}`.
- * Успех `200` — сырые байты файла; ошибки — JSON `{"detail":"..."}` (400 / 502 / 503 / 504).
- */
 export function getFetchDocumentProxyUrl(): string | undefined {
   if (typeof import.meta !== "undefined" && import.meta.env?.VITE_FETCH_DOCUMENT_PROXY_URL) {
     const u = String(import.meta.env.VITE_FETCH_DOCUMENT_PROXY_URL).trim();
@@ -428,12 +478,11 @@ function readFetchDocumentProxyError(status: number, rawText: string): string {
   return t ? t.slice(0, 400) : `HTTP ${status}`;
 }
 
-/** Скачивание по внешнему URL через прокси бэкенда (не напрямую с goszakup — там CORS). */
 export async function fetchDocumentBlobViaBackendProxy(remoteUrl: string): Promise<Blob> {
   const proxy = getFetchDocumentProxyUrl();
   if (!proxy) {
     throw new Error(
-      "Задайте VITE_FETCH_DOCUMENT_PROXY_URL (POST /api/v1/fetch-document на бэкенде), иначе скачивание с площадки из браузера блокируется CORS.",
+      "Задайте VITE_FETCH_DOCUMENT_PROXY_URL (POST /api/v1/fetch-document на бэкенде)",
     );
   }
   const res = await fetch(proxy, {
@@ -460,9 +509,6 @@ function guessRagDocExtension(name: string, downloadLink: string): "pdf" | "docx
   return tryOne(name) ?? tryOne(downloadLink);
 }
 
-/**
- * Выбор вложения для индексации: приоритет имени с ТЗ/спецификацией, иначе первый pdf/docx/doc.
- */
 export function pickTenderDocumentForRag(documents: TenderDocument[] | undefined): TenderDocument | null {
   if (!documents?.length) return null;
   const ok = documents.filter((d) => guessRagDocExtension(d.name, d.downloadLink) !== null);
@@ -472,7 +518,6 @@ export function pickTenderDocumentForRag(documents: TenderDocument[] | undefined
   return preferred ?? ok[0];
 }
 
-/** Собирает `File` для multipart после прокси-блоба. */
 export function tenderDocumentBlobToFile(doc: TenderDocument, blob: Blob): File {
   const ext = guessRagDocExtension(doc.name, doc.downloadLink);
   let fname = doc.name.trim();
@@ -490,7 +535,6 @@ export function tenderDocumentBlobToFile(doc: TenderDocument, blob: Blob): File 
   return new File([blob], fname, { type: mime });
 }
 
-/** Ответ POST `/v1/lots/{lot_id}/index-document` (RAG). */
 export type IndexLotDocumentResult = {
   indexed: boolean;
   text_chars?: number;
@@ -498,7 +542,6 @@ export type IndexLotDocumentResult = {
   spec_summary?: Record<string, unknown>;
 };
 
-/** GET `/v1/lots/{lot_id}/spec-summary` — сохранённая выжимка ТЗ. */
 export type LotSpecSummary = Record<string, unknown>;
 
 function parseIndexDocumentJson(body: unknown): IndexLotDocumentResult {
@@ -523,22 +566,12 @@ function formatRagIndexError(status: number, rawText: string, body: unknown): st
     body && typeof body === "object" && "detail" in body
       ? String((body as { detail: unknown }).detail)
       : rawText.trim().slice(0, 400);
-  if (status === 503) {
-    return "Выжимка через OpenAI недоступна: на сервисе RAG не задан OPENAI_API_KEY (503).";
-  }
-  if (status === 502) {
-    return `Ошибка OpenAI при выжимке (502): ${detail || "без деталей"}`;
-  }
-  if (status === 400) {
-    return `Не удалось обработать файл (400): ${detail || "пустой файл, формат или извлечение текста"}`;
-  }
+  if (status === 503) return "Выжимка через OpenAI недоступна: не задан OPENAI_API_KEY (503).";
+  if (status === 502) return `Ошибка OpenAI при выжимке (502): ${detail || "без деталей"}`;
+  if (status === 400) return `Не удалось обработать файл (400): ${detail || "пустой файл или формат"}`;
   return `Индексация документа ${status}: ${detail || rawText.slice(0, 240)}`;
 }
 
-/**
- * Загрузка PDF/DOCX ТЗ на RAG: извлечение текста, индекс лота.
- * `lot_id` — строковый id лота на вашей стороне (как в матчинге / URL).
- */
 export async function indexLotDocument(
   lotId: string,
   file: File,
@@ -577,7 +610,6 @@ export async function indexLotDocument(
   return parseIndexDocumentJson(body);
 }
 
-/** Сохранённая на RAG выжимка ТЗ (после индексации с extract_spec_points). */
 export async function fetchLotSpecSummary(lotId: string): Promise<LotSpecSummary | null> {
   const trimmedId = lotId.trim();
   if (!trimmedId) return null;

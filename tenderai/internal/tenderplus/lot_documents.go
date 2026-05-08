@@ -1,33 +1,10 @@
 package tenderplus
 
-// LotBuy — блок закупки; часть вложений только здесь, не в Lot.documents.
-type LotBuy struct {
-	Documents []LotDocument `json:"documents"`
-}
-
-// AllDocuments объединяет файлы лота и закупки (как раздел «Документация» на TenderPlus).
 func (l Lot) AllDocuments() []LotDocument {
-	return dedupeDocuments(concatDocuments(l.Documents, lotBuyDocuments(l)))
-}
-
-func lotBuyDocuments(l Lot) []LotDocument {
-	if l.LotBuy == nil {
-		return nil
+	if len(l.Documents) == 0 {
+		return []LotDocument{}
 	}
-	return l.LotBuy.Documents
-}
-
-func concatDocuments(a, b []LotDocument) []LotDocument {
-	if len(b) == 0 {
-		return a
-	}
-	if len(a) == 0 {
-		return b
-	}
-	out := make([]LotDocument, 0, len(a)+len(b))
-	out = append(out, a...)
-	out = append(out, b...)
-	return out
+	return dedupeDocuments(l.Documents)
 }
 
 func dedupeDocuments(in []LotDocument) []LotDocument {

@@ -61,8 +61,6 @@ export const getRouter = () => {
     scrollRestoration: true,
     defaultPreloadStaleTime: 0,
     defaultErrorComponent: DefaultErrorComponent,
-    /** Клиентский режим: без SSR матчей (меньше гидрации/лоадеров на сервере). */
-    defaultSsr: false,
   });
 
   return router;

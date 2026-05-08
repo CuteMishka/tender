@@ -20,7 +20,7 @@ services:
     build: .
     ports:
       - "8083:8083"
-    # OPENAI_API_KEY и прочие секреты — в файле .env рядом с compose (см. .env.example), не коммитьте .env
+    # GEMINI_API_KEY и прочие секреты — в файле .env рядом с compose (см. .env.example), не коммитьте .env
     env_file:
       - path: .env
         required: false
@@ -28,8 +28,8 @@ services:
       DATABASE_URL: postgresql://rag:rag@db:5432/rag
       EMBEDDING_MODEL: intfloat/multilingual-e5-small
       FILES_DIR: /files
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      CHAT_MODEL: ${CHAT_MODEL:-gemini-2.0-flash}
       COMPANY_PROFILE: ${COMPANY_PROFILE:-}
       COMPANY_PROFILE_FILE: ${COMPANY_PROFILE_FILE:-/files/company_profile.txt}
     volumes:

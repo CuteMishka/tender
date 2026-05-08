@@ -1,21 +1,19 @@
-"""Сжатая выжимка техспецификации тендера через OpenAI (JSON)."""
+"""Сжатая выжимка техспецификации тендера через Gemini (JSON)."""
 
 from __future__ import annotations
 
-import json
-import os
 from typing import Any
 
-from app.config import OPENAI_CHAT_MODEL
+from app.config import gemini_chat_json
 
 MAX_SPEC_CHARS = 48_000
 
 SYSTEM_SPEC = """Ты аналитик по госзакупкам и техзаданиям (Казахстан, русский язык).
 Дан полный или фрагментированный текст документации лота / ТЗ / спецификации.
 
-Задача: выделить проверяемые факты из текста. Не выдумывай требования — только то, что явно следует из текста или разумно следует из формулировок. Если чего-то нет в тексте, честно отрази это в open_questions.
+Задача: выделить проверяемые факты из текста. Не выдумывай требования — только то, что явно следует из текста. Если чего-то нет в тексте, честно отрази это в open_questions.
 
-Ответ строго JSON (без markdown), формат:
+Ответ строго JSON (без markdown):
 {
   "overview": "2–4 предложения: предмет закупки и контекст",
   "key_requirements": ["важное требование 1", "..."],
@@ -36,35 +34,13 @@ def _truncate(s: str, limit: int) -> str:
 
 
 def summarize_specification(spec_text: str) -> dict[str, Any]:
-    """Структурированная выжимка ТЗ. Нужен OPENAI_API_KEY."""
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY не задан")
-
+    """Структурированная выжимка ТЗ через Gemini."""
     text = _truncate(spec_text, MAX_SPEC_CHARS)
     if not text:
         raise ValueError("Пустой текст спецификации")
 
-    model = OPENAI_CHAT_MODEL.strip()
     user = "### Текст документа (ТЗ / спецификация / описание лота)\n\n" + text
-
-    from openai import OpenAI
-
-    client = OpenAI(api_key=api_key)
-    resp = client.chat.completions.create(
-        model=model,
-        temperature=0.15,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": SYSTEM_SPEC},
-            {"role": "user", "content": user},
-        ],
-    )
-    choice = resp.choices[0].message.content
-    if not choice:
-        raise RuntimeError("Пустой ответ от модели")
-
-    data = json.loads(choice)
+    data = gemini_chat_json(SYSTEM_SPEC, user, temperature=0.15)
     return _normalize_payload(data)
 
 
@@ -82,9 +58,8 @@ def _normalize_payload(data: Any) -> dict[str, Any]:
             return [v.strip()]
         return []
 
-    overview = str(data.get("overview", "")).strip() or "—"
     return {
-        "overview": overview,
+        "overview": str(data.get("overview", "")).strip() or "—",
         "key_requirements": str_list("key_requirements"),
         "deliverables": str_list("deliverables"),
         "terms_and_deadlines": str_list("terms_and_deadlines"),

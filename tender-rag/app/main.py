@@ -75,7 +75,7 @@ class IndexBody(BaseModel):
     )
     extract_spec_points: bool = Field(
         False,
-        description="Извлечь основные пункты ТЗ через OpenAI и сохранить (нужен OPENAI_API_KEY)",
+        description="Извлечь основные пункты ТЗ через OpenAI и сохранить (нужен GEMINI_API_KEY)",
     )
 
 
@@ -145,14 +145,14 @@ class LotAnalyzeResponse(BaseModel):
 @app.get("/health")
 def health() -> dict[str, Any]:
     db_ok, db_err = health_db()
-    _key = os.environ.get("OPENAI_API_KEY", "")
+    _key = os.environ.get("GEMINI_API_KEY", "")
     out: dict[str, Any] = {
         "ok": True,
         "database": db_ok,
-        "openai_configured": bool(_key.strip()),
-        "openai_env": {
-            "OPENAI_API_KEY_defined": "OPENAI_API_KEY" in os.environ,
-            "OPENAI_API_KEY_length": len(_key),
+        "gemini_configured": bool(_key.strip()),
+        "gemini_env": {
+            "GEMINI_API_KEY_defined": "GEMINI_API_KEY" in os.environ,
+            "GEMINI_API_KEY_length": len(_key),
         },
     }
     if db_err is not None:
@@ -173,10 +173,10 @@ def index_lot(lot_id: str, body: IndexBody) -> Response:
     try:
         replace_lot_chunks(conn, lot_id, chunks, vectors, body.source_hint)
         if body.extract_spec_points:
-            if not os.environ.get("OPENAI_API_KEY", "").strip():
+            if not os.environ.get("GEMINI_API_KEY", "").strip():
                 raise HTTPException(
                     status_code=503,
-                    detail="extract_spec_points требует OPENAI_API_KEY в окружении",
+                    detail="extract_spec_points требует GEMINI_API_KEY в окружении",
                 )
             try:
                 payload = summarize_specification(text)
@@ -185,7 +185,7 @@ def index_lot(lot_id: str, body: IndexBody) -> Response:
             except Exception as e:
                 raise HTTPException(
                     status_code=502,
-                    detail=f"OpenAI (spec summary): {e!s}",
+                    detail=f"Gemini (spec summary): {e!s}",
                 ) from e
             replace_lot_spec_summary(conn, lot_id, payload)
             return JSONResponse(
@@ -208,7 +208,7 @@ async def index_document(
     extract_spec_points: Annotated[
         bool,
         Form(
-            description="Выжимка ТЗ через OpenAI (тратит токены; нужен OPENAI_API_KEY)"
+            description="Выжимка ТЗ через OpenAI (тратит токены; нужен GEMINI_API_KEY)"
         ),
     ] = False,
     include_extracted_text: Annotated[
@@ -241,10 +241,10 @@ async def index_document(
         if include_extracted_text:
             out["extracted_text"] = text
         if extract_spec_points:
-            if not os.environ.get("OPENAI_API_KEY", "").strip():
+            if not os.environ.get("GEMINI_API_KEY", "").strip():
                 raise HTTPException(
                     status_code=503,
-                    detail="extract_spec_points требует OPENAI_API_KEY в окружении",
+                    detail="extract_spec_points требует GEMINI_API_KEY в окружении",
                 )
             try:
                 payload = summarize_specification(text)
@@ -253,7 +253,7 @@ async def index_document(
             except Exception as e:
                 raise HTTPException(
                     status_code=502,
-                    detail=f"OpenAI (spec summary): {e!s}",
+                    detail=f"Gemini (spec summary): {e!s}",
                 ) from e
             replace_lot_spec_summary(conn, lot_id, payload)
             out["spec_summary"] = payload
@@ -297,12 +297,12 @@ def match(body: MatchBody) -> list[MatchResult]:
 
 @app.post("/v1/match/analyze", response_model=AnalyzeResponse)
 def match_analyze(body: AnalyzeBody) -> AnalyzeResponse:
-    """Векторный поиск + текстовый разбор OpenAI по профилю, входящим данным и фрагментам из БД."""
+    """Векторный поиск + текстовый разбор Gemini по профилю, входящим данным и фрагментам из БД."""
     profile = effective_profile(body.profile)
-    if not os.environ.get("OPENAI_API_KEY", "").strip():
+    if not os.environ.get("GEMINI_API_KEY", "").strip():
         raise HTTPException(
             status_code=503,
-            detail="OPENAI_API_KEY не задан — добавьте ключ в окружение",
+            detail="GEMINI_API_KEY не задан — добавьте ключ в окружение",
         )
 
     q = embed_profile(profile)
@@ -330,7 +330,7 @@ def match_analyze(body: AnalyzeBody) -> AnalyzeResponse:
     except Exception as e:
         raise HTTPException(
             status_code=502,
-            detail=f"OpenAI: {e!s}",
+            detail=f"Gemini: {e!s}",
         ) from e
 
     verdicts_raw = out.get("verdicts") or []
@@ -365,11 +365,11 @@ def match_analyze(body: AnalyzeBody) -> AnalyzeResponse:
 
 @app.post("/v1/lot/analyze", response_model=LotAnalyzeResponse)
 def lot_analyze(body: LotAnalyzeBody) -> LotAnalyzeResponse:
-    """Один лот: профиль + текст лота → вердикт. Без pgvector и без POST /index (нужен OPENAI_API_KEY)."""
-    if not os.environ.get("OPENAI_API_KEY", "").strip():
+    """Один лот: профиль + текст лота → вердикт. Без pgvector и без POST /index (нужен GEMINI_API_KEY)."""
+    if not os.environ.get("GEMINI_API_KEY", "").strip():
         raise HTTPException(
             status_code=503,
-            detail="OPENAI_API_KEY не задан",
+            detail="GEMINI_API_KEY не задан",
         )
     profile = effective_profile(body.profile)
     try:
@@ -377,7 +377,7 @@ def lot_analyze(body: LotAnalyzeBody) -> LotAnalyzeResponse:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"OpenAI: {e!s}") from e
+        raise HTTPException(status_code=502, detail=f"Gemini: {e!s}") from e
     return LotAnalyzeResponse(**out)
 
 
@@ -389,7 +389,7 @@ def root() -> dict[str, str]:
         "index_document": "POST /v1/lots/{lot_id}/index-document — PDF/DOCX → индекс + опционально выжимка",
         "spec_summary": "GET /v1/lots/{lot_id}/spec-summary",
         "match": "POST /v1/match",
-        "match_analyze": "POST /v1/match/analyze (нужен OPENAI_API_KEY)",
+        "match_analyze": "POST /v1/match/analyze (нужен GEMINI_API_KEY)",
         "lot_analyze": "POST /v1/lot/analyze — лот без индекса, только OpenAI",
         "profile_default": "COMPANY_PROFILE или COMPANY_PROFILE_FILE в .env если не передаёте profile",
     }

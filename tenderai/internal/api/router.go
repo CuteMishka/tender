@@ -26,6 +26,7 @@ func NewRouter(h *Handler, allowedOrigins []string) http.Handler {
 	r.Get("/health", h.Health)
 	r.Route("/api/v1", func(s chi.Router) {
 		s.Get("/tenders", h.ListTenders)
+		s.Get("/tenders/{tenderId}", h.GetTender)
 		if h.FetchDoc != nil {
 			s.Post("/fetch-document", h.FetchDocument)
 		}

@@ -20,7 +20,12 @@ import { Route as AdminCompaniesRouteImport } from './routes/_admin/companies'
 import { Route as AdminBidsRouteImport } from './routes/_admin/bids'
 import { Route as AdminAnalyticsRouteImport } from './routes/_admin/analytics'
 import { Route as AdminTendersIndexRouteImport } from './routes/_admin/tenders.index'
+import { Route as AdminAnalyticsIndexRouteImport } from './routes/_admin/analytics.index'
 import { Route as AdminTendersTenderIdRouteImport } from './routes/_admin/tenders.$tenderId'
+import { Route as AdminAnalyticsWinnersRouteImport } from './routes/_admin/analytics.winners'
+import { Route as AdminAnalyticsPricesRouteImport } from './routes/_admin/analytics.prices'
+import { Route as AdminAnalyticsHistoricalRouteImport } from './routes/_admin/analytics.historical'
+import { Route as AdminAnalyticsCustomersRouteImport } from './routes/_admin/analytics.customers'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -76,35 +81,70 @@ const AdminTendersIndexRoute = AdminTendersIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AdminTendersRoute,
 } as any)
+const AdminAnalyticsIndexRoute = AdminAnalyticsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminAnalyticsRoute,
+} as any)
 const AdminTendersTenderIdRoute = AdminTendersTenderIdRouteImport.update({
   id: '/$tenderId',
   path: '/$tenderId',
   getParentRoute: () => AdminTendersRoute,
 } as any)
+const AdminAnalyticsWinnersRoute = AdminAnalyticsWinnersRouteImport.update({
+  id: '/winners',
+  path: '/winners',
+  getParentRoute: () => AdminAnalyticsRoute,
+} as any)
+const AdminAnalyticsPricesRoute = AdminAnalyticsPricesRouteImport.update({
+  id: '/prices',
+  path: '/prices',
+  getParentRoute: () => AdminAnalyticsRoute,
+} as any)
+const AdminAnalyticsHistoricalRoute =
+  AdminAnalyticsHistoricalRouteImport.update({
+    id: '/historical',
+    path: '/historical',
+    getParentRoute: () => AdminAnalyticsRoute,
+  } as any)
+const AdminAnalyticsCustomersRoute = AdminAnalyticsCustomersRouteImport.update({
+  id: '/customers',
+  path: '/customers',
+  getParentRoute: () => AdminAnalyticsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
-  '/analytics': typeof AdminAnalyticsRoute
+  '/analytics': typeof AdminAnalyticsRouteWithChildren
   '/bids': typeof AdminBidsRoute
   '/companies': typeof AdminCompaniesRoute
   '/dashboard': typeof AdminDashboardRoute
   '/settings': typeof AdminSettingsRoute
   '/tenders': typeof AdminTendersRouteWithChildren
   '/users': typeof AdminUsersRoute
+  '/analytics/customers': typeof AdminAnalyticsCustomersRoute
+  '/analytics/historical': typeof AdminAnalyticsHistoricalRoute
+  '/analytics/prices': typeof AdminAnalyticsPricesRoute
+  '/analytics/winners': typeof AdminAnalyticsWinnersRoute
   '/tenders/$tenderId': typeof AdminTendersTenderIdRoute
+  '/analytics/': typeof AdminAnalyticsIndexRoute
   '/tenders/': typeof AdminTendersIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
-  '/analytics': typeof AdminAnalyticsRoute
   '/bids': typeof AdminBidsRoute
   '/companies': typeof AdminCompaniesRoute
   '/dashboard': typeof AdminDashboardRoute
   '/settings': typeof AdminSettingsRoute
   '/users': typeof AdminUsersRoute
+  '/analytics/customers': typeof AdminAnalyticsCustomersRoute
+  '/analytics/historical': typeof AdminAnalyticsHistoricalRoute
+  '/analytics/prices': typeof AdminAnalyticsPricesRoute
+  '/analytics/winners': typeof AdminAnalyticsWinnersRoute
   '/tenders/$tenderId': typeof AdminTendersTenderIdRoute
+  '/analytics': typeof AdminAnalyticsIndexRoute
   '/tenders': typeof AdminTendersIndexRoute
 }
 export interface FileRoutesById {
@@ -112,14 +152,19 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_admin': typeof AdminRouteWithChildren
   '/login': typeof LoginRoute
-  '/_admin/analytics': typeof AdminAnalyticsRoute
+  '/_admin/analytics': typeof AdminAnalyticsRouteWithChildren
   '/_admin/bids': typeof AdminBidsRoute
   '/_admin/companies': typeof AdminCompaniesRoute
   '/_admin/dashboard': typeof AdminDashboardRoute
   '/_admin/settings': typeof AdminSettingsRoute
   '/_admin/tenders': typeof AdminTendersRouteWithChildren
   '/_admin/users': typeof AdminUsersRoute
+  '/_admin/analytics/customers': typeof AdminAnalyticsCustomersRoute
+  '/_admin/analytics/historical': typeof AdminAnalyticsHistoricalRoute
+  '/_admin/analytics/prices': typeof AdminAnalyticsPricesRoute
+  '/_admin/analytics/winners': typeof AdminAnalyticsWinnersRoute
   '/_admin/tenders/$tenderId': typeof AdminTendersTenderIdRoute
+  '/_admin/analytics/': typeof AdminAnalyticsIndexRoute
   '/_admin/tenders/': typeof AdminTendersIndexRoute
 }
 export interface FileRouteTypes {
@@ -134,19 +179,28 @@ export interface FileRouteTypes {
     | '/settings'
     | '/tenders'
     | '/users'
+    | '/analytics/customers'
+    | '/analytics/historical'
+    | '/analytics/prices'
+    | '/analytics/winners'
     | '/tenders/$tenderId'
+    | '/analytics/'
     | '/tenders/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/login'
-    | '/analytics'
     | '/bids'
     | '/companies'
     | '/dashboard'
     | '/settings'
     | '/users'
+    | '/analytics/customers'
+    | '/analytics/historical'
+    | '/analytics/prices'
+    | '/analytics/winners'
     | '/tenders/$tenderId'
+    | '/analytics'
     | '/tenders'
   id:
     | '__root__'
@@ -160,7 +214,12 @@ export interface FileRouteTypes {
     | '/_admin/settings'
     | '/_admin/tenders'
     | '/_admin/users'
+    | '/_admin/analytics/customers'
+    | '/_admin/analytics/historical'
+    | '/_admin/analytics/prices'
+    | '/_admin/analytics/winners'
     | '/_admin/tenders/$tenderId'
+    | '/_admin/analytics/'
     | '/_admin/tenders/'
   fileRoutesById: FileRoutesById
 }
@@ -249,6 +308,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminTendersIndexRouteImport
       parentRoute: typeof AdminTendersRoute
     }
+    '/_admin/analytics/': {
+      id: '/_admin/analytics/'
+      path: '/'
+      fullPath: '/analytics/'
+      preLoaderRoute: typeof AdminAnalyticsIndexRouteImport
+      parentRoute: typeof AdminAnalyticsRoute
+    }
     '/_admin/tenders/$tenderId': {
       id: '/_admin/tenders/$tenderId'
       path: '/$tenderId'
@@ -256,8 +322,56 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminTendersTenderIdRouteImport
       parentRoute: typeof AdminTendersRoute
     }
+    '/_admin/analytics/winners': {
+      id: '/_admin/analytics/winners'
+      path: '/winners'
+      fullPath: '/analytics/winners'
+      preLoaderRoute: typeof AdminAnalyticsWinnersRouteImport
+      parentRoute: typeof AdminAnalyticsRoute
+    }
+    '/_admin/analytics/prices': {
+      id: '/_admin/analytics/prices'
+      path: '/prices'
+      fullPath: '/analytics/prices'
+      preLoaderRoute: typeof AdminAnalyticsPricesRouteImport
+      parentRoute: typeof AdminAnalyticsRoute
+    }
+    '/_admin/analytics/historical': {
+      id: '/_admin/analytics/historical'
+      path: '/historical'
+      fullPath: '/analytics/historical'
+      preLoaderRoute: typeof AdminAnalyticsHistoricalRouteImport
+      parentRoute: typeof AdminAnalyticsRoute
+    }
+    '/_admin/analytics/customers': {
+      id: '/_admin/analytics/customers'
+      path: '/customers'
+      fullPath: '/analytics/customers'
+      preLoaderRoute: typeof AdminAnalyticsCustomersRouteImport
+      parentRoute: typeof AdminAnalyticsRoute
+    }
   }
 }
+
+interface AdminAnalyticsRouteChildren {
+  AdminAnalyticsCustomersRoute: typeof AdminAnalyticsCustomersRoute
+  AdminAnalyticsHistoricalRoute: typeof AdminAnalyticsHistoricalRoute
+  AdminAnalyticsPricesRoute: typeof AdminAnalyticsPricesRoute
+  AdminAnalyticsWinnersRoute: typeof AdminAnalyticsWinnersRoute
+  AdminAnalyticsIndexRoute: typeof AdminAnalyticsIndexRoute
+}
+
+const AdminAnalyticsRouteChildren: AdminAnalyticsRouteChildren = {
+  AdminAnalyticsCustomersRoute: AdminAnalyticsCustomersRoute,
+  AdminAnalyticsHistoricalRoute: AdminAnalyticsHistoricalRoute,
+  AdminAnalyticsPricesRoute: AdminAnalyticsPricesRoute,
+  AdminAnalyticsWinnersRoute: AdminAnalyticsWinnersRoute,
+  AdminAnalyticsIndexRoute: AdminAnalyticsIndexRoute,
+}
+
+const AdminAnalyticsRouteWithChildren = AdminAnalyticsRoute._addFileChildren(
+  AdminAnalyticsRouteChildren,
+)
 
 interface AdminTendersRouteChildren {
   AdminTendersTenderIdRoute: typeof AdminTendersTenderIdRoute
@@ -274,7 +388,7 @@ const AdminTendersRouteWithChildren = AdminTendersRoute._addFileChildren(
 )
 
 interface AdminRouteChildren {
-  AdminAnalyticsRoute: typeof AdminAnalyticsRoute
+  AdminAnalyticsRoute: typeof AdminAnalyticsRouteWithChildren
   AdminBidsRoute: typeof AdminBidsRoute
   AdminCompaniesRoute: typeof AdminCompaniesRoute
   AdminDashboardRoute: typeof AdminDashboardRoute
@@ -284,7 +398,7 @@ interface AdminRouteChildren {
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
-  AdminAnalyticsRoute: AdminAnalyticsRoute,
+  AdminAnalyticsRoute: AdminAnalyticsRouteWithChildren,
   AdminBidsRoute: AdminBidsRoute,
   AdminCompaniesRoute: AdminCompaniesRoute,
   AdminDashboardRoute: AdminDashboardRoute,
