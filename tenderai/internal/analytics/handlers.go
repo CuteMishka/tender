@@ -59,6 +59,9 @@ func (h *Handler) ListLots(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("winner"); v != "" {
 		q = q.Where("winner_name ILIKE ?", "%"+v+"%")
 	}
+	if r.URL.Query().Get("participation") == "our" {
+		q = q.Where("status IN ?", []string{"participating", "won", "lost", "submitted"})
+	}
 	if v := r.URL.Query().Get("date_from"); v != "" {
 		if t, err := time.Parse("2006-01-02", v); err == nil {
 			q = q.Where("end_date >= ?", t)
@@ -163,6 +166,47 @@ func (h *Handler) GetFilters(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) ListCustomerCandidates(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, _ := strconv.Atoi(v); n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	search := strings.TrimSpace(r.URL.Query().Get("q"))
+	rows := make([]CustomerCandidate, 0)
+	q := h.DB.Model(&HistoricalLot{}).
+		Select(`
+			customer_name,
+			MAX(customer_id) AS customer_id,
+			COUNT(*) AS tender_count,
+			MAX(end_date) AS last_tender_at,
+			COALESCE(SUM(initial_amount),0) AS total_budget
+		`).
+		Where("customer_name != ''").
+		Group("customer_name").
+		Order("tender_count DESC, total_budget DESC").
+		Limit(limit)
+	if search != "" {
+		q = q.Where("customer_name ILIKE ?", "%"+search+"%")
+	}
+	q.Scan(&rows)
+
+	tracked := make([]TrackedCustomer, 0)
+	h.DB.Find(&tracked)
+	byName := map[string]TrackedCustomer{}
+	for _, c := range tracked {
+		byName[strings.ToLower(strings.TrimSpace(c.CustomerName))] = c
+	}
+	for i := range rows {
+		if c, ok := byName[strings.ToLower(strings.TrimSpace(rows[i].CustomerName))]; ok {
+			rows[i].IsTracked = true
+			rows[i].IsFavorite = c.IsFavorite
+		}
+	}
+	writeJSON(w, rows)
+}
+
 // GET /api/v1/analytics/export?format=csv
 func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 	lots := make([]HistoricalLot, 0)
@@ -208,6 +252,7 @@ func (h *Handler) AddCustomer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Имя заказчика обязательно")
 		return
 	}
+	input.IsFavorite = true
 	if err := h.DB.Create(&input).Error; err != nil {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
 			writeError(w, http.StatusConflict, "Заказчик уже отслеживается")
@@ -217,6 +262,32 @@ func (h *Handler) AddCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, input)
+}
+
+func (h *Handler) UpdateCustomer(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var input TrackedCustomer
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "Неверный формат данных")
+		return
+	}
+	var customer TrackedCustomer
+	if err := h.DB.First(&customer, id).Error; err != nil {
+		writeError(w, http.StatusNotFound, "Заказчик не найден")
+		return
+	}
+	if strings.TrimSpace(input.CustomerName) != "" {
+		customer.CustomerName = strings.TrimSpace(input.CustomerName)
+	}
+	customer.CustomerID = input.CustomerID
+	customer.NotifyEmail = input.NotifyEmail
+	customer.Notes = input.Notes
+	customer.IsFavorite = input.IsFavorite
+	if err := h.DB.Save(&customer).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, customer)
 }
 
 // DELETE /api/v1/analytics/customers/{id}

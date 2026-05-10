@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { ExternalLink, Filter, ThumbsUp, ThumbsDown } from "lucide-react";
+import { ExternalLink, Filter, ThumbsUp, ThumbsDown, CheckCircle2 } from "lucide-react";
 import {
   fetchTendersList,
   formatTenderAmount,
@@ -89,6 +89,16 @@ function TendersList() {
   const [activeTab, setActiveTab] = useState("Все");
   const [showFilters, setShowFilters] = useState(false);
   const [searchText, setSearchText] = useState("");
+  const [filterMinAmount, setFilterMinAmount] = useState("");
+  const [filterMaxAmount, setFilterMaxAmount] = useState("");
+  const [savedIds, setSavedIds] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    fetch(`${getLocalApiBase()}/api/v1/lots/saved`)
+      .then((r) => r.json())
+      .then((d) => { if (Array.isArray(d)) setSavedIds(new Set(d.filter((l: any) => l.status === "participating").map((l: any) => l.id))); })
+      .catch(() => {});
+  }, []);
 
   // Refresh viewed set when window regains focus (user navigated back from detail page)
   useEffect(() => {
@@ -113,11 +123,16 @@ function TendersList() {
     if (activeTab === "Активные" && status.color === "gray") return false;
     if (activeTab === "Истекающие" && status.color !== "red" && status.color !== "orange") return false;
     if (activeTab === "Завершённые" && status.color !== "gray") return false;
+    if (activeTab === "Наше участие" && !savedIds.has(t.id)) return false;
     if (searchText) {
       const s = searchText.toLowerCase();
       const text = `${t.title} ${t.description} ${t.place}`.toLowerCase();
       if (!text.includes(s)) return false;
     }
+    const minA = parseFloat(filterMinAmount);
+    const maxA = parseFloat(filterMaxAmount);
+    if (!isNaN(minA) && t.cost < minA) return false;
+    if (!isNaN(maxA) && t.cost > maxA) return false;
     return true;
   });
 
@@ -164,20 +179,42 @@ function TendersList() {
                 onChange={(e) => setSearchText(e.target.value)}
                 className="rounded-lg border border-input bg-background px-3 py-2.5 text-sm"
               />
-              <input type="text" placeholder="Мин. сумма" className="rounded-lg border border-input bg-background px-3 py-2.5 text-sm" />
-              <input type="text" placeholder="Макс. сумма" className="rounded-lg border border-input bg-background px-3 py-2.5 text-sm" />
+              <input
+                type="number"
+                placeholder="Мин. сумма ₸"
+                value={filterMinAmount}
+                onChange={(e) => setFilterMinAmount(e.target.value)}
+                className="rounded-lg border border-input bg-background px-3 py-2.5 text-sm"
+              />
+              <input
+                type="number"
+                placeholder="Макс. сумма ₸"
+                value={filterMaxAmount}
+                onChange={(e) => setFilterMaxAmount(e.target.value)}
+                className="rounded-lg border border-input bg-background px-3 py-2.5 text-sm"
+              />
             </div>
           </div>
         )}
 
         <div className="mb-4 flex flex-wrap gap-2">
-          {["Все", "Активные", "Истекающие", "Завершённые"].map((tab) => (
+          {[
+            { key: "Все", count: data?.items?.length },
+            { key: "Активные" },
+            { key: "Истекающие" },
+            { key: "Завершённые" },
+            { key: "Наше участие", count: savedIds.size, icon: CheckCircle2 },
+          ].map(({ key: tab, count, icon: Icon }) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === tab ? "bg-primary text-primary-foreground" : "border border-border bg-card text-foreground hover:bg-accent"}`}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === tab ? "bg-primary text-primary-foreground" : "border border-border bg-card text-foreground hover:bg-accent"}`}
             >
+              {Icon && <Icon className="h-3.5 w-3.5" />}
               {tab}
+              {count !== undefined && (
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${activeTab === tab ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground"}`}>{count}</span>
+              )}
             </button>
           ))}
         </div>

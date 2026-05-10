@@ -10,7 +10,13 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.chunking import chunk_text
+from app.api.citizensec import router as citizensec_router
+from app.api.commercial_proposals import router as commercial_proposals_router
+from app.api.crm import router as crm_router
+from app.api.knowledge import router as knowledge_router
+from app.api.tailoring import router as tailoring_router
 from app.config import CORS_ORIGINS, get_company_profile
+from app.database import create_async_schema
 from app.document_extract import extract_text_from_bytes
 from app.embeddings import embed_chunks, embed_profile
 from app.openai_analyze import analyze_lot_without_index, analyze_match_context
@@ -42,10 +48,16 @@ def effective_profile(inline: str | None) -> str:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     apply_schema()
+    await create_async_schema()
     yield
 
 
 app = FastAPI(title="Tender RAG", version="0.1.0", lifespan=lifespan)
+app.include_router(crm_router)
+app.include_router(tailoring_router)
+app.include_router(knowledge_router)
+app.include_router(commercial_proposals_router)
+app.include_router(citizensec_router)
 
 _cors_wildcard = CORS_ORIGINS == ["*"]
 app.add_middleware(

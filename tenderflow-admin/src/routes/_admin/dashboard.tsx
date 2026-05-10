@@ -1,8 +1,9 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { Gavel, FileText, Building2, DollarSign, Download, ArrowRight, ChevronRight } from "lucide-react";
+import { Gavel, FileText, Building2, DollarSign, Download, ArrowRight, ChevronRight, Bell } from "lucide-react";
 import { getLocalApiBase, formatTenderAmount } from "@/lib/tenders-api";
+import { useNotifications } from "@/hooks/use-notifications";
 
 export const Route = createFileRoute("/_admin/dashboard")({
   component: Dashboard,
@@ -30,6 +31,7 @@ const STATUS_RU: Record<string, { label: string; cls: string }> = {
 
 function Dashboard() {
   const navigate = useNavigate();
+  const { unreadCount } = useNotifications();
   const [dbStats, setDbStats] = useState({
     active_count: 0, participating_count: 0, total_amount: 0, participating_amount: 0,
   });
@@ -83,6 +85,15 @@ function Dashboard() {
       accent: "bg-violet-100 text-violet-600",
       border: "hover:border-violet-400/40",
       link: "/bids",
+    },
+    {
+      label: "Непрочитанных уведомлений",
+      value: unreadCount,
+      display: String(unreadCount),
+      icon: Bell,
+      accent: "bg-red-100 text-red-600",
+      border: "hover:border-red-400/40",
+      link: "/notifications",
     },
   ];
 
@@ -236,7 +247,7 @@ function Dashboard() {
                       <tr
                         key={t.id}
                         className={`group cursor-pointer border-t border-border transition hover:bg-muted/40 ${isExpiring ? "bg-red-50/60" : ""}`}
-                        onClick={() => navigate({ to: "/bids" })}
+                        onClick={() => navigate({ to: "/tenders/$tenderId", params: { tenderId: String(t.id) } })}
                       >
                         <td className="px-6 py-4 font-mono text-xs text-muted-foreground">{t.id}</td>
                         <td className="px-6 py-4 font-medium text-foreground">

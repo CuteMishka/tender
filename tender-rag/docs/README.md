@@ -8,6 +8,7 @@
 | [match.md](match.md) | `POST /v1/match` (вариант 2) |
 | [lot-analyze.md](lot-analyze.md) | `POST /v1/lot/analyze` (вариант 3) |
 | [match-analyze.md](match-analyze.md) | `POST /v1/match/analyze` (вариант 4) |
+| [integrations-and-ai-modules.md](integrations-and-ai-modules.md) | Bitrix24, tailoring detection, commercial proposals, CitizenSec L1, decision RAG |
 
 Краткая шпаргалка **2 / 3 / 4** в одном месте: [README.variants.md](../README.variants.md).
 

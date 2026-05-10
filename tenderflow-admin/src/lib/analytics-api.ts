@@ -80,11 +80,22 @@ export type TrackedCustomer = {
   customer_id: string;
   notify_email: string;
   notes: string;
+  is_favorite: boolean;
   last_checked_at: string | null;
   tender_count: number;
   last_tender_at: string | null;
   total_budget: number;
   created_at: string;
+};
+
+export type CustomerCandidate = {
+  customer_name: string;
+  customer_id: string;
+  tender_count: number;
+  last_tender_at: string | null;
+  total_budget: number;
+  is_tracked: boolean;
+  is_favorite: boolean;
 };
 
 export type LotsFilters = {
@@ -96,6 +107,7 @@ export type LotsFilters = {
   date_to?: string;
   amount_min?: string;
   amount_max?: string;
+  participation?: "our";
   page?: number;
   limit?: number;
 };
@@ -179,6 +191,7 @@ export const analyticsApi = {
       date_to: filters.date_to,
       amount_min: filters.amount_min,
       amount_max: filters.amount_max,
+      participation: filters.participation,
       page: filters.page ?? 1,
       limit: filters.limit ?? 20,
     }),
@@ -200,6 +213,12 @@ export const analyticsApi = {
 
   addCustomer: (data: { customer_name: string; customer_id?: string; notify_email?: string; notes?: string }) =>
     post<TrackedCustomer>("/api/v1/analytics/customers", data),
+
+  updateCustomer: (id: number, data: { customer_name: string; customer_id?: string; notify_email?: string; notes?: string; is_favorite: boolean }) =>
+    put<TrackedCustomer>(`/api/v1/analytics/customers/${id}`, data),
+
+  getCustomerCandidates: (q = "", limit = 80) =>
+    get<CustomerCandidate[]>("/api/v1/analytics/customers/candidates", { q, limit }),
 
   deleteCustomer: (id: number) => del<{ success: boolean }>(`/api/v1/analytics/customers/${id}`),
 

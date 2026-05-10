@@ -2,14 +2,18 @@ import { Link, useNavigate, useLocation } from "@tanstack/react-router";
 import {
   LayoutDashboard, FileText, Gavel, Settings, LogOut, Cloud,
   BarChart2, History, Building2, Trophy, TrendingDown, ChevronDown, ChevronRight,
+  Bell, BookOpen,
 } from "lucide-react";
 import { logout } from "@/lib/auth";
 import { useState } from "react";
+import { useNotifications } from "@/hooks/use-notifications";
 
 const mainNav = [
   { to: "/dashboard", label: "Дашборд", icon: LayoutDashboard },
   { to: "/tenders", label: "Тендеры", icon: Gavel, search: { page: 1 } },
   { to: "/bids", label: "Заявки", icon: FileText },
+  { to: "/dictionaries", label: "Справочники", icon: BookOpen },
+  { to: "/notifications", label: "Уведомления", icon: Bell },
 ] as const;
 
 const analyticsNav = [
@@ -28,6 +32,7 @@ export function Sidebar() {
   const location = useLocation();
   const isAnalytics = location.pathname.startsWith("/analytics");
   const [analyticsOpen, setAnalyticsOpen] = useState(isAnalytics);
+  const { unreadCount } = useNotifications();
 
   const handleLogout = () => {
     logout();
@@ -54,6 +59,7 @@ export function Sidebar() {
         {mainNav.map((item) => {
           const Icon = item.icon;
           const active = isActive(item.to);
+          const isNotifications = item.to === "/notifications";
           return (
             <Link
               key={item.to}
@@ -66,7 +72,12 @@ export function Sidebar() {
               }`}
             >
               <Icon className="h-4 w-4" />
-              {item.label}
+              <span className="flex-1">{item.label}</span>
+              {isNotifications && unreadCount > 0 && (
+                <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">
+                  {unreadCount > 99 ? "99+" : unreadCount}
+                </span>
+              )}
             </Link>
           );
         })}

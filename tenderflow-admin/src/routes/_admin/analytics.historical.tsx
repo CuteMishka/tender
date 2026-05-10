@@ -151,6 +151,7 @@ function HistoricalAnalytics() {
   const [filterDateTo, setFilterDateTo] = useState("");
   const [filterAmountMin, setFilterAmountMin] = useState("");
   const [filterAmountMax, setFilterAmountMax] = useState("");
+  const [onlyOurParticipation, setOnlyOurParticipation] = useState(false);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -166,6 +167,7 @@ function HistoricalAnalytics() {
           date_to: filterDateTo || undefined,
           amount_min: filterAmountMin || undefined,
           amount_max: filterAmountMax || undefined,
+          participation: onlyOurParticipation ? "our" : undefined,
           page,
           limit: 20,
         }),
@@ -182,7 +184,7 @@ function HistoricalAnalytics() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterCustomer, filterType, filterRegion, filterDateFrom, filterDateTo, filterAmountMin, filterAmountMax]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [page, filterCustomer, filterType, filterRegion, filterDateFrom, filterDateTo, filterAmountMin, filterAmountMax, onlyOurParticipation]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -230,7 +232,7 @@ function HistoricalAnalytics() {
   const applyFilters = () => { setPage(1); };
   const resetFilters = () => {
     setFilterCustomer(""); setFilterType(""); setFilterRegion("");
-    setFilterDateFrom(""); setFilterDateTo(""); setFilterAmountMin(""); setFilterAmountMax("");
+    setFilterDateFrom(""); setFilterDateTo(""); setFilterAmountMin(""); setFilterAmountMax(""); setOnlyOurParticipation(false);
     setPage(1);
   };
 
@@ -299,6 +301,15 @@ function HistoricalAnalytics() {
                 placeholder="Сумма от" className="rounded-lg border border-input bg-background px-3 py-2 text-sm" />
               <input value={filterAmountMax} onChange={(e) => setFilterAmountMax(e.target.value)}
                 placeholder="Сумма до" className="rounded-lg border border-input bg-background px-3 py-2 text-sm" />
+              <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={onlyOurParticipation}
+                  onChange={(e) => setOnlyOurParticipation(e.target.checked)}
+                  className="rounded"
+                />
+                Только с нашим участием
+              </label>
             </div>
             <div className="mt-4 flex gap-2">
               <button onClick={applyFilters} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">

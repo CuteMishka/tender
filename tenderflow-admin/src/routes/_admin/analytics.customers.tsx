@@ -3,8 +3,9 @@ import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { ConfirmDialog } from "@/components/admin/ConfirmDialog";
 import { ToastContainer, useToast } from "@/components/admin/PageToast";
-import { Building2, Plus, Trash2, History, X, Mail, Hash, DollarSign, Calendar } from "lucide-react";
-import { analyticsApi, fmtM, fmtDate, fmtN, type TrackedCustomer, type HistoricalLot } from "@/lib/analytics-api";
+import { Building2, Plus, Trash2, History, X, Mail, Hash, DollarSign, Calendar, Search, Star, RefreshCw } from "lucide-react";
+import { analyticsApi, fmtM, fmtDate, fmtN, type TrackedCustomer, type HistoricalLot, type CustomerCandidate } from "@/lib/analytics-api";
+import { pushNotification } from "@/hooks/use-notifications";
 
 export const Route = createFileRoute("/_admin/analytics/customers")({
   component: CustomersAnalytics,
@@ -18,9 +19,13 @@ function CustomersAnalytics() {
   const [adding, setAdding] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<TrackedCustomer | null>(null);
   const [formName, setFormName] = useState("");
+  const [formCustomerId, setFormCustomerId] = useState("");
   const [formEmail, setFormEmail] = useState("");
   const [formNotes, setFormNotes] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [candidateQuery, setCandidateQuery] = useState("");
+  const [candidates, setCandidates] = useState<CustomerCandidate[]>([]);
+  const [candidatesLoading, setCandidatesLoading] = useState(false);
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [customerLots, setCustomerLots] = useState<{ customer: TrackedCustomer; lots: HistoricalLot[] } | null>(null);
@@ -39,15 +44,29 @@ function CustomersAnalytics() {
 
   useEffect(() => { load(); }, []);
 
+  const loadCandidates = async (q = candidateQuery) => {
+    setCandidatesLoading(true);
+    try {
+      setCandidates((await analyticsApi.getCustomerCandidates(q, 80)) ?? []);
+    } catch (e) {
+      toast.error(`Ошибка загрузки заказчиков из истории: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setCandidatesLoading(false);
+    }
+  };
+
+  useEffect(() => { loadCandidates(""); }, []);
+
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formName.trim()) { setFormError("Введите имя заказчика"); return; }
     setAdding(true); setFormError(null);
     try {
-      await analyticsApi.addCustomer({ customer_name: formName.trim(), notify_email: formEmail, notes: formNotes });
-      setFormName(""); setFormEmail(""); setFormNotes("");
+      await analyticsApi.addCustomer({ customer_name: formName.trim(), customer_id: formCustomerId, notify_email: formEmail, notes: formNotes });
+      pushNotification("success", "Заказчик отслеживается", `«${formName.trim()}» добавлен в избранные заказчики.`, "/analytics/customers", "mentions");
+      setFormName(""); setFormCustomerId(""); setFormEmail(""); setFormNotes("");
       setShowAdd(false);
-      await load();
+      await Promise.all([load(), loadCandidates("")]);
     } catch (e: unknown) {
       setFormError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -66,6 +85,38 @@ function CustomersAnalytics() {
       toast.error(`Ошибка удаления: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setDeleteTarget(null);
+    }
+  };
+
+  const addCandidate = async (candidate: CustomerCandidate) => {
+    setAdding(true);
+    try {
+      await analyticsApi.addCustomer({
+        customer_name: candidate.customer_name,
+        customer_id: candidate.customer_id,
+        notes: `Добавлен из истории закупок: ${candidate.tender_count} тендер(ов)`,
+      });
+      pushNotification("success", "Заказчик добавлен", `«${candidate.customer_name}» добавлен в избранные.`, "/analytics/customers", "mentions");
+      await Promise.all([load(), loadCandidates(candidateQuery)]);
+    } catch (e) {
+      toast.error(`Не удалось добавить: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const toggleFavorite = async (customer: TrackedCustomer) => {
+    try {
+      const updated = await analyticsApi.updateCustomer(customer.id, {
+        customer_name: customer.customer_name,
+        customer_id: customer.customer_id,
+        notify_email: customer.notify_email,
+        notes: customer.notes,
+        is_favorite: !customer.is_favorite,
+      });
+      setCustomers((prev) => prev.map((c) => c.id === customer.id ? { ...c, is_favorite: updated.is_favorite } : c));
+    } catch (e) {
+      toast.error(`Не удалось обновить избранное: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -110,6 +161,12 @@ function CustomersAnalytics() {
                   className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" />
               </div>
               <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">БИН / ИИН</label>
+                <input value={formCustomerId} onChange={(e) => setFormCustomerId(e.target.value)}
+                  placeholder="123456789012"
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" />
+              </div>
+              <div>
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">Email для уведомлений</label>
                 <input type="email" value={formEmail} onChange={(e) => setFormEmail(e.target.value)}
                   placeholder="email@company.kz"
@@ -136,6 +193,53 @@ function CustomersAnalytics() {
           </div>
         )}
 
+        <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: "var(--shadow-sm)" }}>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold">Выбрать заказчика из истории</h3>
+              <p className="text-xs text-muted-foreground">Список формируется из исторических закупок после синхронизации.</p>
+            </div>
+            <button onClick={() => loadCandidates(candidateQuery)} className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm hover:bg-accent">
+              <RefreshCw className={`h-4 w-4 ${candidatesLoading ? "animate-spin" : ""}`} /> Обновить
+            </button>
+          </div>
+          <div className="mb-3 flex gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+              <input
+                value={candidateQuery}
+                onChange={(e) => setCandidateQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") loadCandidates(candidateQuery); }}
+                placeholder="Поиск по названию заказчика"
+                className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm"
+              />
+            </div>
+            <button onClick={() => loadCandidates(candidateQuery)} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">Найти</button>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {candidates.slice(0, 12).map((c) => (
+              <div key={`${c.customer_name}-${c.customer_id}`} className="rounded-lg border border-border bg-background p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{c.customer_name}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{c.tender_count} тенд. · ₸ {fmtM(c.total_budget)}</p>
+                  </div>
+                  <button
+                    disabled={adding || c.is_tracked}
+                    onClick={() => addCandidate(c)}
+                    className={`shrink-0 rounded-lg px-2 py-1 text-xs font-medium ${c.is_tracked ? "bg-green-100 text-green-700" : "bg-primary text-primary-foreground hover:opacity-90"}`}
+                  >
+                    {c.is_tracked ? "Добавлен" : "В избранные"}
+                  </button>
+                </div>
+              </div>
+            ))}
+            {!candidatesLoading && candidates.length === 0 && (
+              <p className="text-sm text-muted-foreground">Нет кандидатов. Сначала синхронизируйте историю тендеров.</p>
+            )}
+          </div>
+        </div>
+
         {/* Список заказчиков */}
         <div className="overflow-hidden rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
           <div className="border-b border-border px-6 py-4">
@@ -154,10 +258,10 @@ function CustomersAnalytics() {
             </div>
           ) : (
             <div className="divide-y divide-border">
-              {customers.map((c) => (
+              {[...customers].sort((a, b) => (b.is_favorite ? 1 : 0) - (a.is_favorite ? 1 : 0)).map((c) => (
                 <div key={c.id}>
-                  <div className={`flex items-center gap-4 px-6 py-4 transition hover:bg-muted/30 ${selectedId === c.id ? "bg-muted/40" : ""}`}>
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary font-semibold text-sm">
+                  <div className={`flex items-center gap-4 px-6 py-4 transition hover:bg-muted/30 ${selectedId === c.id ? "bg-muted/40" : ""} ${c.is_favorite ? "border-l-2 border-l-yellow-400 pl-5" : ""}`}>
+                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full font-semibold text-sm ${c.is_favorite ? "bg-yellow-100 text-yellow-700" : "bg-primary/10 text-primary"}`}>
                       {c.customer_name[0]?.toUpperCase() ?? "?"}
                     </div>
                     <div className="flex-1 min-w-0">
@@ -171,6 +275,11 @@ function CustomersAnalytics() {
                       {c.notes && <p className="mt-0.5 text-xs text-muted-foreground/70 truncate">{c.notes}</p>}
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
+                      <button onClick={() => toggleFavorite(c)}
+                        title={c.is_favorite ? "Убрать из избранного" : "Добавить в избранное"}
+                        className={`rounded-lg p-1.5 transition ${c.is_favorite ? "text-yellow-500 hover:bg-yellow-100" : "text-muted-foreground hover:bg-accent"}`}>
+                        <Star className={`h-4 w-4 ${c.is_favorite ? "fill-current" : ""}`} />
+                      </button>
                       <button onClick={() => handleSelect(c.id)}
                         className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${selectedId === c.id ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:bg-accent"}`}>
                         <History className="h-3.5 w-3.5" /> История

@@ -1,7 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { CheckCircle2, Clock, XCircle, Trash2 } from "lucide-react";
+import { CheckCircle2, Clock, XCircle, Trash2, FileText } from "lucide-react";
 import { getLocalApiBase } from "@/lib/tenders-api";
 
 export const Route = createFileRoute("/_admin/bids")({
@@ -24,7 +24,9 @@ const statusMap: Record<string, { label: string; icon: any; cls: string }> = {
 };
 
 function Bids() {
+  const navigate = useNavigate();
   const [bids, setBids] = useState<SavedLot[]>([]);
+  const [activeTab, setActiveTab] = useState<"all" | "participating" | "rejected" | "active">("all");
 
   useEffect(() => {
     const base = getLocalApiBase();
@@ -46,10 +48,37 @@ function Bids() {
     }
   };
 
+  const filteredBids = activeTab === "all" ? bids : bids.filter((b) => b.status === activeTab);
+  const tabCounts = {
+    all: bids.length,
+    participating: bids.filter((b) => b.status === "participating").length,
+    active: bids.filter((b) => b.status === "active").length,
+    rejected: bids.filter((b) => b.status === "rejected").length,
+  };
+
   return (
     <>
       <PageHeader title="Заявки" description="Все заявки участников на тендеры" />
       <div className="p-8">
+        <div className="mb-4 flex flex-wrap gap-2">
+          {[
+            { key: "all", label: "Все" },
+            { key: "participating", label: "Наше участие" },
+            { key: "active", label: "Активные" },
+            { key: "rejected", label: "Не подходит" },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key as typeof activeTab)}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === tab.key ? "bg-primary text-primary-foreground" : "border border-border bg-card hover:bg-accent"}`}
+            >
+              {tab.label}
+              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${activeTab === tab.key ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground"}`}>
+                {tabCounts[tab.key as keyof typeof tabCounts]}
+              </span>
+            </button>
+          ))}
+        </div>
         <div
           className="overflow-hidden rounded-xl border border-border bg-card"
           style={{ boxShadow: "var(--shadow-sm)" }}
@@ -61,21 +90,40 @@ function Bids() {
                 <th className="px-6 py-3 text-left font-medium">Тендер</th>
                 <th className="px-6 py-3 text-left font-medium">Наименование тендера</th>
                 <th className="px-6 py-3 text-left font-medium">Организатор тендера</th>
-                <th className="px-6 py-3 text-right font-medium">Цена ₸</th>
+                <th className="px-6 py-3 text-left font-medium">Цена ₸</th>
                 <th className="px-6 py-3 text-left font-medium">Дата</th>
                 <th className="px-6 py-3 text-left font-medium">Статус</th>
-                    <th className="px-6 py-3 text-right font-medium">Действия</th>
+                <th className="px-6 py-3 text-right font-medium">Действия</th>
               </tr>
             </thead>
             <tbody>
-              {bids.map((b) => {
+              {filteredBids.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-6 py-16 text-center">
+                    <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                      <FileText className="h-10 w-10 opacity-20" />
+                      <p className="text-sm font-medium">
+                        {activeTab === "all" ? "Заявок пока нет" : `Нет заявок со статусом «${{ all: "", participating: "Наше участие", active: "Активные", rejected: "Не подходит" }[activeTab]}»`}
+                      </p>
+                      {activeTab === "all" && (
+                        <p className="text-xs">Отметьте тендер кнопкой «Подходит» во вкладке Тендеры</p>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
+              {filteredBids.map((b) => {
                 const s = statusMap[b.status] || statusMap.active;
                 const Icon = s.icon;
                 const dateStr = new Date(b.created_at).toLocaleDateString('ru-KZ');
                 const amountStr = new Intl.NumberFormat('ru-KZ').format(b.amount);
                 
                 return (
-                  <tr key={b.id} className="border-t border-border hover:bg-muted/40">
+                  <tr
+                    key={b.id}
+                    className="cursor-pointer border-t border-border hover:bg-muted/40"
+                    onClick={() => navigate({ to: "/tenders/$tenderId", params: { tenderId: String(b.id) } })}
+                  >
                     <td className="px-6 py-4 font-mono text-xs text-muted-foreground">B-{b.id}</td>
                     <td className="px-6 py-4 font-mono text-xs font-medium text-primary">T-{b.id}</td>
                     <td className="px-6 py-4 font-medium text-foreground">{b.title}</td>
@@ -87,15 +135,15 @@ function Bids() {
                         <Icon className="h-3 w-3" /> {s.label}
                       </span>
                     </td>
-                      <td className="px-6 py-4 text-right">
-                        <button
-                          onClick={() => handleDelete(b.id)}
-                          className="inline-flex rounded p-2 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-                          title="Удалить заявку"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </td>
+                    <td className="px-6 py-4 text-right">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDelete(b.id); }}
+                        className="inline-flex rounded p-2 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                        title="Удалить заявку"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </td>
                   </tr>
                 );
               })}

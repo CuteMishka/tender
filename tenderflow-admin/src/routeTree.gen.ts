@@ -15,6 +15,8 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminUsersRouteImport } from './routes/_admin/users'
 import { Route as AdminTendersRouteImport } from './routes/_admin/tenders'
 import { Route as AdminSettingsRouteImport } from './routes/_admin/settings'
+import { Route as AdminNotificationsRouteImport } from './routes/_admin/notifications'
+import { Route as AdminDictionariesRouteImport } from './routes/_admin/dictionaries'
 import { Route as AdminDashboardRouteImport } from './routes/_admin/dashboard'
 import { Route as AdminCompaniesRouteImport } from './routes/_admin/companies'
 import { Route as AdminBidsRouteImport } from './routes/_admin/bids'
@@ -54,6 +56,16 @@ const AdminTendersRoute = AdminTendersRouteImport.update({
 const AdminSettingsRoute = AdminSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminNotificationsRoute = AdminNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminDictionariesRoute = AdminDictionariesRouteImport.update({
+  id: '/dictionaries',
+  path: '/dictionaries',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminDashboardRoute = AdminDashboardRouteImport.update({
@@ -120,6 +132,8 @@ export interface FileRoutesByFullPath {
   '/bids': typeof AdminBidsRoute
   '/companies': typeof AdminCompaniesRoute
   '/dashboard': typeof AdminDashboardRoute
+  '/dictionaries': typeof AdminDictionariesRoute
+  '/notifications': typeof AdminNotificationsRoute
   '/settings': typeof AdminSettingsRoute
   '/tenders': typeof AdminTendersRouteWithChildren
   '/users': typeof AdminUsersRoute
@@ -137,6 +151,8 @@ export interface FileRoutesByTo {
   '/bids': typeof AdminBidsRoute
   '/companies': typeof AdminCompaniesRoute
   '/dashboard': typeof AdminDashboardRoute
+  '/dictionaries': typeof AdminDictionariesRoute
+  '/notifications': typeof AdminNotificationsRoute
   '/settings': typeof AdminSettingsRoute
   '/users': typeof AdminUsersRoute
   '/analytics/customers': typeof AdminAnalyticsCustomersRoute
@@ -156,6 +172,8 @@ export interface FileRoutesById {
   '/_admin/bids': typeof AdminBidsRoute
   '/_admin/companies': typeof AdminCompaniesRoute
   '/_admin/dashboard': typeof AdminDashboardRoute
+  '/_admin/dictionaries': typeof AdminDictionariesRoute
+  '/_admin/notifications': typeof AdminNotificationsRoute
   '/_admin/settings': typeof AdminSettingsRoute
   '/_admin/tenders': typeof AdminTendersRouteWithChildren
   '/_admin/users': typeof AdminUsersRoute
@@ -176,6 +194,8 @@ export interface FileRouteTypes {
     | '/bids'
     | '/companies'
     | '/dashboard'
+    | '/dictionaries'
+    | '/notifications'
     | '/settings'
     | '/tenders'
     | '/users'
@@ -193,6 +213,8 @@ export interface FileRouteTypes {
     | '/bids'
     | '/companies'
     | '/dashboard'
+    | '/dictionaries'
+    | '/notifications'
     | '/settings'
     | '/users'
     | '/analytics/customers'
@@ -211,6 +233,8 @@ export interface FileRouteTypes {
     | '/_admin/bids'
     | '/_admin/companies'
     | '/_admin/dashboard'
+    | '/_admin/dictionaries'
+    | '/_admin/notifications'
     | '/_admin/settings'
     | '/_admin/tenders'
     | '/_admin/users'
@@ -271,6 +295,20 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof AdminSettingsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/_admin/notifications': {
+      id: '/_admin/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof AdminNotificationsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/_admin/dictionaries': {
+      id: '/_admin/dictionaries'
+      path: '/dictionaries'
+      fullPath: '/dictionaries'
+      preLoaderRoute: typeof AdminDictionariesRouteImport
       parentRoute: typeof AdminRoute
     }
     '/_admin/dashboard': {
@@ -392,6 +430,8 @@ interface AdminRouteChildren {
   AdminBidsRoute: typeof AdminBidsRoute
   AdminCompaniesRoute: typeof AdminCompaniesRoute
   AdminDashboardRoute: typeof AdminDashboardRoute
+  AdminDictionariesRoute: typeof AdminDictionariesRoute
+  AdminNotificationsRoute: typeof AdminNotificationsRoute
   AdminSettingsRoute: typeof AdminSettingsRoute
   AdminTendersRoute: typeof AdminTendersRouteWithChildren
   AdminUsersRoute: typeof AdminUsersRoute
@@ -402,6 +442,8 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminBidsRoute: AdminBidsRoute,
   AdminCompaniesRoute: AdminCompaniesRoute,
   AdminDashboardRoute: AdminDashboardRoute,
+  AdminDictionariesRoute: AdminDictionariesRoute,
+  AdminNotificationsRoute: AdminNotificationsRoute,
   AdminSettingsRoute: AdminSettingsRoute,
   AdminTendersRoute: AdminTendersRouteWithChildren,
   AdminUsersRoute: AdminUsersRoute,

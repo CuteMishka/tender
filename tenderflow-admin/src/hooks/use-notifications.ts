@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 
 export type NotificationType = "success" | "warning" | "error" | "info";
+export type NotificationCategory = "deadline" | "appeal" | "updates" | "mentions" | "review";
 
 export interface AppNotification {
   id: string;
   type: NotificationType;
+  category: NotificationCategory;
   title: string;
   message: string;
   timestamp: number;
@@ -13,14 +15,16 @@ export interface AppNotification {
 }
 
 const STORAGE_KEY = "tender_notifications";
-const MAX_NOTIFICATIONS = 50;
+const MAX_NOTIFICATIONS = 200;
 
 function loadFromStorage(): AppNotification[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed)
+      ? parsed.map((n) => ({ category: "updates" as NotificationCategory, ...n }))
+      : [];
   } catch {
     return [];
   }
@@ -42,11 +46,13 @@ export function pushNotification(
   title: string,
   message: string,
   link?: string,
+  category: NotificationCategory = "updates",
 ): void {
   const current = loadFromStorage();
   const item: AppNotification = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     type,
+    category,
     title,
     message,
     timestamp: Date.now(),
@@ -78,6 +84,12 @@ export function useNotifications() {
     setNotifications(updated);
   }, []);
 
+  const markCategoryRead = useCallback((category: NotificationCategory) => {
+    const updated = loadFromStorage().map((n) => (n.category === category ? { ...n, read: true } : n));
+    saveToStorage(updated);
+    setNotifications(updated);
+  }, []);
+
   const markRead = useCallback((id: string) => {
     const updated = loadFromStorage().map((n) => (n.id === id ? { ...n, read: true } : n));
     saveToStorage(updated);
@@ -95,5 +107,5 @@ export function useNotifications() {
     setNotifications(updated);
   }, []);
 
-  return { notifications, unreadCount, markAllRead, markRead, clearAll, remove };
+  return { notifications, unreadCount, markAllRead, markCategoryRead, markRead, clearAll, remove };
 }

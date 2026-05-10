@@ -30,6 +30,7 @@ function NotificationBell() {
   const { notifications, unreadCount, markAllRead, markRead, clearAll, remove } = useNotifications();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -46,7 +47,6 @@ function NotificationBell() {
       <button
         onClick={() => {
           setOpen((o) => !o);
-          if (!open && unreadCount > 0) markAllRead();
         }}
         className="relative flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         aria-label="Уведомления"
@@ -98,7 +98,13 @@ function NotificationBell() {
                   <div
                     key={n.id}
                     className={`group relative border-l-2 px-4 py-3 transition hover:bg-muted/40 ${s.bg} ${!n.read ? "bg-muted/20" : ""}`}
-                    onClick={() => markRead(n.id)}
+                    onClick={() => {
+                      markRead(n.id);
+                      if (n.link) {
+                        setOpen(false);
+                        navigate({ to: n.link as any });
+                      }
+                    }}
                   >
                     <div className="flex items-start gap-2">
                       <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${s.dot}`} />
@@ -118,6 +124,17 @@ function NotificationBell() {
                 );
               })
             )}
+          </div>
+          <div className="border-t border-border px-4 py-2">
+            <button
+              onClick={() => {
+                setOpen(false);
+                navigate({ to: "/notifications" as any });
+              }}
+              className="w-full rounded-lg px-3 py-2 text-center text-xs font-medium text-primary hover:bg-accent"
+            >
+              Открыть центр уведомлений
+            </button>
           </div>
         </div>
       )}
@@ -150,6 +167,9 @@ function AdminLayout() {
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="fixed right-6 top-4 z-40">
+          <NotificationBell />
+        </div>
         <main className="flex-1 overflow-y-auto">
           <div key={location.pathname} className="animate-in fade-in-0 slide-in-from-bottom-3 duration-200 min-h-full">
             <Outlet />
