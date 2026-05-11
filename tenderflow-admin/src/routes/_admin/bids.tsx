@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { CheckCircle2, Clock, XCircle, Trash2, FileText } from "lucide-react";
+import { CheckCircle2, Clock, XCircle, Trash2, FileText, Search } from "lucide-react";
 import { getLocalApiBase } from "@/lib/tenders-api";
 
 export const Route = createFileRoute("/_admin/bids")({
@@ -14,6 +14,8 @@ interface SavedLot {
   amount: number;
   status: string;
   purchase_type: string;
+  organizer_name: string;
+  partner_link: string;
   created_at: string;
 }
 
@@ -27,6 +29,7 @@ function Bids() {
   const navigate = useNavigate();
   const [bids, setBids] = useState<SavedLot[]>([]);
   const [activeTab, setActiveTab] = useState<"all" | "participating" | "rejected" | "active">("all");
+  const [searchText, setSearchText] = useState("");
 
   useEffect(() => {
     const base = getLocalApiBase();
@@ -48,7 +51,12 @@ function Bids() {
     }
   };
 
-  const filteredBids = activeTab === "all" ? bids : bids.filter((b) => b.status === activeTab);
+  const filteredBids = bids.filter((b) => {
+    if (activeTab !== "all" && b.status !== activeTab) return false;
+    const q = searchText.trim().toLowerCase();
+    if (!q) return true;
+    return `${b.id} ${b.title} ${b.organizer_name} ${b.purchase_type} ${b.status}`.toLowerCase().includes(q);
+  });
   const tabCounts = {
     all: bids.length,
     participating: bids.filter((b) => b.status === "participating").length,
@@ -60,6 +68,17 @@ function Bids() {
     <>
       <PageHeader title="Заявки" description="Все заявки участников на тендеры" />
       <div className="p-8">
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <div className="relative min-w-[260px] flex-1">
+            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+            <input
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              placeholder="Поиск по названию, организатору, виду закупки..."
+              className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm"
+            />
+          </div>
+        </div>
         <div className="mb-4 flex flex-wrap gap-2">
           {[
             { key: "all", label: "Все" },
@@ -103,9 +122,11 @@ function Bids() {
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <FileText className="h-10 w-10 opacity-20" />
                       <p className="text-sm font-medium">
-                        {activeTab === "all" ? "Заявок пока нет" : `Нет заявок со статусом «${{ all: "", participating: "Наше участие", active: "Активные", rejected: "Не подходит" }[activeTab]}»`}
+                        {searchText.trim()
+                          ? "По названию, организатору или виду закупки заявки не найдены"
+                          : activeTab === "all" ? "Заявок пока нет" : `Нет заявок со статусом «${{ all: "", participating: "Наше участие", active: "Активные", rejected: "Не подходит" }[activeTab]}»`}
                       </p>
-                      {activeTab === "all" && (
+                      {activeTab === "all" && !searchText.trim() && (
                         <p className="text-xs">Отметьте тендер кнопкой «Подходит» во вкладке Тендеры</p>
                       )}
                     </div>
@@ -127,7 +148,7 @@ function Bids() {
                     <td className="px-6 py-4 font-mono text-xs text-muted-foreground">B-{b.id}</td>
                     <td className="px-6 py-4 font-mono text-xs font-medium text-primary">T-{b.id}</td>
                     <td className="px-6 py-4 font-medium text-foreground">{b.title}</td>
-                    <td className="px-6 py-4 font-medium text-foreground">{b.purchase_type || "Государственные закупки"}</td>
+                    <td className="px-6 py-4 font-medium text-foreground">{b.organizer_name || "Компания не указана"}</td>
                     <td className="px-6 py-4 text-right font-semibold tabular-nums">₸ {amountStr}</td>
                     <td className="px-6 py-4 text-muted-foreground">{dateStr}</td>
                     <td className="px-6 py-4">
@@ -138,10 +159,11 @@ function Bids() {
                     <td className="px-6 py-4 text-right">
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDelete(b.id); }}
-                        className="inline-flex rounded p-2 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                        className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
                         title="Удалить заявку"
                       >
                         <Trash2 className="h-4 w-4" />
+                        Удалить
                       </button>
                     </td>
                   </tr>

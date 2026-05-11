@@ -10,6 +10,7 @@ import {
   getTenderStatus,
   getViewedTenders,
   sanitizeApiText,
+  tenderCompanyName,
   type TendersListResponse,
   type TenderItem,
 } from "@/lib/tenders-api";
@@ -44,6 +45,11 @@ function truncate(s: string, max: number) {
   return `${t.slice(0, max - 1)}…`;
 }
 
+function isGovernmentProcurementQuery(s: string): boolean {
+  const q = s.trim().toLowerCase();
+  return q.includes("государствен") || q.includes("гос закуп") || q.includes("госзакуп");
+}
+
 const statusColorMap: Record<string, string> = {
   green: "bg-green-100 text-green-700",
   orange: "bg-orange-100 text-orange-700",
@@ -66,6 +72,8 @@ async function saveLot(tender: TenderItem, status: "participating" | "rejected")
     start_date: tender.startDate ? new Date(tender.startDate).toISOString() : new Date().toISOString(),
     end_date: deadline,
     purchase_type: tender.purchaseType || "—",
+    organizer_name: tenderCompanyName(tender),
+    partner_link: tender.partnerLink || "",
   };
 
   const res = await fetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
@@ -111,12 +119,13 @@ function TendersList() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetchTendersList({ page, limit: 10 })
+    const keywords = isGovernmentProcurementQuery(searchText) ? "" : searchText;
+    fetchTendersList({ page, limit: 10, keywords })
       .then((d) => { if (!cancelled) setData(d); })
       .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [page]);
+  }, [page, searchText]);
 
   const filteredItems = (data?.items ?? []).filter((t) => {
     const status = getTenderStatus(t.endDate);
@@ -124,11 +133,6 @@ function TendersList() {
     if (activeTab === "Истекающие" && status.color !== "red" && status.color !== "orange") return false;
     if (activeTab === "Завершённые" && status.color !== "gray") return false;
     if (activeTab === "Наше участие" && !savedIds.has(t.id)) return false;
-    if (searchText) {
-      const s = searchText.toLowerCase();
-      const text = `${t.title} ${t.description} ${t.place}`.toLowerCase();
-      if (!text.includes(s)) return false;
-    }
     const minA = parseFloat(filterMinAmount);
     const maxA = parseFloat(filterMaxAmount);
     if (!isNaN(minA) && t.cost < minA) return false;
@@ -174,9 +178,14 @@ function TendersList() {
             <div className="grid gap-4 sm:grid-cols-3">
               <input
                 type="text"
-                placeholder="Поиск по названию..."
+                placeholder="Поиск по названию, заказчику, виду закупки..."
                 value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
+                onChange={(e) => {
+                  setSearchText(e.target.value);
+                  if (page !== 1) {
+                    navigate({ to: "/tenders", search: { page: 1 } });
+                  }
+                }}
                 className="rounded-lg border border-input bg-background px-3 py-2.5 text-sm"
               />
               <input
@@ -249,6 +258,7 @@ function TendersList() {
                       const statusInfo = getTenderStatus(t.endDate);
                       const isExpiring = statusInfo.color === "red";
                       const isLoading = actionLoading === t.id;
+                      const companyName = tenderCompanyName(t);
 
                       return (
                         <tr
@@ -292,6 +302,9 @@ function TendersList() {
                                   Просмотрено
                                 </span>
                               )}
+                            </div>
+                            <div className="mt-1 max-w-sm text-xs font-medium text-foreground/80">
+                              {companyName || "Компания не указана"}
                             </div>
                             <div className="mt-1 max-w-sm text-xs text-muted-foreground">{truncate(t.description, 120)}</div>
                           </td>
@@ -360,7 +373,9 @@ function TendersList() {
                     {filteredItems.length === 0 && !loading && (
                       <tr>
                         <td colSpan={8} className="px-6 py-16 text-center text-sm text-muted-foreground">
-                          Тендеры не найдены
+                          {searchText.trim()
+                            ? "По названию, заказчику или виду закупки тендеры не найдены. Попробуйте другое слово или сбросьте фильтр."
+                            : "Тендеры не найдены"}
                         </td>
                       </tr>
                     )}

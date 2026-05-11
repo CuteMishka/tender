@@ -26,6 +26,9 @@ function CustomersAnalytics() {
   const [candidateQuery, setCandidateQuery] = useState("");
   const [candidates, setCandidates] = useState<CustomerCandidate[]>([]);
   const [candidatesLoading, setCandidatesLoading] = useState(false);
+  const [selectedCandidateName, setSelectedCandidateName] = useState<string | null>(null);
+  const [candidateLots, setCandidateLots] = useState<HistoricalLot[]>([]);
+  const [candidateLotsLoading, setCandidateLotsLoading] = useState(false);
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [customerLots, setCustomerLots] = useState<{ customer: TrackedCustomer; lots: HistoricalLot[] } | null>(null);
@@ -117,6 +120,24 @@ function CustomersAnalytics() {
       setCustomers((prev) => prev.map((c) => c.id === customer.id ? { ...c, is_favorite: updated.is_favorite } : c));
     } catch (e) {
       toast.error(`Не удалось обновить избранное: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const handleCandidateHistory = async (name: string) => {
+    if (selectedCandidateName === name) {
+      setSelectedCandidateName(null);
+      setCandidateLots([]);
+      return;
+    }
+    setSelectedCandidateName(name);
+    setCandidateLotsLoading(true);
+    try {
+      const res = await analyticsApi.getLots({ customer: name, limit: 10 });
+      setCandidateLots(res.items ?? []);
+    } catch (e) {
+      toast.error(`Не удалось загрузить прошлые заказы: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setCandidateLotsLoading(false);
     }
   };
 
@@ -224,14 +245,42 @@ function CustomersAnalytics() {
                     <p className="truncate text-sm font-medium">{c.customer_name}</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">{c.tender_count} тенд. · ₸ {fmtM(c.total_budget)}</p>
                   </div>
-                  <button
-                    disabled={adding || c.is_tracked}
-                    onClick={() => addCandidate(c)}
-                    className={`shrink-0 rounded-lg px-2 py-1 text-xs font-medium ${c.is_tracked ? "bg-green-100 text-green-700" : "bg-primary text-primary-foreground hover:opacity-90"}`}
-                  >
-                    {c.is_tracked ? "Добавлен" : "В избранные"}
-                  </button>
+                  <div className="flex shrink-0 gap-1">
+                    <button
+                      onClick={() => handleCandidateHistory(c.customer_name)}
+                      className={`rounded-lg border px-2 py-1 text-xs font-medium ${selectedCandidateName === c.customer_name ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-accent"}`}
+                    >
+                      История
+                    </button>
+                    <button
+                      disabled={adding || c.is_tracked}
+                      onClick={() => addCandidate(c)}
+                      className={`rounded-lg px-2 py-1 text-xs font-medium ${c.is_tracked ? "bg-green-100 text-green-700" : "bg-primary text-primary-foreground hover:opacity-90"}`}
+                    >
+                      {c.is_tracked ? "Добавлен" : "В избранные"}
+                    </button>
+                  </div>
                 </div>
+                {selectedCandidateName === c.customer_name && (
+                  <div className="mt-3 border-t border-border pt-3">
+                    {candidateLotsLoading ? (
+                      <p className="text-xs text-muted-foreground">Загрузка прошлых заказов…</p>
+                    ) : candidateLots.length > 0 ? (
+                      <div className="space-y-2">
+                        {candidateLots.slice(0, 5).map((lot) => (
+                          <div key={lot.id} className="rounded-md bg-muted/40 px-2 py-1.5">
+                            <p className="truncate text-xs font-medium">{lot.title}</p>
+                            <p className="mt-0.5 text-[11px] text-muted-foreground">
+                              {lot.purchase_type || "Вид закупки не указан"} · ₸ {fmtM(lot.initial_amount)} · {fmtDate(lot.end_date)}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Прошлые заказы не найдены.</p>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
             {!candidatesLoading && candidates.length === 0 && (

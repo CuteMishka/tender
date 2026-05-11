@@ -7,7 +7,7 @@ import {
 } from "recharts";
 import {
   TrendingUp, FileSpreadsheet, RefreshCw, Filter, ChevronLeft, ChevronRight,
-  DollarSign, Hash, BarChart2, Percent, Pencil, X, Check,
+  DollarSign, Hash, BarChart2, Percent, Pencil, X, Check, Building2, Star,
 } from "lucide-react";
 import {
   analyticsApi, fmtM, fmtN, fmtDate,
@@ -142,6 +142,7 @@ function HistoricalAnalytics() {
   const [showFilters, setShowFilters] = useState(false);
   const [editState, setEditState] = useState<EditState | null>(null);
   const [saving, setSaving] = useState(false);
+  const [trackedCustomerNames, setTrackedCustomerNames] = useState<Set<string>>(new Set());
 
   const [page, setPage] = useState(1);
   const [filterCustomer, setFilterCustomer] = useState("");
@@ -156,7 +157,7 @@ function HistoricalAnalytics() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, d, l, fo] = await Promise.all([
+      const [s, d, l, fo, customers] = await Promise.all([
         analyticsApi.getStats(),
         analyticsApi.getDynamics(),
         analyticsApi.getLots({
@@ -172,6 +173,7 @@ function HistoricalAnalytics() {
           limit: 20,
         }),
         analyticsApi.getFilters(),
+        analyticsApi.getCustomers(),
       ]);
       setStats(s);
       setDynamics(d ?? []);
@@ -179,6 +181,7 @@ function HistoricalAnalytics() {
       setTotal(l.meta.total);
       setPageCount(l.meta.pageCount || 1);
       setFilterOptions({ purchase_types: fo?.purchase_types ?? [], regions: fo?.regions ?? [] });
+      setTrackedCustomerNames(new Set((customers ?? []).map((c) => c.customer_name.trim().toLowerCase()).filter(Boolean)));
     } catch (e) {
       toast.error(`Ошибка загрузки: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -229,6 +232,22 @@ function HistoricalAnalytics() {
     }
   };
 
+  const handleTrackCustomer = async (lot: HistoricalLot) => {
+    const name = lotCustomerName(lot);
+    if (!name) return;
+    try {
+      await analyticsApi.addCustomer({
+        customer_name: name,
+        customer_id: lot.customer_id,
+        notes: `Добавлен из истории тендеров: ${lot.title}`,
+      });
+      setTrackedCustomerNames((prev) => new Set(prev).add(name.toLowerCase()));
+      toast.success(`«${name}» добавлен в отслеживаемые заказчики`);
+    } catch (e) {
+      toast.error(`Не удалось добавить заказчика: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   const applyFilters = () => { setPage(1); };
   const resetFilters = () => {
     setFilterCustomer(""); setFilterType(""); setFilterRegion("");
@@ -241,6 +260,19 @@ function HistoricalAnalytics() {
     count: d.count,
     budget: +(d.budget / 1_000_000).toFixed(1),
   }));
+
+  const formatStatus = (status: string) => {
+    const map: Record<string, { label: string; className: string }> = {
+      active: { label: "Активный", className: "bg-green-100 text-green-700" },
+      completed: { label: "Завершён", className: "bg-gray-100 text-gray-600" },
+      cancelled: { label: "Отменён", className: "bg-red-100 text-red-600" },
+    };
+    return map[status] || { label: status || "—", className: "bg-muted text-muted-foreground" };
+  };
+
+  const lotCustomerName = (lot: HistoricalLot): string => {
+    return (lot.customer_name || lot.organizer_name || "").trim();
+  };
 
   return (
     <>
@@ -280,7 +312,7 @@ function HistoricalAnalytics() {
             <h4 className="mb-4 text-sm font-semibold">Параметры фильтрации</h4>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <input value={filterCustomer} onChange={(e) => setFilterCustomer(e.target.value)}
-                placeholder="Заказчик" className="rounded-lg border border-input bg-background px-3 py-2 text-sm" />
+                placeholder="Поиск: название, заказчик, вид закупки" className="rounded-lg border border-input bg-background px-3 py-2 text-sm" />
               <select value={filterType} onChange={(e) => setFilterType(e.target.value)}
                 className="rounded-lg border border-input bg-background px-3 py-2 text-sm">
                 <option value="">Все виды закупки</option>
@@ -384,15 +416,18 @@ function HistoricalAnalytics() {
             </div>
           ) : lots.length === 0 ? (
             <div className="py-16 text-center text-sm text-muted-foreground">
-              Нет данных — нажмите «Синхронизировать» для загрузки тендеров из TenderPlus
+              {filterCustomer.trim() || filterType || filterRegion || filterDateFrom || filterDateTo || filterAmountMin || filterAmountMax || onlyOurParticipation
+                ? "По заданным фильтрам тендеры не найдены. Попробуйте другое название, заказчика или вид закупки."
+                : "Нет данных — нажмите «Синхронизировать» для загрузки тендеров из TenderPlus"}
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1000px] text-sm">
+              <table className="w-full min-w-[1180px] text-sm">
                 <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
                   <tr>
                     <th className="px-4 py-3 text-left font-medium">ID</th>
                     <th className="px-4 py-3 text-left font-medium">Наименование</th>
+                    <th className="px-4 py-3 text-left font-medium">Заказчик / компания</th>
                     <th className="px-4 py-3 text-left font-medium">Регион / Площадка</th>
                     <th className="px-4 py-3 text-right font-medium">Нач. цена ₸</th>
                     <th className="px-4 py-3 text-right font-medium">Контракт ₸</th>
@@ -409,6 +444,25 @@ function HistoricalAnalytics() {
                       <td className="px-4 py-3">
                         <div className="max-w-xs truncate font-medium text-foreground">{lot.title}</div>
                         {lot.purchase_type && <div className="text-[11px] text-muted-foreground">{lot.purchase_type}</div>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex max-w-[220px] items-start gap-2">
+                          <Building2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-medium text-foreground">{lotCustomerName(lot) || "—"}</div>
+                            {lot.customer_id && <div className="text-[11px] text-muted-foreground">БИН/ИИН {lot.customer_id}</div>}
+                            {lotCustomerName(lot) && (
+                              <button
+                                onClick={() => handleTrackCustomer(lot)}
+                                disabled={trackedCustomerNames.has(lotCustomerName(lot).toLowerCase())}
+                                className="mt-1 inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent disabled:cursor-default disabled:border-yellow-200 disabled:bg-yellow-50 disabled:text-yellow-700"
+                              >
+                                <Star className="h-3 w-3" />
+                                {trackedCustomerNames.has(lotCustomerName(lot).toLowerCase()) ? "Отслеживается" : "Отслеживать"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">
                         <div>{lot.region || "—"}</div>

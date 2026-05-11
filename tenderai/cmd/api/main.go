@@ -46,6 +46,7 @@ func run() error {
 	if r, ok := srv.(chi.Router); ok {
 		db := database.InitDB()
 		tenderplus.SeedTestData(db)
+		analytics.SeedHistoricalDemoData(db)
 
 		r.Get("/api/v1/dashboard", tenderplus.DashboardHandler(db))
 		r.Post("/api/v1/lots/participate", tenderplus.ParticipateLotHandler(db))

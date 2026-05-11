@@ -29,6 +29,14 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
+func fillCustomerFallback(lots []HistoricalLot) {
+	for i := range lots {
+		if strings.TrimSpace(lots[i].CustomerName) == "" {
+			lots[i].CustomerName = lots[i].OrganizerName
+		}
+	}
+}
+
 // POST /api/v1/analytics/sync
 func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	if h.TP == nil {
@@ -48,7 +56,11 @@ func (h *Handler) ListLots(w http.ResponseWriter, r *http.Request) {
 	q := h.DB.Model(&HistoricalLot{})
 
 	if v := r.URL.Query().Get("customer"); v != "" {
-		q = q.Where("customer_name ILIKE ?", "%"+v+"%")
+		like := "%" + v + "%"
+		q = q.Where(
+			"customer_name ILIKE ? OR organizer_name ILIKE ? OR title ILIKE ? OR description ILIKE ? OR purchase_type ILIKE ? OR region ILIKE ? OR winner_name ILIKE ?",
+			like, like, like, like, like, like, like,
+		)
 	}
 	if v := r.URL.Query().Get("purchase_type"); v != "" {
 		q = q.Where("purchase_type = ?", v)
@@ -101,6 +113,7 @@ func (h *Handler) ListLots(w http.ResponseWriter, r *http.Request) {
 
 	lots := make([]HistoricalLot, 0)
 	q.Order("end_date DESC NULLS LAST").Offset((page - 1) * limit).Limit(limit).Find(&lots)
+	fillCustomerFallback(lots)
 
 	writeJSON(w, map[string]any{
 		"items": lots,
@@ -177,18 +190,18 @@ func (h *Handler) ListCustomerCandidates(w http.ResponseWriter, r *http.Request)
 	rows := make([]CustomerCandidate, 0)
 	q := h.DB.Model(&HistoricalLot{}).
 		Select(`
-			customer_name,
+			COALESCE(NULLIF(customer_name, ''), organizer_name) AS customer_name,
 			MAX(customer_id) AS customer_id,
 			COUNT(*) AS tender_count,
 			MAX(end_date) AS last_tender_at,
 			COALESCE(SUM(initial_amount),0) AS total_budget
 		`).
-		Where("customer_name != ''").
-		Group("customer_name").
+		Where("customer_name != '' OR organizer_name != ''").
+		Group("COALESCE(NULLIF(customer_name, ''), organizer_name)").
 		Order("tender_count DESC, total_budget DESC").
 		Limit(limit)
 	if search != "" {
-		q = q.Where("customer_name ILIKE ?", "%"+search+"%")
+		q = q.Where("customer_name ILIKE ? OR organizer_name ILIKE ?", "%"+search+"%", "%"+search+"%")
 	}
 	q.Scan(&rows)
 
@@ -223,15 +236,15 @@ func (h *Handler) ListCustomers(w http.ResponseWriter, r *http.Request) {
 		var count int64
 		var total float64
 		var lastDate *time.Time
-		h.DB.Model(&HistoricalLot{}).
-			Where("customer_name ILIKE ?", "%"+customers[i].CustomerName+"%").
-			Count(&count)
-		h.DB.Model(&HistoricalLot{}).
-			Where("customer_name ILIKE ?", "%"+customers[i].CustomerName+"%").
-			Select("COALESCE(SUM(initial_amount),0)").Scan(&total)
-		h.DB.Model(&HistoricalLot{}).
-			Where("customer_name ILIKE ?", "%"+customers[i].CustomerName+"%").
-			Select("MAX(end_date)").Scan(&lastDate)
+		q := h.DB.Model(&HistoricalLot{})
+		if strings.TrimSpace(customers[i].CustomerID) != "" {
+			q = q.Where("customer_id = ? OR customer_name ILIKE ? OR organizer_name ILIKE ?", customers[i].CustomerID, "%"+customers[i].CustomerName+"%", "%"+customers[i].CustomerName+"%")
+		} else {
+			q = q.Where("customer_name ILIKE ? OR organizer_name ILIKE ?", "%"+customers[i].CustomerName+"%", "%"+customers[i].CustomerName+"%")
+		}
+		q.Count(&count)
+		q.Select("COALESCE(SUM(initial_amount),0)").Scan(&total)
+		q.Select("MAX(end_date)").Scan(&lastDate)
 		customers[i].TenderCount = int(count)
 		customers[i].TotalBudget = total
 		customers[i].LastTenderAt = lastDate
@@ -309,10 +322,15 @@ func (h *Handler) GetCustomerLots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lots := make([]HistoricalLot, 0)
-	h.DB.Where("customer_name ILIKE ?", "%"+customer.CustomerName+"%").
+	q := h.DB.Where("customer_name ILIKE ? OR organizer_name ILIKE ?", "%"+customer.CustomerName+"%", "%"+customer.CustomerName+"%")
+	if strings.TrimSpace(customer.CustomerID) != "" {
+		q = h.DB.Where("customer_id = ? OR customer_name ILIKE ? OR organizer_name ILIKE ?", customer.CustomerID, "%"+customer.CustomerName+"%", "%"+customer.CustomerName+"%")
+	}
+	q.
 		Order("end_date DESC NULLS LAST").
 		Limit(200).
 		Find(&lots)
+	fillCustomerFallback(lots)
 	writeJSON(w, map[string]any{"customer": customer, "lots": lots})
 }
 

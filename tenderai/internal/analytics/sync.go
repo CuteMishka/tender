@@ -13,7 +13,7 @@ import (
 
 // SyncResult — результат синхронизации.
 type SyncResult struct {
-	Fetched int `json:"fetched"`
+	Fetched  int `json:"fetched"`
 	Upserted int `json:"upserted"`
 }
 
@@ -105,6 +105,9 @@ func lotToHistorical(l tenderplus.Lot) HistoricalLot {
 		if lb.Partner != nil && lb.Partner.Name != nil {
 			h.OrganizerName = *lb.Partner.Name
 		}
+	}
+	if strings.TrimSpace(h.CustomerName) == "" {
+		h.CustomerName = h.OrganizerName
 	}
 	return h
 }

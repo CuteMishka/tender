@@ -22,6 +22,7 @@ import {
   pickTenderDocumentForRag,
   sanitizeApiText,
   sanitizeApiTextMultiline,
+  tenderCompanyName,
   tenderDocumentBlobToFile,
   type LotSpecSummary,
   type TenderItem,
@@ -176,19 +177,20 @@ function TenderDetail() {
     return () => { cancelled = true; };
   }, [tender, fetchDocumentProxyUrl, submitSpecToRag]);
 
-  useEffect(() => {
-    if (!tender) return;
-    let cancelled = false;
+  const handleLotAnalyze = useCallback(async () => {
+    if (!tender || lotAnalysisLoading) return;
     const lotText = buildLotText(tender);
     setLotAnalysisLoading(true);
     setLotAnalysisError(null);
-    setLotAnalysis(null);
-    fetchLotAnalyze(lotText)
-      .then((text) => { if (!cancelled) setLotAnalysis(text); })
-      .catch((e: unknown) => { if (!cancelled) setLotAnalysisError(e instanceof Error ? e.message : String(e)); })
-      .finally(() => { if (!cancelled) setLotAnalysisLoading(false); });
-    return () => { cancelled = true; };
-  }, [tender]);
+    try {
+      const text = await fetchLotAnalyze(lotText, { cacheKey: `tender-${tender.id}` });
+      setLotAnalysis(text);
+    } catch (e: unknown) {
+      setLotAnalysisError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLotAnalysisLoading(false);
+    }
+  }, [tender, lotAnalysisLoading]);
 
   async function handleRagUpload(e: FormEvent) {
     e.preventDefault();
@@ -222,6 +224,8 @@ function TenderDetail() {
         start_date: tender.startDate ? new Date(tender.startDate).toISOString() : new Date().toISOString(),
         end_date: deadline,
         purchase_type: tender.purchaseType || "—",
+        organizer_name: tenderCompanyName(tender),
+        partner_link: tender.partnerLink || "",
       };
 
       const res = await fetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
@@ -250,6 +254,7 @@ function TenderDetail() {
     specText(ragExtractedOverride ?? undefined) || specText(tender?.technical_specification);
 
   const statusInfo = tender ? getTenderStatus(tender.endDate) : null;
+  const companyName = tender ? tenderCompanyName(tender) : "";
 
   return (
     <>
@@ -337,6 +342,9 @@ function TenderDetail() {
                   )}
                   {tender.partner && (
                     <InfoRow label="Площадка" value={tender.partner} icon={Building2} />
+                  )}
+                  {companyName && (
+                    <InfoRow label="Заказчик / компания" value={companyName} icon={Building2} />
                   )}
                   {tender.status && (
                     <InfoRow label="Статус" value={tender.status} icon={Hash} />
@@ -441,6 +449,20 @@ function TenderDetail() {
                 </h3>
               </div>
               <div className="px-6 py-4">
+                <div className="mb-4">
+                  <button
+                    type="button"
+                    onClick={handleLotAnalyze}
+                    disabled={lotAnalysisLoading || Boolean(lotAnalysis)}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    {lotAnalysisLoading ? "Анализирую…" : lotAnalysis ? "Анализ выполнен" : "Запустить AI-анализ"}
+                  </button>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Запрос к Gemini выполняется только вручную и не повторяется для этого лота в течение 24 часов.
+                  </p>
+                </div>
                 {lotAnalysisLoading ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted border-t-primary" />
