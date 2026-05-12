@@ -10,6 +10,22 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.config import DATABASE_URL
 
 
+ASYNC_PG_UNSUPPORTED_QUERY_PARAMS = {
+    "application_name",
+    "channel_binding",
+    "connect_timeout",
+    "gssencmode",
+    "options",
+    "sslcert",
+    "sslcompression",
+    "sslcrl",
+    "sslkey",
+    "sslmode",
+    "sslrootcert",
+    "target_session_attrs",
+}
+
+
 def _async_database_url(url: str) -> str:
     if url.startswith("postgresql+asyncpg://"):
         return url
@@ -29,7 +45,7 @@ def _normalize_asyncpg_url(url: str) -> tuple[str, dict[str, object]]:
     for key, value in query:
         if key == "sslmode":
             sslmode = value
-        else:
+        if key not in ASYNC_PG_UNSUPPORTED_QUERY_PARAMS:
             filtered_query.append((key, value))
 
     normalized_url = urlunsplit((
