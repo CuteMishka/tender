@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { AlertTriangle, TrendingDown, AlertCircle } from "lucide-react";
+import { AlertTriangle, TrendingDown, AlertCircle, Search } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   ScatterChart, Scatter, ZAxis,
@@ -17,6 +17,7 @@ function PriceAnalytics() {
   const [rows, setRows] = useState<PriceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"all" | "anomalies">("all");
+  const [searchText, setSearchText] = useState("");
 
   useEffect(() => {
     analyticsApi.getPrices()
@@ -25,8 +26,13 @@ function PriceAnalytics() {
       .finally(() => setLoading(false));
   }, []);
 
-  const anomalies = rows.filter((r) => r.discount_pct >= 40);
-  const displayRows = tab === "anomalies" ? anomalies : rows;
+  const searchedRows = rows.filter((r) => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return true;
+    return `${r.lot_id} ${r.title} ${r.customer_name} ${r.purchase_type} ${r.winner_name} ${r.initial_amount} ${r.contract_amount} ${r.discount_pct}`.toLowerCase().includes(q);
+  });
+  const anomalies = searchedRows.filter((r) => r.discount_pct >= 40);
+  const displayRows = tab === "anomalies" ? anomalies : searchedRows;
 
   // Гистограмма распределения скидок
   const discountBuckets: Record<string, number> = {
@@ -76,6 +82,16 @@ function PriceAnalytics() {
           </div>
         ) : (
           <>
+            <div className="relative max-w-xl">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+              <input
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder="Поиск по названию, заказчику, виду закупки, победителю..."
+                className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm"
+              />
+            </div>
+
             {/* Карточки */}
             {priceStats && (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -96,7 +112,7 @@ function PriceAnalytics() {
                     <AlertTriangle className="h-4 w-4 text-red-500" /> Аномалии (&gt;40%)
                   </div>
                   <p className="text-2xl font-bold text-red-600">{priceStats.anomaly_count}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">из {rows.length} контрактов</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">из {searchedRows.length} контрактов</p>
                 </div>
                 <div className="rounded-xl border border-border bg-card p-5" style={{ boxShadow: "var(--shadow-sm)" }}>
                   <div className="mb-2 text-xs text-muted-foreground">Суммарная экономия</div>
@@ -154,7 +170,7 @@ function PriceAnalytics() {
                 <div className="flex gap-1">
                   <button onClick={() => setTab("all")}
                     className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${tab === "all" ? "bg-primary text-primary-foreground" : "border border-border bg-background hover:bg-accent"}`}>
-                    Все ({rows.length})
+                    Все ({searchedRows.length})
                   </button>
                   <button onClick={() => setTab("anomalies")}
                     className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${tab === "anomalies" ? "bg-red-600 text-white" : "border border-border bg-background hover:bg-accent"}`}>
@@ -205,7 +221,9 @@ function PriceAnalytics() {
                     {displayRows.length === 0 && (
                       <tr>
                         <td colSpan={9} className="px-6 py-12 text-center text-sm text-muted-foreground">
-                          {tab === "anomalies" ? "Аномалии не обнаружены" : "Нет данных"}
+                          {searchText.trim()
+                            ? "По заданному поиску контракты не найдены"
+                            : tab === "anomalies" ? "Аномалии не обнаружены" : "Нет данных"}
                         </td>
                       </tr>
                     )}

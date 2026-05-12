@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Check, Edit2, Plus, Save, Trash2, X, Download } from "lucide-react";
+import { Check, Edit2, Plus, Save, Trash2, X, Download, Search } from "lucide-react";
 import { PageHeader } from "@/components/admin/PageHeader";
 
 export const Route = createFileRoute("/_admin/dictionaries")({
@@ -55,6 +55,7 @@ function DictionariesPage() {
   const [data, setData] = useState<Record<DictKind, DictItem[]>>(loadData);
   const [active, setActive] = useState<DictKind>("keywords");
   const [draft, setDraft] = useState("");
+  const [searchText, setSearchText] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
 
@@ -62,6 +63,11 @@ function DictionariesPage() {
 
   const activeTab = tabs.find((tab) => tab.key === active)!;
   const items = data[active];
+  const visibleItems = items.filter((item) => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return true;
+    return `${item.value} ${item.lastLot ?? ""} ${item.active ? "вкл активно" : "выкл неактивно"}`.toLowerCase().includes(q);
+  });
   const totals = useMemo(() => Object.fromEntries(
     tabs.map((tab) => [tab.key, { total: data[tab.key].length, active: data[tab.key].filter((i) => i.active).length }])
   ), [data]);
@@ -145,6 +151,15 @@ function DictionariesPage() {
               <p className="text-xs text-muted-foreground">{activeTab.hint}</p>
             </div>
             <div className="flex flex-wrap gap-2">
+              <div className="relative min-w-[240px]">
+                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                <input
+                  value={searchText}
+                  onChange={(e) => setSearchText(e.target.value)}
+                  placeholder="Поиск по справочнику"
+                  className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm"
+                />
+              </div>
               <div className="flex min-w-[280px] flex-1 gap-2">
                 <input
                   value={draft}
@@ -179,7 +194,7 @@ function DictionariesPage() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((item, i) => (
+                {visibleItems.map((item, i) => (
                   <tr key={item.id} className="border-t border-border hover:bg-muted/30">
                     <td className="px-6 py-3 font-mono text-xs text-muted-foreground">{i + 1}</td>
                     <td className="px-6 py-3">
@@ -210,6 +225,13 @@ function DictionariesPage() {
                     </td>
                   </tr>
                 ))}
+                {visibleItems.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-12 text-center text-sm text-muted-foreground">
+                      По справочнику ничего не найдено
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

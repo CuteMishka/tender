@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Bell, CheckCheck, Clock, Gavel, Megaphone, MessageSquare, RefreshCw, Trash2, Users, X } from "lucide-react";
+import { Bell, CheckCheck, Clock, Gavel, Megaphone, MessageSquare, RefreshCw, Trash2, Users, X, Search } from "lucide-react";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { pushNotification, useNotifications, type AppNotification, type NotificationCategory } from "@/hooks/use-notifications";
 
@@ -52,6 +52,7 @@ function NotificationsPage() {
   const navigate = useNavigate();
   const { notifications, unreadCount, markAllRead, markCategoryRead, markRead, clearAll, remove } = useNotifications();
   const [active, setActive] = useState<NotificationCategory | "all">("all");
+  const [searchText, setSearchText] = useState("");
 
   const tabs = useMemo(() => (["all", "deadline", "appeal", "updates", "mentions", "review"] as const).map((key) => {
     const count = key === "all" ? notifications.length : notifications.filter((n) => n.category === key).length;
@@ -59,7 +60,11 @@ function NotificationsPage() {
     return { key, count, unread, ...categoryMeta[key] };
   }), [notifications, unreadCount]);
 
-  const visible = active === "all" ? notifications : notifications.filter((n) => n.category === active);
+  const visible = (active === "all" ? notifications : notifications.filter((n) => n.category === active)).filter((n) => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return true;
+    return `${n.title} ${n.message} ${n.type} ${categoryMeta[n.category].label}`.toLowerCase().includes(q);
+  });
 
   const grouped = useMemo(() => {
     const map = new Map<string, AppNotification[]>();
@@ -114,12 +119,24 @@ function NotificationsPage() {
           })}
         </div>
 
+        <div className="relative max-w-xl">
+          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+          <input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="Поиск по уведомлениям, типу, категории..."
+            className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm"
+          />
+        </div>
+
         <div className="overflow-hidden rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
           {visible.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
               <Bell className="mb-3 h-10 w-10 opacity-20" />
-              <p className="text-sm font-medium">Уведомлений пока нет</p>
-              <p className="mt-1 text-xs">Они появятся при действиях с тендерами, заказчиками и дедлайнами.</p>
+              <p className="text-sm font-medium">{searchText.trim() ? "Уведомления не найдены" : "Уведомлений пока нет"}</p>
+              <p className="mt-1 text-xs">
+                {searchText.trim() ? "Попробуйте другой поисковый запрос." : "Они появятся при действиях с тендерами, заказчиками и дедлайнами."}
+              </p>
             </div>
           ) : (
             <div>

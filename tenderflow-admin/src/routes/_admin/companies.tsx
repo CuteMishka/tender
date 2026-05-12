@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { Building2, MapPin, BadgeCheck } from "lucide-react";
+import { Building2, MapPin, BadgeCheck, Search } from "lucide-react";
 
 export const Route = createFileRoute("/_admin/companies")({
   component: Companies,
@@ -16,12 +17,28 @@ const companies = [
 ];
 
 function Companies() {
+  const [searchText, setSearchText] = useState("");
+  const visibleCompanies = companies.filter((c) => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return true;
+    return `${c.name} ${c.inn} ${c.city} ${c.verified ? "проверен verified" : "не проверен"}`.toLowerCase().includes(q);
+  });
+
   return (
     <>
       <PageHeader title="Компании" description="Реестр зарегистрированных организаций" />
-      <div className="p-8">
+      <div className="space-y-4 p-8">
+        <div className="relative max-w-xl">
+          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+          <input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="Поиск по компании, ИНН, городу..."
+            className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm"
+          />
+        </div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {companies.map((c) => (
+          {visibleCompanies.map((c) => (
             <div
               key={c.inn}
               className="rounded-xl border border-border bg-card p-5 transition hover:border-primary/40"
@@ -54,6 +71,11 @@ function Companies() {
             </div>
           ))}
         </div>
+        {visibleCompanies.length === 0 && (
+          <div className="rounded-xl border border-border bg-card py-16 text-center text-sm text-muted-foreground">
+            По компаниям ничего не найдено
+          </div>
+        )}
       </div>
     </>
   );

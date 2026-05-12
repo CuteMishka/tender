@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
+import { Search } from "lucide-react";
 
 export const Route = createFileRoute("/_admin/users")({
   component: Users,
@@ -14,10 +16,26 @@ const users = [
 ];
 
 function Users() {
+  const [searchText, setSearchText] = useState("");
+  const visibleUsers = users.filter((u) => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return true;
+    return `${u.name} ${u.email} ${u.role} ${u.company} ${u.status}`.toLowerCase().includes(q);
+  });
+
   return (
     <>
       <PageHeader title="Пользователи" description="Учётные записи на платформе" />
-      <div className="p-8">
+      <div className="space-y-4 p-8">
+        <div className="relative max-w-xl">
+          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+          <input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="Поиск по пользователю, email, роли, компании..."
+            className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm"
+          />
+        </div>
         <div
           className="overflow-hidden rounded-xl border border-border bg-card"
           style={{ boxShadow: "var(--shadow-sm)" }}
@@ -32,7 +50,7 @@ function Users() {
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => (
+              {visibleUsers.map((u) => (
                 <tr key={u.email} className="border-t border-border hover:bg-muted/40">
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
@@ -58,6 +76,13 @@ function Users() {
                   </td>
                 </tr>
               ))}
+              {visibleUsers.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-6 py-16 text-center text-sm text-muted-foreground">
+                    Пользователи не найдены
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

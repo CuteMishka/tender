@@ -42,9 +42,16 @@ SYSTEM_LOT_ONLY = """Ты помощник по госзакупкам и ИТ (
 {
   "summary": "1–2 предложения общий вывод",
   "fit": "подходит" или "сомнительно" или "не подходит",
+  "score": число от 0 до 100 — процент соответствия лота профилю компании,
   "reason": "2–4 предложения: почему так",
   "checks": "что специалисту проверить в полных документах (список через точку с запятой)"
-}"""
+}
+
+Шкала score:
+- 0–30: лот почти не соответствует профилю;
+- 31–60: есть косвенное или частичное соответствие;
+- 61–85: лот в целом подходит, но есть условия для проверки;
+- 86–100: лот хорошо соответствует профилю."""
 
 
 def _truncate(s: str, limit: int) -> str:
@@ -117,7 +124,24 @@ def analyze_match_context(
     return {"summary": summary, "verdicts": verdicts}
 
 
-def analyze_lot_without_index(company_profile: str, lot_text: str) -> dict[str, str]:
+def _score_from_fit(fit: str) -> int:
+    normalized = fit.strip().lower()
+    if "не" in normalized and "подходит" in normalized:
+        return 20
+    if "подходит" in normalized:
+        return 85
+    return 50
+
+
+def _normalize_score(value: Any, fit: str) -> int:
+    try:
+        score = int(round(float(value)))
+    except (TypeError, ValueError):
+        score = _score_from_fit(fit)
+    return max(0, min(100, score))
+
+
+def analyze_lot_without_index(company_profile: str, lot_text: str) -> dict[str, Any]:
     """Разбор одного лота без векторного индекса."""
     lot_text = _truncate(lot_text.strip(), 18_000)
     if not lot_text:
@@ -131,9 +155,11 @@ def analyze_lot_without_index(company_profile: str, lot_text: str) -> dict[str, 
     )
 
     data = gemini_chat_json(SYSTEM_LOT_ONLY, user, temperature=0.2)
+    fit = str(data.get("fit", "сомнительно")).strip() or "сомнительно"
     return {
         "summary": str(data.get("summary", "")).strip() or "—",
-        "fit": str(data.get("fit", "сомнительно")).strip() or "сомнительно",
+        "fit": fit,
+        "score": _normalize_score(data.get("score"), fit),
         "reason": str(data.get("reason", "")).strip() or "—",
         "checks": str(data.get("checks", "")).strip() or None,
     }

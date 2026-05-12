@@ -15,7 +15,7 @@ from app.api.commercial_proposals import router as commercial_proposals_router
 from app.api.crm import router as crm_router
 from app.api.knowledge import router as knowledge_router
 from app.api.tailoring import router as tailoring_router
-from app.config import CORS_ORIGINS, get_company_profile
+from app.config import CORS_ORIGINS, ai_configuration, get_company_profile, is_ai_configured
 from app.database import create_async_schema
 from app.document_extract import extract_text_from_bytes
 from app.embeddings import embed_chunks, embed_profile
@@ -87,7 +87,7 @@ class IndexBody(BaseModel):
     )
     extract_spec_points: bool = Field(
         False,
-        description="Извлечь основные пункты ТЗ через OpenAI и сохранить (нужен GEMINI_API_KEY)",
+        description="Извлечь основные пункты ТЗ через AI и сохранить (нужен GROQ_API_KEY или GEMINI_API_KEY)",
     )
 
 
@@ -150,6 +150,7 @@ class LotAnalyzeBody(BaseModel):
 class LotAnalyzeResponse(BaseModel):
     summary: str
     fit: str
+    score: int = Field(..., ge=0, le=100)
     reason: str
     checks: str | None = None
 
@@ -157,15 +158,10 @@ class LotAnalyzeResponse(BaseModel):
 @app.get("/health")
 def health() -> dict[str, Any]:
     db_ok, db_err = health_db()
-    _key = os.environ.get("GEMINI_API_KEY", "")
     out: dict[str, Any] = {
         "ok": True,
         "database": db_ok,
-        "gemini_configured": bool(_key.strip()),
-        "gemini_env": {
-            "GEMINI_API_KEY_defined": "GEMINI_API_KEY" in os.environ,
-            "GEMINI_API_KEY_length": len(_key),
-        },
+        "ai": ai_configuration(),
     }
     if db_err is not None:
         out["database_error"] = db_err
@@ -185,10 +181,10 @@ def index_lot(lot_id: str, body: IndexBody) -> Response:
     try:
         replace_lot_chunks(conn, lot_id, chunks, vectors, body.source_hint)
         if body.extract_spec_points:
-            if not os.environ.get("GEMINI_API_KEY", "").strip():
+            if not is_ai_configured():
                 raise HTTPException(
                     status_code=503,
-                    detail="extract_spec_points требует GEMINI_API_KEY в окружении",
+                    detail="extract_spec_points требует GROQ_API_KEY или GEMINI_API_KEY в окружении",
                 )
             try:
                 payload = summarize_specification(text)
@@ -220,7 +216,7 @@ async def index_document(
     extract_spec_points: Annotated[
         bool,
         Form(
-            description="Выжимка ТЗ через OpenAI (тратит токены; нужен GEMINI_API_KEY)"
+            description="Выжимка ТЗ через AI (тратит токены; нужен GROQ_API_KEY или GEMINI_API_KEY)"
         ),
     ] = False,
     include_extracted_text: Annotated[
@@ -253,10 +249,10 @@ async def index_document(
         if include_extracted_text:
             out["extracted_text"] = text
         if extract_spec_points:
-            if not os.environ.get("GEMINI_API_KEY", "").strip():
+            if not is_ai_configured():
                 raise HTTPException(
                     status_code=503,
-                    detail="extract_spec_points требует GEMINI_API_KEY в окружении",
+                    detail="extract_spec_points требует GROQ_API_KEY или GEMINI_API_KEY в окружении",
                 )
             try:
                 payload = summarize_specification(text)
@@ -309,12 +305,12 @@ def match(body: MatchBody) -> list[MatchResult]:
 
 @app.post("/v1/match/analyze", response_model=AnalyzeResponse)
 def match_analyze(body: AnalyzeBody) -> AnalyzeResponse:
-    """Векторный поиск + текстовый разбор Gemini по профилю, входящим данным и фрагментам из БД."""
+    """Векторный поиск + текстовый AI-разбор по профилю, входящим данным и фрагментам из БД."""
     profile = effective_profile(body.profile)
-    if not os.environ.get("GEMINI_API_KEY", "").strip():
+    if not is_ai_configured():
         raise HTTPException(
             status_code=503,
-            detail="GEMINI_API_KEY не задан — добавьте ключ в окружение",
+            detail="GROQ_API_KEY или GEMINI_API_KEY не задан — добавьте ключ в окружение",
         )
 
     q = embed_profile(profile)
@@ -342,7 +338,7 @@ def match_analyze(body: AnalyzeBody) -> AnalyzeResponse:
     except Exception as e:
         raise HTTPException(
             status_code=502,
-            detail=f"Gemini: {e!s}",
+            detail=f"AI: {e!s}",
         ) from e
 
     verdicts_raw = out.get("verdicts") or []
@@ -377,11 +373,11 @@ def match_analyze(body: AnalyzeBody) -> AnalyzeResponse:
 
 @app.post("/v1/lot/analyze", response_model=LotAnalyzeResponse)
 def lot_analyze(body: LotAnalyzeBody) -> LotAnalyzeResponse:
-    """Один лот: профиль + текст лота → вердикт. Без pgvector и без POST /index (нужен GEMINI_API_KEY)."""
-    if not os.environ.get("GEMINI_API_KEY", "").strip():
+    """Один лот: профиль + текст лота → вердикт. Без pgvector и без POST /index."""
+    if not is_ai_configured():
         raise HTTPException(
             status_code=503,
-            detail="GEMINI_API_KEY не задан",
+            detail="GROQ_API_KEY или GEMINI_API_KEY не задан",
         )
     profile = effective_profile(body.profile)
     try:
@@ -389,7 +385,7 @@ def lot_analyze(body: LotAnalyzeBody) -> LotAnalyzeResponse:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Gemini: {e!s}") from e
+        raise HTTPException(status_code=502, detail=f"AI: {e!s}") from e
     return LotAnalyzeResponse(**out)
 
 
@@ -401,7 +397,7 @@ def root() -> dict[str, str]:
         "index_document": "POST /v1/lots/{lot_id}/index-document — PDF/DOCX → индекс + опционально выжимка",
         "spec_summary": "GET /v1/lots/{lot_id}/spec-summary",
         "match": "POST /v1/match",
-        "match_analyze": "POST /v1/match/analyze (нужен GEMINI_API_KEY)",
-        "lot_analyze": "POST /v1/lot/analyze — лот без индекса, только OpenAI",
+        "match_analyze": "POST /v1/match/analyze (нужен GROQ_API_KEY или GEMINI_API_KEY)",
+        "lot_analyze": "POST /v1/lot/analyze — лот без индекса, AI-анализ",
         "profile_default": "COMPANY_PROFILE или COMPANY_PROFILE_FILE в .env если не передаёте profile",
     }

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { Trophy, AlertCircle } from "lucide-react";
+import { Trophy, AlertCircle, Search } from "lucide-react";
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from "recharts";
@@ -16,6 +16,7 @@ const COLORS = ["#16a34a", "#2563eb", "#d97706", "#dc2626", "#7c3aed", "#0891b2"
 function WinnersAnalytics() {
   const [winners, setWinners] = useState<WinnerRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchText, setSearchText] = useState("");
 
   useEffect(() => {
     analyticsApi.getWinners()
@@ -24,19 +25,25 @@ function WinnersAnalytics() {
       .finally(() => setLoading(false));
   }, []);
 
-  const totalWins = winners.reduce((s, w) => s + w.wins, 0);
-  const totalAmount = winners.reduce((s, w) => s + w.total_amount, 0);
+  const filteredWinners = winners.filter((w) => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return true;
+    return `${w.winner_name} ${w.wins} ${w.total_amount} ${w.avg_amount} ${w.max_amount}`.toLowerCase().includes(q);
+  });
+
+  const totalWins = filteredWinners.reduce((s, w) => s + w.wins, 0);
+  const totalAmount = filteredWinners.reduce((s, w) => s + w.total_amount, 0);
 
   // Данные для pie chart: топ-5 + "Остальные"
-  const top5 = winners.slice(0, 5);
-  const restAmount = winners.slice(5).reduce((s, w) => s + w.total_amount, 0);
+  const top5 = filteredWinners.slice(0, 5);
+  const restAmount = filteredWinners.slice(5).reduce((s, w) => s + w.total_amount, 0);
   const pieData = [
     ...top5.map((w) => ({ name: w.winner_name, value: w.total_amount })),
     ...(restAmount > 0 ? [{ name: "Остальные", value: restAmount }] : []),
   ];
 
   // Данные для bar chart: топ-10 по числу побед
-  const barData = winners.slice(0, 10).map((w) => ({
+  const barData = filteredWinners.slice(0, 10).map((w) => ({
     name: w.winner_name.length > 18 ? w.winner_name.slice(0, 18) + "…" : w.winner_name,
     wins: w.wins,
     amount: +(w.total_amount / 1_000_000).toFixed(1),
@@ -62,11 +69,21 @@ function WinnersAnalytics() {
           </div>
         ) : (
           <>
+            <div className="relative max-w-xl">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+              <input
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder="Поиск по победителю, количеству побед, суммам..."
+                className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm"
+              />
+            </div>
+
             {/* Итоговые карточки */}
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="rounded-xl border border-border bg-card p-5" style={{ boxShadow: "var(--shadow-sm)" }}>
                 <p className="text-xs text-muted-foreground">Уникальных победителей</p>
-                <p className="mt-1 text-2xl font-bold">{winners.length}</p>
+                <p className="mt-1 text-2xl font-bold">{filteredWinners.length}</p>
               </div>
               <div className="rounded-xl border border-border bg-card p-5" style={{ boxShadow: "var(--shadow-sm)" }}>
                 <p className="text-xs text-muted-foreground">Всего побед</p>
@@ -138,7 +155,7 @@ function WinnersAnalytics() {
                     </tr>
                   </thead>
                   <tbody>
-                    {winners.map((w, i) => (
+                    {filteredWinners.map((w, i) => (
                       <tr key={w.winner_name} className="border-t border-border hover:bg-muted/30">
                         <td className="px-4 py-3 text-center">
                           {i === 0 ? <Trophy className="mx-auto h-4 w-4 text-yellow-500" /> :
@@ -161,6 +178,13 @@ function WinnersAnalytics() {
                         </td>
                       </tr>
                     ))}
+                    {filteredWinners.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="px-6 py-12 text-center text-sm text-muted-foreground">
+                          Победители не найдены
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>

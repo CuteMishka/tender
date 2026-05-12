@@ -24,6 +24,7 @@ import {
   sanitizeApiTextMultiline,
   tenderCompanyName,
   tenderDocumentBlobToFile,
+  type LotAnalyzeResult,
   type LotSpecSummary,
   type TenderItem,
 } from "@/lib/tenders-api";
@@ -60,6 +61,78 @@ function InfoRow({ label, value, icon: Icon }: { label: string; value: React.Rea
   );
 }
 
+function scoreTone(score: number) {
+  if (score >= 75) return { label: "Высокое соответствие", color: "bg-green-500", text: "text-green-700", border: "border-green-200", bg: "bg-green-50" };
+  if (score >= 45) return { label: "Среднее соответствие", color: "bg-amber-500", text: "text-amber-700", border: "border-amber-200", bg: "bg-amber-50" };
+  return { label: "Низкое соответствие", color: "bg-red-500", text: "text-red-700", border: "border-red-200", bg: "bg-red-50" };
+}
+
+function splitChecks(checks?: string | null) {
+  if (!checks) return [];
+  return checks.split(/[;•\n]/).map((x) => x.trim()).filter(Boolean);
+}
+
+function LotAnalysisCard({ analysis }: { analysis: LotAnalyzeResult }) {
+  const score = Math.max(0, Math.min(100, Math.round(analysis.score)));
+  const tone = scoreTone(score);
+  const checks = splitChecks(analysis.checks);
+  return (
+    <div className={`space-y-4 rounded-xl border ${tone.border} ${tone.bg} p-4`}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Вердикт AI</div>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <span className={`rounded-full bg-background px-3 py-1 text-sm font-semibold ${tone.text}`}>
+              {analysis.fit}
+            </span>
+            <span className={`text-sm font-medium ${tone.text}`}>{tone.label}</span>
+          </div>
+        </div>
+        <div className="text-left sm:text-right">
+          <div className={`text-3xl font-bold ${tone.text}`}>{score}%</div>
+          <div className="text-xs text-muted-foreground">пригодность лота</div>
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-1.5 flex justify-between text-[11px] text-muted-foreground">
+          <span>0%</span>
+          <span>50%</span>
+          <span>100%</span>
+        </div>
+        <div className="h-3 overflow-hidden rounded-full bg-background/80">
+          <div className={`h-full rounded-full ${tone.color} transition-all`} style={{ width: `${score}%` }} />
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <div className="rounded-lg border border-border/60 bg-background/80 p-3">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Краткий вывод</div>
+          <p className="text-sm leading-relaxed text-foreground">{analysis.summary}</p>
+        </div>
+        <div className="rounded-lg border border-border/60 bg-background/80 p-3">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Обоснование</div>
+          <p className="text-sm leading-relaxed text-foreground">{analysis.reason}</p>
+        </div>
+      </div>
+
+      {checks.length > 0 && (
+        <div className="rounded-lg border border-border/60 bg-background/80 p-3">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Что проверить</div>
+          <ul className="space-y-1.5 text-sm text-foreground">
+            {checks.map((check, index) => (
+              <li key={`${check}-${index}`} className="flex gap-2">
+                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                <span>{check}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TenderDetail() {
   const { tenderId } = Route.useParams();
   const location = useLocation();
@@ -69,7 +142,7 @@ function TenderDetail() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const [lotAnalysis, setLotAnalysis] = useState<string | null>(null);
+  const [lotAnalysis, setLotAnalysis] = useState<LotAnalyzeResult | null>(null);
   const [lotAnalysisLoading, setLotAnalysisLoading] = useState(false);
   const [lotAnalysisError, setLotAnalysisError] = useState<string | null>(null);
 
@@ -183,8 +256,8 @@ function TenderDetail() {
     setLotAnalysisLoading(true);
     setLotAnalysisError(null);
     try {
-      const text = await fetchLotAnalyze(lotText, { cacheKey: `tender-${tender.id}` });
-      setLotAnalysis(text);
+      const result = await fetchLotAnalyze(lotText, { cacheKey: `tender-${tender.id}` });
+      setLotAnalysis(result);
     } catch (e: unknown) {
       setLotAnalysisError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -460,7 +533,7 @@ function TenderDetail() {
                     {lotAnalysisLoading ? "Анализирую…" : lotAnalysis ? "Анализ выполнен" : "Запустить AI-анализ"}
                   </button>
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Запрос к Gemini выполняется только вручную и не повторяется для этого лота в течение 24 часов.
+                    Запрос к AI выполняется только вручную. Повторный одинаковый результат может вернуться из локального кэша без расхода лимита.
                   </p>
                 </div>
                 {lotAnalysisLoading ? (
@@ -468,12 +541,8 @@ function TenderDetail() {
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted border-t-primary" />
                     Анализирую…
                   </div>
-                ) : specText(lotAnalysis ?? undefined) ? (
-                  <div className="max-h-[min(32rem,70vh)] overflow-y-auto rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
-                    <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-foreground">
-                      {specText(lotAnalysis ?? undefined)}
-                    </pre>
-                  </div>
+                ) : lotAnalysis ? (
+                  <LotAnalysisCard analysis={lotAnalysis} />
                 ) : lotAnalysisError ? (
                   <div className="space-y-3">
                     <p className="text-sm text-destructive">{lotAnalysisError}</p>

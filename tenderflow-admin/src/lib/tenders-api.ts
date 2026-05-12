@@ -423,29 +423,19 @@ export function buildLotText(t: TenderItem): string {
   return `${main}${sep}${suffix}.`;
 }
 
-function extractLotAnalyzeBody(raw: unknown): string | null {
-  if (typeof raw === "string" && raw.trim()) return raw.trim();
-  if (!raw || typeof raw !== "object") return null;
-  const o = raw as Record<string, unknown>;
-  for (const k of ["analysis", "result", "text", "content", "message", "output", "lot_analysis"]) {
-    const v = o[k];
-    if (typeof v === "string" && v.trim()) return v.trim();
-  }
-  const data = o.data;
-  if (data && typeof data === "object") {
-    const d = data as Record<string, unknown>;
-    for (const k of ["analysis", "result", "text"]) {
-      const v = d[k];
-      if (typeof v === "string" && v.trim()) return v.trim();
-    }
-  }
-  return null;
-}
+export type LotAnalyzeResult = {
+  summary: string;
+  fit: string;
+  score: number;
+  reason: string;
+  checks?: string | null;
+  raw?: string;
+};
 
 const LOT_ANALYZE_CACHE_PREFIX = "lot_analyze_cache_v1:";
 const LOT_ANALYZE_ATTEMPT_PREFIX = "lot_analyze_attempt_v1:";
 const LOT_ANALYZE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const lotAnalyzeInFlight = new Map<string, Promise<string | null>>();
+const lotAnalyzeInFlight = new Map<string, Promise<LotAnalyzeResult | null>>();
 const DEFAULT_COMPANY_PROFILE =
   "Компания оказывает услуги по облачной инфраструктуре IaaS, серверному оборудованию, виртуализации, резервному копированию, технической поддержке и внедрению IT-инфраструктуры.";
 
@@ -470,23 +460,56 @@ function stableHash(input: string): string {
   return (h >>> 0).toString(36);
 }
 
-function readLotAnalyzeCache(cacheKey: string): string | null {
+function normalizeLotAnalyzeResult(raw: unknown): LotAnalyzeResult | null {
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    if (!text) return null;
+    try {
+      return normalizeLotAnalyzeResult(JSON.parse(text));
+    } catch {
+      return { summary: text, fit: "сомнительно", score: 50, reason: text, checks: null, raw: text };
+    }
+  }
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const scoreValue = Number(o.score);
+  const score = Number.isFinite(scoreValue) ? Math.max(0, Math.min(100, Math.round(scoreValue))) : 50;
+  const summary = typeof o.summary === "string" && o.summary.trim() ? o.summary.trim() : "";
+  const fit = typeof o.fit === "string" && o.fit.trim() ? o.fit.trim() : "сомнительно";
+  const reason = typeof o.reason === "string" && o.reason.trim() ? o.reason.trim() : "";
+  const checks = typeof o.checks === "string" && o.checks.trim() ? o.checks.trim() : null;
+  if (!summary && !reason) return null;
+  return { summary: summary || reason, fit, score, reason: reason || summary, checks };
+}
+
+function removeLotAnalyzeAttemptKeys(): void {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(LOT_ANALYZE_ATTEMPT_PREFIX)) localStorage.removeItem(key);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function readLotAnalyzeCache(cacheKey: string): LotAnalyzeResult | null {
   try {
     const raw = localStorage.getItem(LOT_ANALYZE_CACHE_PREFIX + cacheKey);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { ts?: number; value?: string };
-    if (!parsed.ts || typeof parsed.value !== "string") return null;
+    const parsed = JSON.parse(raw) as { ts?: number; value?: unknown };
+    if (!parsed.ts) return null;
     if (Date.now() - parsed.ts > LOT_ANALYZE_CACHE_TTL_MS) {
       localStorage.removeItem(LOT_ANALYZE_CACHE_PREFIX + cacheKey);
       return null;
     }
-    return parsed.value;
+    return normalizeLotAnalyzeResult(parsed.value);
   } catch {
     return null;
   }
 }
 
-function writeLotAnalyzeCache(cacheKey: string, value: string): void {
+function writeLotAnalyzeCache(cacheKey: string, value: LotAnalyzeResult): void {
   try {
     localStorage.setItem(LOT_ANALYZE_CACHE_PREFIX + cacheKey, JSON.stringify({ ts: Date.now(), value }));
   } catch {
@@ -494,41 +517,15 @@ function writeLotAnalyzeCache(cacheKey: string, value: string): void {
   }
 }
 
-function readLotAnalyzeAttempt(cacheKey: string): boolean {
-  try {
-    const raw = localStorage.getItem(LOT_ANALYZE_ATTEMPT_PREFIX + cacheKey);
-    if (!raw) return false;
-    const parsed = JSON.parse(raw) as { ts?: number };
-    if (!parsed.ts) return false;
-    if (Date.now() - parsed.ts > LOT_ANALYZE_CACHE_TTL_MS) {
-      localStorage.removeItem(LOT_ANALYZE_ATTEMPT_PREFIX + cacheKey);
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function writeLotAnalyzeAttempt(cacheKey: string): void {
-  try {
-    localStorage.setItem(LOT_ANALYZE_ATTEMPT_PREFIX + cacheKey, JSON.stringify({ ts: Date.now() }));
-  } catch {
-    /* ignore */
-  }
-}
-
-export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: string; force?: boolean }): Promise<string | null> {
+export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: string; force?: boolean }): Promise<LotAnalyzeResult | null> {
   const trimmed = lotText.trim();
   if (!trimmed) return null;
 
+  removeLotAnalyzeAttemptKeys();
   const cacheKey = options?.cacheKey || stableHash(trimmed);
   if (!options?.force) {
     const cached = readLotAnalyzeCache(cacheKey);
     if (cached) return cached;
-    if (readLotAnalyzeAttempt(cacheKey)) {
-      throw new Error("AI анализ по этому лоту уже запрашивался. Чтобы не расходовать квоту Gemini, повторный запрос заблокирован на 24 часа.");
-    }
     const pending = lotAnalyzeInFlight.get(cacheKey);
     if (pending) return pending;
   }
@@ -536,7 +533,6 @@ export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: st
   const request = (async () => {
     const base = getRagApiBase();
     const url = `${base}/v1/lot/analyze`;
-    writeLotAnalyzeAttempt(cacheKey);
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json, text/plain;q=0.9, */*;q=0.8" },
@@ -553,17 +549,18 @@ export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: st
 
     try {
       const parsed: unknown = JSON.parse(t);
-      const extracted = extractLotAnalyzeBody(parsed);
-      if (extracted) {
-        writeLotAnalyzeCache(cacheKey, extracted);
-        return extracted;
+      const result = normalizeLotAnalyzeResult(parsed);
+      if (result) {
+        writeLotAnalyzeCache(cacheKey, result);
+        return result;
       }
     } catch {
-      /* не JSON — показываем как текст */
+      /* не JSON — нормализуем как текст */
     }
 
-    writeLotAnalyzeCache(cacheKey, t);
-    return t;
+    const fallback = normalizeLotAnalyzeResult(t);
+    if (fallback) writeLotAnalyzeCache(cacheKey, fallback);
+    return fallback;
   })();
 
   if (!options?.force) lotAnalyzeInFlight.set(cacheKey, request);
