@@ -29,7 +29,7 @@ services:
       - key: GEMINI_API_KEY
         sync: false          # ваш ключ из Google AI Studio
       - key: CHAT_MODEL
-        value: gemini-1.5-flash-8b
+        value: gemini-2.5-flash
       - key: EMBEDDING_MODEL
         value: intfloat/multilingual-e5-small
       - key: EMBEDDING_DIM

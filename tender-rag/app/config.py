@@ -24,6 +24,8 @@ CHAT_MODEL = os.environ.get(
     "CHAT_MODEL",
     "llama-3.1-8b-instant" if AI_PROVIDER == "groq" else "gemini-2.5-flash",
 )
+if AI_PROVIDER == "gemini" and CHAT_MODEL.strip() in {"gemini-1.5-flash-8b", "models/gemini-1.5-flash-8b"}:
+    CHAT_MODEL = "gemini-2.5-flash"
 GEMINI_CACHE_TTL_SECONDS = int(os.environ.get("GEMINI_CACHE_TTL_SECONDS", "86400"))
 GEMINI_MIN_INTERVAL_SECONDS = float(os.environ.get("GEMINI_MIN_INTERVAL_SECONDS", "12"))
 GEMINI_MAX_RETRIES = int(os.environ.get("GEMINI_MAX_RETRIES", "0"))

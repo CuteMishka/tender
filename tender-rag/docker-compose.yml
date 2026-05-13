@@ -29,7 +29,7 @@ services:
       EMBEDDING_MODEL: intfloat/multilingual-e5-small
       FILES_DIR: /files
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      CHAT_MODEL: ${CHAT_MODEL:-gemini-2.0-flash}
+      CHAT_MODEL: ${CHAT_MODEL:-gemini-2.5-flash}
       COMPANY_PROFILE: ${COMPANY_PROFILE:-}
       COMPANY_PROFILE_FILE: ${COMPANY_PROFILE_FILE:-/files/company_profile.txt}
     volumes:
