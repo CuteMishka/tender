@@ -4,8 +4,9 @@ import { PageHeader } from "@/components/admin/PageHeader";
 import {
   ArrowLeft, ExternalLink, FileText, Sparkles, Upload,
   ThumbsUp, ThumbsDown, Calendar, Building2, MapPin,
-  Hash, DollarSign, Clock,
+  Hash, DollarSign, Clock, Download, History,
 } from "lucide-react";
+import { analyticsApi, fmtDate, fmtM, type HistoricalLot } from "@/lib/analytics-api";
 import {
   buildLotText,
   fetchDocumentBlobViaBackendProxy,
@@ -16,10 +17,14 @@ import {
   formatTenderAmount,
   getFetchDocumentProxyUrl,
   getLocalApiBase,
+  getTenderSpecCache,
   getTenderStatus,
   indexLotDocument,
   markTenderViewed,
+  markTenderDecision,
+  getTenderViewInfo,
   pickTenderDocumentForRag,
+  saveTenderSpecCache,
   sanitizeApiText,
   sanitizeApiTextMultiline,
   tenderCompanyName,
@@ -27,6 +32,7 @@ import {
   type LotAnalyzeResult,
   type LotSpecSummary,
   type TenderItem,
+  type TenderViewInfo,
 } from "@/lib/tenders-api";
 import { pushNotification } from "@/hooks/use-notifications";
 
@@ -47,6 +53,25 @@ function specText(s: string | undefined) {
 function isRagUploadableFile(file: File): boolean {
   const n = file.name.toLowerCase();
   return n.endsWith(".pdf") || n.endsWith(".docx") || n.endsWith(".doc");
+}
+
+function downloadTextFile(filename: string, text: string) {
+  const blob = new Blob(["\uFEFF" + text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadBlobFile(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function InfoRow({ label, value, icon: Icon }: { label: string; value: React.ReactNode; icon?: React.ElementType }) {
@@ -70,6 +95,55 @@ function scoreTone(score: number) {
 function splitChecks(checks?: string | null) {
   if (!checks) return [];
   return checks.split(/[;•\n]/).map((x) => x.trim()).filter(Boolean);
+}
+
+function truncateForAi(text: string, maxChars: number): string {
+  const t = specText(text);
+  if (t.length <= maxChars) return t;
+  return `${t.slice(0, maxChars)}\n\n[Текст ТС обрезан до ${maxChars} символов для анализа]`;
+}
+
+function buildLotTextWithSpec(tender: TenderItem, spec: string, summary: LotSpecSummary | null): string {
+  const parts = [
+    "Проанализируй пригодность тендера для компании с учётом карточки лота и технической спецификации.",
+    "",
+    "Карточка лота:",
+    buildLotText(tender),
+  ];
+  if (summary && Object.keys(summary).length > 0) {
+    parts.push("", "Структурированная выжимка ТС:", JSON.stringify(summary, null, 2));
+  }
+  if (specText(spec)) {
+    parts.push("", "Извлечённый текст технической спецификации:", truncateForAi(spec, 12000));
+  }
+  return parts.join("\n");
+}
+
+function tokenizeSimilarity(text: string): Set<string> {
+  const stop = new Set(["для", "или", "при", "что", "как", "the", "and", "with", "услуг", "закупка", "поставка"]);
+  const words = sanitizeApiText(text)
+    .toLowerCase()
+    .split(/[^a-zа-яё0-9]+/i)
+    .map((x) => x.trim())
+    .filter((x) => x.length >= 4 && !stop.has(x));
+  return new Set(words);
+}
+
+function similarScore(tender: TenderItem, lot: HistoricalLot): number {
+  const tenderTokens = tokenizeSimilarity(`${tender.title} ${tender.description} ${tender.purchaseType ?? ""} ${tenderCompanyName(tender)}`);
+  const lotTokens = tokenizeSimilarity(`${lot.title} ${lot.description} ${lot.purchase_type} ${lot.customer_name} ${lot.organizer_name}`);
+  let score = 0;
+  for (const token of tenderTokens) {
+    if (lotTokens.has(token)) score += 3;
+  }
+  if (tender.purchaseType && lot.purchase_type && tender.purchaseType.toLowerCase() === lot.purchase_type.toLowerCase()) score += 8;
+  const company = tenderCompanyName(tender).toLowerCase();
+  if (company && `${lot.customer_name} ${lot.organizer_name}`.toLowerCase().includes(company)) score += 10;
+  if (Number.isFinite(tender.cost) && tender.cost > 0 && lot.initial_amount > 0) {
+    const ratio = Math.min(tender.cost, lot.initial_amount) / Math.max(tender.cost, lot.initial_amount);
+    score += ratio * 5;
+  }
+  return score;
 }
 
 function LotAnalysisCard({ analysis }: { analysis: LotAnalyzeResult }) {
@@ -155,8 +229,13 @@ function TenderDetail() {
   const [ragUploadOk, setRagUploadOk] = useState<string | null>(null);
   const [ragExtractedOverride, setRagExtractedOverride] = useState<string | null>(null);
   const [ragSpecSummary, setRagSpecSummary] = useState<LotSpecSummary | null>(null);
+  const [specDownloadLoading, setSpecDownloadLoading] = useState(false);
 
   const [actionLoading, setActionLoading] = useState<"participating" | "rejected" | null>(null);
+  const [viewInfo, setViewInfo] = useState<TenderViewInfo | null>(null);
+  const [similarLots, setSimilarLots] = useState<HistoricalLot[]>([]);
+  const [similarLotsLoading, setSimilarLotsLoading] = useState(false);
+  const [similarLotsError, setSimilarLotsError] = useState<string | null>(null);
 
   const ragAutoViaProxyKeyRef = useRef<string | null>(null);
   const fetchDocumentProxyUrl = getFetchDocumentProxyUrl();
@@ -179,7 +258,7 @@ function TenderDetail() {
     setLoading(true);
     setError(null);
     fetchTenderById(id)
-      .then((t) => { if (!cancelled) { setTender(t); markTenderViewed(id); } })
+      .then((t) => { if (!cancelled) { setTender(t); markTenderViewed(id); setViewInfo(getTenderViewInfo(id)); } })
       .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -192,8 +271,14 @@ function TenderDetail() {
     setRagIncludeExtractedText(true);
     setRagUploadError(null);
     setRagUploadOk(null);
-    setRagExtractedOverride(null);
-    setRagSpecSummary(null);
+    setSpecDownloadLoading(false);
+    const cached = Number.isFinite(id) && id > 0 ? getTenderSpecCache(id) : null;
+    setRagExtractedOverride(typeof cached?.extractedText === "string" ? cached.extractedText : null);
+    setRagSpecSummary(
+      cached?.specSummary && typeof cached.specSummary === "object"
+        ? (cached.specSummary as LotSpecSummary)
+        : null,
+    );
   }, [id]);
 
   const submitSpecToRag = useCallback(
@@ -208,24 +293,38 @@ function TenderDetail() {
           extractSpecPoints: opts.extractSpecPoints,
           includeExtractedText: opts.includeExtractedText,
         });
+        const nextExtracted = result.extracted_text !== undefined && opts.includeExtractedText
+          ? result.extracted_text
+          : ragExtractedOverride ?? undefined;
         if (result.extracted_text !== undefined && opts.includeExtractedText) {
           setRagExtractedOverride(result.extracted_text);
         }
+        let nextSummary: LotSpecSummary | undefined;
         if (result.spec_summary && Object.keys(result.spec_summary).length > 0) {
           setRagSpecSummary(result.spec_summary);
+          nextSummary = result.spec_summary;
         } else if (opts.extractSpecPoints) {
           const saved = await fetchLotSpecSummary(String(tender.id)).catch(() => null);
-          if (saved && Object.keys(saved).length > 0) setRagSpecSummary(saved);
+          if (saved && Object.keys(saved).length > 0) {
+            setRagSpecSummary(saved);
+            nextSummary = saved;
+          }
         }
         const parts: string[] = [];
         if (result.indexed) parts.push("документ проиндексирован");
         if (typeof result.text_chars === "number") parts.push(`${result.text_chars} символов текста`);
-        setRagUploadOk(parts.length ? parts.join(" · ") : "Готово.");
+        const status = parts.length ? parts.join(" · ") : "Готово.";
+        setRagUploadOk(status);
+        saveTenderSpecCache(tender.id, {
+          extractedText: nextExtracted,
+          specSummary: nextSummary ?? ragSpecSummary ?? undefined,
+          uploadStatus: status,
+        });
       } finally {
         setRagUploadLoading(false);
       }
     },
-    [tender],
+    [ragExtractedOverride, ragSpecSummary, tender],
   );
 
   useEffect(() => {
@@ -250,20 +349,54 @@ function TenderDetail() {
     return () => { cancelled = true; };
   }, [tender, fetchDocumentProxyUrl, submitSpecToRag]);
 
+  const displayTechnicalSpec =
+    specText(ragExtractedOverride ?? undefined) || specText(tender?.technical_specification);
+
+  useEffect(() => {
+    if (!tender) return;
+    let cancelled = false;
+    setSimilarLotsLoading(true);
+    setSimilarLotsError(null);
+    analyticsApi.getLots({
+      status: "completed",
+      excluded: "include",
+      page: 1,
+      limit: 100,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        const ranked = (res.items ?? [])
+          .filter((lot) => lot.lot_id !== tender.id)
+          .map((lot) => ({ lot, score: similarScore(tender, lot) }))
+          .filter((x) => x.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 5)
+          .map((x) => x.lot);
+        setSimilarLots(ranked);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setSimilarLotsError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setSimilarLotsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [tender]);
+
   const handleLotAnalyze = useCallback(async () => {
     if (!tender || lotAnalysisLoading) return;
-    const lotText = buildLotText(tender);
+    const lotText = buildLotTextWithSpec(tender, displayTechnicalSpec, ragSpecSummary);
     setLotAnalysisLoading(true);
     setLotAnalysisError(null);
     try {
-      const result = await fetchLotAnalyze(lotText, { cacheKey: `tender-${tender.id}` });
+      const result = await fetchLotAnalyze(lotText, { cacheKey: `tender-${tender.id}-${displayTechnicalSpec ? "with-spec" : "card-only"}` });
       setLotAnalysis(result);
     } catch (e: unknown) {
       setLotAnalysisError(e instanceof Error ? e.message : String(e));
     } finally {
       setLotAnalysisLoading(false);
     }
-  }, [tender, lotAnalysisLoading]);
+  }, [displayTechnicalSpec, ragSpecSummary, tender, lotAnalysisLoading]);
 
   async function handleRagUpload(e: FormEvent) {
     e.preventDefault();
@@ -276,6 +409,26 @@ function TenderDetail() {
       await submitSpecToRag(ragFile, { extractSpecPoints: ragExtractSpecPoints, includeExtractedText: ragIncludeExtractedText });
     } catch (err: unknown) {
       setRagUploadError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleDownloadOriginalSpec() {
+    if (!tender || specDownloadLoading) return;
+    const picked = pickTenderDocumentForRag(tender.documents);
+    if (!picked) {
+      setRagUploadError("В документах тендера не найдена ТС в формате PDF/DOC/DOCX.");
+      return;
+    }
+    setSpecDownloadLoading(true);
+    setRagUploadError(null);
+    try {
+      const blob = await fetchDocumentBlobViaBackendProxy(picked.downloadLink);
+      downloadBlobFile(picked.name || `tender-${tender.id}-technical-specification`, blob);
+      setRagUploadOk(`ТС скачана: ${picked.name || "файл"}`);
+    } catch (err: unknown) {
+      setRagUploadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSpecDownloadLoading(false);
     }
   }
 
@@ -309,6 +462,7 @@ function TenderDetail() {
       if (!res.ok) throw new Error("Ошибка при сохранении");
 
       const title = blockText(tender.title).slice(0, 60);
+      markTenderDecision(tender.id, status);
       if (status === "participating") {
         pushNotification("success", "Участвуем", `Тендер «${title}» добавлен в заявки.`, "/bids");
         navigate({ to: "/bids" });
@@ -323,8 +477,7 @@ function TenderDetail() {
     }
   };
 
-  const displayTechnicalSpec =
-    specText(ragExtractedOverride ?? undefined) || specText(tender?.technical_specification);
+  const pickedSpecDocument = tender ? pickTenderDocumentForRag(tender.documents) : null;
 
   const statusInfo = tender ? getTenderStatus(tender.endDate) : null;
   const companyName = tender ? tenderCompanyName(tender) : "";
@@ -363,10 +516,29 @@ function TenderDetail() {
 
             {/* Блок решения об участии */}
             <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: "var(--shadow-sm)" }}>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Решение об участии</p>
-              <p className="mb-4 text-sm text-muted-foreground">
-                Подходит ли лот профилю компании? Выберите действие.
-              </p>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Решение об участии</p>
+                  <p className="text-sm text-muted-foreground">
+                    Подходит ли лот профилю компании? Выберите действие.
+                  </p>
+                </div>
+                {viewInfo && (
+                  <div className="text-right text-xs text-muted-foreground shrink-0 ml-4">
+                    <div>Просмотрел: <span className="font-medium text-foreground">{viewInfo.viewer}</span></div>
+                    <div>{new Date(viewInfo.viewedAt).toLocaleString("ru-RU")}</div>
+                    {viewInfo.decision && (
+                      <span className={`mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                        viewInfo.decision === "participating"
+                          ? "bg-green-100 text-green-700"
+                          : "bg-red-100 text-red-600"
+                      }`}>
+                        {viewInfo.decision === "participating" ? "Участвуем" : "Отклонён"}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
               <div className="flex flex-wrap gap-3">
                 <button
                   onClick={() => handleDecision("participating")}
@@ -566,26 +738,121 @@ function TenderDetail() {
               </div>
             </div>
 
+            {/* Похожие прошлые заказы */}
+            <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
+              <div className="border-b border-border px-6 py-4">
+                <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                  <History className="h-4 w-4 text-primary" /> Похожие выполненные заказы
+                </h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Сравнение с историей завершённых лотов по названию, описанию, заказчику, виду закупки и сумме.
+                </p>
+              </div>
+              <div className="px-6 py-4">
+                {similarLotsLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted border-t-primary" />
+                    Ищу похожие заказы…
+                  </div>
+                ) : similarLotsError ? (
+                  <p className="text-sm text-destructive">{similarLotsError}</p>
+                ) : similarLots.length > 0 ? (
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    {similarLots.map((lot) => (
+                      <div key={lot.id} className="rounded-lg border border-border bg-muted/20 p-4">
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                          <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-green-700">
+                            выполнен
+                          </span>
+                          {lot.purchase_type && (
+                            <span className="rounded-full bg-background px-2 py-0.5 text-[10px] text-muted-foreground">
+                              {lot.purchase_type}
+                            </span>
+                          )}
+                        </div>
+                        <p className="line-clamp-2 text-sm font-semibold text-foreground">{blockText(lot.title)}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {lot.customer_name || lot.organizer_name || "Заказчик не указан"}
+                        </p>
+                        <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                          <div>
+                            <span className="block uppercase tracking-wider">Бюджет</span>
+                            <span className="font-medium text-foreground">{fmtM(lot.initial_amount)} ₸</span>
+                          </div>
+                          <div>
+                            <span className="block uppercase tracking-wider">Дата</span>
+                            <span className="font-medium text-foreground">{fmtDate(lot.end_date)}</span>
+                          </div>
+                          {lot.winner_name && (
+                            <div className="sm:col-span-2">
+                              <span className="block uppercase tracking-wider">Победитель</span>
+                              <span className="font-medium text-foreground">{lot.winner_name}</span>
+                            </div>
+                          )}
+                        </div>
+                        {lot.partner_link && (
+                          <a
+                            href={lot.partner_link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                          >
+                            Открыть прошлый лот <ExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Похожих выполненных заказов пока не найдено. Они появятся после заполнения истории в аналитике.
+                  </p>
+                )}
+              </div>
+            </div>
+
             {/* Техническая спецификация / RAG */}
             <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
               <div className="border-b border-border px-6 py-4">
                 <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Техническая спецификация</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Загрузите ТЗ для индексации в RAG (PDF, DOCX).{" "}
-                  {!fetchDocumentProxyUrl && (
-                    <span>Задайте <span className="font-mono text-[11px]">VITE_FETCH_DOCUMENT_PROXY_URL</span> для автозагрузки.</span>
-                  )}
+                  Загрузите ТЗ для индексации в RAG (PDF, DOCX) или скачайте техническую спецификацию из документов тендера.
                 </p>
               </div>
               <div className="px-6 py-4 space-y-4">
-                <button
-                  type="button"
-                  onClick={() => setRagPanelOpen((v) => !v)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-                >
-                  <Upload className="h-4 w-4" />
-                  {ragPanelOpen ? "Скрыть загрузку" : "Загрузить ТЗ в RAG"}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRagPanelOpen((v) => !v)}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+                  >
+                    <Upload className="h-4 w-4" />
+                    {ragPanelOpen ? "Скрыть загрузку" : "Загрузить ТЗ в RAG"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDownloadOriginalSpec}
+                    disabled={!pickedSpecDocument || specDownloadLoading}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+                  >
+                    <Download className="h-4 w-4" />
+                    {specDownloadLoading ? "Скачивание…" : "Скачать ТС"}
+                  </button>
+                  {displayTechnicalSpec && (
+                    <button
+                      type="button"
+                      onClick={() => downloadTextFile(`tender-${tender.id}-technical-specification.txt`, displayTechnicalSpec)}
+                      className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+                    >
+                      <Download className="h-4 w-4" /> Скачать текст
+                    </button>
+                  )}
+                </div>
+                {pickedSpecDocument && (
+                  <p className="text-xs text-muted-foreground">
+                    Найден файл ТС: <span className="font-medium text-foreground">{blockText(pickedSpecDocument.name)}</span>
+                  </p>
+                )}
                 {ragPanelOpen && (
                 <form onSubmit={handleRagUpload} className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
                   <div className="flex flex-wrap items-end gap-3">

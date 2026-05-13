@@ -37,24 +37,18 @@ func fillCustomerFallback(lots []HistoricalLot) {
 	}
 }
 
-// POST /api/v1/analytics/sync
-func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
-	if h.TP == nil {
-		writeError(w, http.StatusServiceUnavailable, "TenderPlus не настроен")
-		return
-	}
-	result, err := SyncFromTenderPlus(r.Context(), h.DB, h.TP, h.Keywords)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, result)
+func activeAnalyticsLots(db *gorm.DB) *gorm.DB {
+	return db.Model(&HistoricalLot{}).Where("COALESCE(excluded_from_analytics, false) = false")
 }
 
-// GET /api/v1/analytics/lots
-func (h *Handler) ListLots(w http.ResponseWriter, r *http.Request) {
-	q := h.DB.Model(&HistoricalLot{})
-
+func applyLotFilters(q *gorm.DB, r *http.Request) *gorm.DB {
+	switch r.URL.Query().Get("excluded") {
+	case "include":
+	case "only":
+		q = q.Where("COALESCE(excluded_from_analytics, false) = true")
+	default:
+		q = q.Where("COALESCE(excluded_from_analytics, false) = false")
+	}
 	if v := r.URL.Query().Get("customer"); v != "" {
 		like := "%" + v + "%"
 		q = q.Where(
@@ -70,6 +64,9 @@ func (h *Handler) ListLots(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := r.URL.Query().Get("winner"); v != "" {
 		q = q.Where("winner_name ILIKE ?", "%"+v+"%")
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("status")); v != "" {
+		q = q.Where("status = ?", v)
 	}
 	if r.URL.Query().Get("participation") == "our" {
 		q = q.Where("status IN ?", []string{"participating", "won", "lost", "submitted"})
@@ -94,6 +91,26 @@ func (h *Handler) ListLots(w http.ResponseWriter, r *http.Request) {
 			q = q.Where("initial_amount <= ?", n)
 		}
 	}
+	return q
+}
+
+// POST /api/v1/analytics/sync
+func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
+	if h.TP == nil {
+		writeError(w, http.StatusServiceUnavailable, "TenderPlus не настроен")
+		return
+	}
+	result, err := SyncFromTenderPlus(r.Context(), h.DB, h.TP, h.Keywords)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, result)
+}
+
+// GET /api/v1/analytics/lots
+func (h *Handler) ListLots(w http.ResponseWriter, r *http.Request) {
+	q := applyLotFilters(h.DB.Model(&HistoricalLot{}), r)
 
 	var total int64
 	q.Count(&total)
@@ -129,15 +146,17 @@ func (h *Handler) ListLots(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/analytics/stats
 func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
 	var stats Stats
-	h.DB.Model(&HistoricalLot{}).Count(&stats.TotalLots)
-	h.DB.Model(&HistoricalLot{}).Select("COALESCE(SUM(initial_amount),0)").Scan(&stats.TotalBudget)
-	h.DB.Model(&HistoricalLot{}).Select("COALESCE(AVG(initial_amount),0)").Scan(&stats.AvgAmount)
-	h.DB.Model(&HistoricalLot{}).Where("winner_name != ''").Count(&stats.WithWinner)
-	h.DB.Model(&HistoricalLot{}).Where("contract_amount > 0").Count(&stats.WithContract)
-	h.DB.Model(&HistoricalLot{}).
+	active := activeAnalyticsLots(h.DB)
+	active.Count(&stats.TotalLots)
+	active.Select("COALESCE(SUM(initial_amount),0)").Scan(&stats.TotalBudget)
+	active.Select("COALESCE(AVG(initial_amount),0)").Scan(&stats.AvgAmount)
+	active.Where("winner_name != ''").Count(&stats.WithWinner)
+	active.Where("contract_amount > 0").Count(&stats.WithContract)
+	active.
 		Where("initial_amount > 0 AND contract_amount > 0").
 		Select("COALESCE(AVG((initial_amount - contract_amount) / initial_amount * 100), 0)").
 		Scan(&stats.AvgDiscount)
+	h.DB.Model(&HistoricalLot{}).Where("COALESCE(excluded_from_analytics, false) = true").Count(&stats.ExcludedLots)
 	writeJSON(w, stats)
 }
 
@@ -149,7 +168,7 @@ func (h *Handler) GetDynamics(w http.ResponseWriter, r *http.Request) {
 		Budget float64 `json:"budget"`
 	}
 	rows := make([]row, 0)
-	h.DB.Model(&HistoricalLot{}).
+	activeAnalyticsLots(h.DB).
 		Select("TO_CHAR(COALESCE(end_date, created_at), 'YYYY-MM') AS period, COUNT(*) AS count, COALESCE(SUM(initial_amount),0) AS budget").
 		Where("end_date IS NOT NULL OR created_at IS NOT NULL").
 		Group("period").
@@ -162,13 +181,13 @@ func (h *Handler) GetDynamics(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/analytics/filters  — уникальные значения для дропдаунов
 func (h *Handler) GetFilters(w http.ResponseWriter, r *http.Request) {
 	types := make([]string, 0)
-	h.DB.Model(&HistoricalLot{}).
+	activeAnalyticsLots(h.DB).
 		Where("purchase_type != ''").
 		Distinct("purchase_type").
 		Pluck("purchase_type", &types)
 
 	regions := make([]string, 0)
-	h.DB.Model(&HistoricalLot{}).
+	activeAnalyticsLots(h.DB).
 		Where("region != ''").
 		Distinct("region").
 		Pluck("region", &regions)
@@ -188,7 +207,7 @@ func (h *Handler) ListCustomerCandidates(w http.ResponseWriter, r *http.Request)
 	}
 	search := strings.TrimSpace(r.URL.Query().Get("q"))
 	rows := make([]CustomerCandidate, 0)
-	q := h.DB.Model(&HistoricalLot{}).
+	q := activeAnalyticsLots(h.DB).
 		Select(`
 			COALESCE(NULLIF(customer_name, ''), organizer_name) AS customer_name,
 			MAX(customer_id) AS customer_id,
@@ -223,7 +242,7 @@ func (h *Handler) ListCustomerCandidates(w http.ResponseWriter, r *http.Request)
 // GET /api/v1/analytics/export?format=csv
 func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 	lots := make([]HistoricalLot, 0)
-	h.DB.Order("end_date DESC NULLS LAST").Limit(5000).Find(&lots)
+	applyLotFilters(h.DB.Model(&HistoricalLot{}), r).Order("end_date DESC NULLS LAST").Limit(5000).Find(&lots)
 	ExportCSV(w, lots)
 }
 
@@ -236,7 +255,7 @@ func (h *Handler) ListCustomers(w http.ResponseWriter, r *http.Request) {
 		var count int64
 		var total float64
 		var lastDate *time.Time
-		q := h.DB.Model(&HistoricalLot{})
+		q := activeAnalyticsLots(h.DB)
 		if strings.TrimSpace(customers[i].CustomerID) != "" {
 			q = q.Where("customer_id = ? OR customer_name ILIKE ? OR organizer_name ILIKE ?", customers[i].CustomerID, "%"+customers[i].CustomerName+"%", "%"+customers[i].CustomerName+"%")
 		} else {
@@ -322,9 +341,9 @@ func (h *Handler) GetCustomerLots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lots := make([]HistoricalLot, 0)
-	q := h.DB.Where("customer_name ILIKE ? OR organizer_name ILIKE ?", "%"+customer.CustomerName+"%", "%"+customer.CustomerName+"%")
+	q := activeAnalyticsLots(h.DB).Where("customer_name ILIKE ? OR organizer_name ILIKE ?", "%"+customer.CustomerName+"%", "%"+customer.CustomerName+"%")
 	if strings.TrimSpace(customer.CustomerID) != "" {
-		q = h.DB.Where("customer_id = ? OR customer_name ILIKE ? OR organizer_name ILIKE ?", customer.CustomerID, "%"+customer.CustomerName+"%", "%"+customer.CustomerName+"%")
+		q = activeAnalyticsLots(h.DB).Where("customer_id = ? OR customer_name ILIKE ? OR organizer_name ILIKE ?", customer.CustomerID, "%"+customer.CustomerName+"%", "%"+customer.CustomerName+"%")
 	}
 	q.
 		Order("end_date DESC NULLS LAST").
@@ -337,7 +356,7 @@ func (h *Handler) GetCustomerLots(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/analytics/winners
 func (h *Handler) GetWinners(w http.ResponseWriter, r *http.Request) {
 	rows := make([]WinnerRow, 0)
-	h.DB.Model(&HistoricalLot{}).
+	activeAnalyticsLots(h.DB).
 		Where("winner_name != ''").
 		Select(`
 			winner_name,
@@ -368,7 +387,7 @@ func (h *Handler) GetWinners(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/analytics/prices
 func (h *Handler) GetPrices(w http.ResponseWriter, r *http.Request) {
 	var priceStats PriceStats
-	h.DB.Model(&HistoricalLot{}).
+	activeAnalyticsLots(h.DB).
 		Where("initial_amount > 0 AND contract_amount > 0").
 		Select(`
 			COALESCE(AVG(initial_amount), 0) AS avg_initial,
@@ -379,12 +398,12 @@ func (h *Handler) GetPrices(w http.ResponseWriter, r *http.Request) {
 			COALESCE(SUM(initial_amount - contract_amount), 0) AS total_savings
 		`).Scan(&priceStats)
 
-	h.DB.Model(&HistoricalLot{}).
+	activeAnalyticsLots(h.DB).
 		Where("initial_amount > 0 AND contract_amount > 0 AND (initial_amount - contract_amount) / initial_amount > 0.4").
 		Count(&priceStats.AnomalyCount)
 
 	rows := make([]PriceRow, 0)
-	h.DB.Model(&HistoricalLot{}).
+	activeAnalyticsLots(h.DB).
 		Where("initial_amount > 0 AND contract_amount > 0").
 		Select(`
 			lot_id, title, initial_amount, contract_amount,
@@ -425,6 +444,9 @@ func (h *Handler) UpdateLot(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.Region != "" {
 		updates["region"] = input.Region
+	}
+	if input.ExcludedFromAnalytics != nil {
+		updates["excluded_from_analytics"] = *input.ExcludedFromAnalytics
 	}
 	if err := h.DB.Model(&HistoricalLot{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

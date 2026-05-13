@@ -20,6 +20,7 @@ type HistoricalLot struct {
 	WinnerID       string     `gorm:"index" json:"winner_id"`
 	PartnerLink    string     `json:"partner_link"`
 	LotSource      string     `json:"lot_source"`
+	ExcludedFromAnalytics bool       `gorm:"default:false;index" json:"excluded_from_analytics"`
 	StartDate      *time.Time `gorm:"index" json:"start_date"`
 	EndDate        *time.Time `gorm:"index" json:"end_date"`
 	PublishDate    *time.Time `json:"publish_date"`
@@ -60,6 +61,7 @@ type Stats struct {
 	AvgDiscount  float64 `json:"avg_discount"`
 	WithWinner   int64   `json:"with_winner"`
 	WithContract int64   `json:"with_contract"`
+	ExcludedLots int64   `json:"excluded_lots"`
 }
 
 // DynamicsPoint — одна точка динамики (месяц).
@@ -110,4 +112,5 @@ type UpdateLotInput struct {
 	ContractAmount float64 `json:"contract_amount"`
 	Status         string  `json:"status"`
 	Region         string  `json:"region"`
+	ExcludedFromAnalytics *bool `json:"excluded_from_analytics"`
 }

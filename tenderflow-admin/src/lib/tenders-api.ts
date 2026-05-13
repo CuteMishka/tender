@@ -1,15 +1,97 @@
 // ─── Viewed-tenders tracker ───────────────────────────────────────────────────
 
 const VIEWED_KEY = "viewed_tenders";
+const VIEWED_INFO_KEY = "viewed_tenders_info";
+
+export type TenderViewInfo = {
+  viewer: string;
+  viewedAt: string;
+  decision?: "participating" | "rejected" | null;
+  decisionAt?: string | null;
+};
+
+function getCurrentViewer(): string {
+  try {
+    return localStorage.getItem("tender_viewer_name") || "Администратор";
+  } catch {
+    return "Администратор";
+  }
+}
+
+export function setViewerName(name: string): void {
+  try { localStorage.setItem("tender_viewer_name", name); } catch { /* ignore */ }
+}
+
+function loadViewInfoMap(): Record<string, TenderViewInfo> {
+  try {
+    const raw = localStorage.getItem(VIEWED_INFO_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, TenderViewInfo>;
+  } catch {
+    return {};
+  }
+}
+
+function saveViewInfoMap(map: Record<string, TenderViewInfo>): void {
+  try {
+    const keys = Object.keys(map);
+    if (keys.length > 500) {
+      const trimmed: Record<string, TenderViewInfo> = {};
+      for (const k of keys.slice(-500)) trimmed[k] = map[k];
+      localStorage.setItem(VIEWED_INFO_KEY, JSON.stringify(trimmed));
+    } else {
+      localStorage.setItem(VIEWED_INFO_KEY, JSON.stringify(map));
+    }
+  } catch { /* ignore */ }
+}
 
 export function markTenderViewed(id: number): void {
   try {
     const set = getViewedTenders();
     set.add(id);
-    // Keep at most 500 entries to avoid localStorage bloat
     const arr = [...set].slice(-500);
     localStorage.setItem(VIEWED_KEY, JSON.stringify(arr));
+
+    const map = loadViewInfoMap();
+    if (!map[String(id)]) {
+      map[String(id)] = {
+        viewer: getCurrentViewer(),
+        viewedAt: new Date().toISOString(),
+        decision: null,
+        decisionAt: null,
+      };
+      saveViewInfoMap(map);
+    }
   } catch { /* ignore */ }
+}
+
+export function markTenderDecision(id: number, decision: "participating" | "rejected"): void {
+  try {
+    const map = loadViewInfoMap();
+    const existing = map[String(id)] || {
+      viewer: getCurrentViewer(),
+      viewedAt: new Date().toISOString(),
+    };
+    map[String(id)] = {
+      ...existing,
+      decision,
+      decisionAt: new Date().toISOString(),
+    };
+    saveViewInfoMap(map);
+  } catch { /* ignore */ }
+}
+
+export function getTenderViewInfo(id: number): TenderViewInfo | null {
+  try {
+    const map = loadViewInfoMap();
+    return map[String(id)] || null;
+  } catch {
+    return null;
+  }
+}
+
+export function getAllViewInfo(): Record<string, TenderViewInfo> {
+  return loadViewInfoMap();
 }
 
 export function getViewedTenders(): Set<number> {
@@ -20,6 +102,54 @@ export function getViewedTenders(): Set<number> {
   } catch {
     return new Set();
   }
+}
+
+// ─── Tender spec localStorage persistence ─────────────────────────────────────
+
+const SPEC_KEY = "tender_spec_cache";
+
+export type TenderSpecCache = {
+  extractedText?: string;
+  specSummary?: Record<string, unknown>;
+  uploadStatus?: string;
+  savedAt?: string;
+};
+
+export function saveTenderSpecCache(tenderId: number, data: TenderSpecCache): void {
+  try {
+    const raw = localStorage.getItem(SPEC_KEY);
+    const map: Record<string, TenderSpecCache> = raw ? JSON.parse(raw) : {};
+    map[String(tenderId)] = { ...data, savedAt: new Date().toISOString() };
+    const keys = Object.keys(map);
+    if (keys.length > 200) {
+      const trimmed: Record<string, TenderSpecCache> = {};
+      for (const k of keys.slice(-200)) trimmed[k] = map[k];
+      localStorage.setItem(SPEC_KEY, JSON.stringify(trimmed));
+    } else {
+      localStorage.setItem(SPEC_KEY, JSON.stringify(map));
+    }
+  } catch { /* ignore */ }
+}
+
+export function getTenderSpecCache(tenderId: number): TenderSpecCache | null {
+  try {
+    const raw = localStorage.getItem(SPEC_KEY);
+    if (!raw) return null;
+    const map = JSON.parse(raw) as Record<string, TenderSpecCache>;
+    return map[String(tenderId)] || null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearTenderSpecCache(tenderId: number): void {
+  try {
+    const raw = localStorage.getItem(SPEC_KEY);
+    if (!raw) return;
+    const map = JSON.parse(raw) as Record<string, TenderSpecCache>;
+    delete map[String(tenderId)];
+    localStorage.setItem(SPEC_KEY, JSON.stringify(map));
+  } catch { /* ignore */ }
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -571,7 +701,7 @@ export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: st
   }
 }
 
-export function getFetchDocumentProxyUrl(): string | undefined {
+export function getFetchDocumentProxyUrl(): string {
   if (typeof import.meta !== "undefined" && import.meta.env?.VITE_FETCH_DOCUMENT_PROXY_URL) {
     const u = String(import.meta.env.VITE_FETCH_DOCUMENT_PROXY_URL).trim();
     if (u) return u;
@@ -580,7 +710,7 @@ export function getFetchDocumentProxyUrl(): string | undefined {
     const u = String(process.env.VITE_FETCH_DOCUMENT_PROXY_URL).trim();
     if (u) return u;
   }
-  return undefined;
+  return `${getLocalApiBase()}/api/v1/fetch-document`;
 }
 
 function readFetchDocumentProxyError(status: number, rawText: string): string {
@@ -599,11 +729,6 @@ function readFetchDocumentProxyError(status: number, rawText: string): string {
 
 export async function fetchDocumentBlobViaBackendProxy(remoteUrl: string): Promise<Blob> {
   const proxy = getFetchDocumentProxyUrl();
-  if (!proxy) {
-    throw new Error(
-      "Задайте VITE_FETCH_DOCUMENT_PROXY_URL (POST /api/v1/fetch-document на бэкенде)",
-    );
-  }
   const res = await fetch(proxy, {
     method: "POST",
     headers: {

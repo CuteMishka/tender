@@ -8,6 +8,7 @@ import {
 import {
   TrendingUp, FileSpreadsheet, RefreshCw, Filter, ChevronLeft, ChevronRight,
   DollarSign, Hash, BarChart2, Percent, Pencil, X, Check, Building2, Star,
+  Trash2, RotateCcw, EyeOff,
 } from "lucide-react";
 import {
   analyticsApi, fmtM, fmtN, fmtDate,
@@ -153,6 +154,7 @@ function HistoricalAnalytics() {
   const [filterAmountMin, setFilterAmountMin] = useState("");
   const [filterAmountMax, setFilterAmountMax] = useState("");
   const [onlyOurParticipation, setOnlyOurParticipation] = useState(false);
+  const [excludedMode, setExcludedMode] = useState<"active" | "only">("active");
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -169,6 +171,7 @@ function HistoricalAnalytics() {
           amount_min: filterAmountMin || undefined,
           amount_max: filterAmountMax || undefined,
           participation: onlyOurParticipation ? "our" : undefined,
+          excluded: excludedMode === "only" ? "only" : undefined,
           page,
           limit: 20,
         }),
@@ -187,7 +190,7 @@ function HistoricalAnalytics() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterCustomer, filterType, filterRegion, filterDateFrom, filterDateTo, filterAmountMin, filterAmountMax, onlyOurParticipation]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [page, filterCustomer, filterType, filterRegion, filterDateFrom, filterDateTo, filterAmountMin, filterAmountMax, onlyOurParticipation, excludedMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -248,10 +251,25 @@ function HistoricalAnalytics() {
     }
   };
 
+  const handleToggleExcluded = async (lot: HistoricalLot) => {
+    try {
+      if (lot.excluded_from_analytics) {
+        await analyticsApi.restoreLot(lot.id);
+        toast.success("Лот возвращён в аналитику");
+      } else {
+        await analyticsApi.excludeLot(lot.id);
+        toast.success("Лот исключён из перерасчёта аналитики");
+      }
+      await loadAll();
+    } catch (e) {
+      toast.error(`Не удалось изменить лот: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   const applyFilters = () => { setPage(1); };
   const resetFilters = () => {
     setFilterCustomer(""); setFilterType(""); setFilterRegion("");
-    setFilterDateFrom(""); setFilterDateTo(""); setFilterAmountMin(""); setFilterAmountMax(""); setOnlyOurParticipation(false);
+    setFilterDateFrom(""); setFilterDateTo(""); setFilterAmountMin(""); setFilterAmountMax(""); setOnlyOurParticipation(false); setExcludedMode("active");
     setPage(1);
   };
 
@@ -288,7 +306,17 @@ function HistoricalAnalytics() {
               <Filter className="h-4 w-4" /> Фильтры
             </button>
             <button
-              onClick={() => analyticsApi.exportCSV()}
+              onClick={() => analyticsApi.exportCSV({
+                customer: filterCustomer || undefined,
+                purchase_type: filterType || undefined,
+                region: filterRegion || undefined,
+                date_from: filterDateFrom || undefined,
+                date_to: filterDateTo || undefined,
+                amount_min: filterAmountMin || undefined,
+                amount_max: filterAmountMax || undefined,
+                participation: onlyOurParticipation ? "our" : undefined,
+                excluded: excludedMode === "only" ? "only" : undefined,
+              })}
               className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             >
               <FileSpreadsheet className="h-4 w-4" /> Excel
@@ -342,6 +370,15 @@ function HistoricalAnalytics() {
                 />
                 Только с нашим участием
               </label>
+              <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={excludedMode === "only"}
+                  onChange={(e) => { setExcludedMode(e.target.checked ? "only" : "active"); setPage(1); }}
+                  className="rounded"
+                />
+                Показать исключённые
+              </label>
             </div>
             <div className="mt-4 flex gap-2">
               <button onClick={applyFilters} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">
@@ -365,7 +402,7 @@ function HistoricalAnalytics() {
             sub={stats ? `Контрактов: ${stats.with_contract}` : undefined}
             icon={Percent} accent="bg-orange-100 text-orange-600" />
           <StatCard label="С победителем" value={stats ? String(stats.with_winner) : "—"}
-            sub={stats ? `из ${stats.total_lots}` : undefined}
+            sub={stats ? `Исключено: ${stats.excluded_lots ?? 0}` : undefined}
             icon={TrendingUp} accent="bg-violet-100 text-violet-600" />
         </div>
 
@@ -434,16 +471,23 @@ function HistoricalAnalytics() {
                     <th className="px-4 py-3 text-left font-medium">Победитель</th>
                     <th className="px-4 py-3 text-left font-medium">Дедлайн</th>
                     <th className="px-4 py-3 text-left font-medium">Статус</th>
-                    <th className="px-4 py-3 w-10" />
+                    <th className="px-4 py-3 text-right font-medium">Действия</th>
                   </tr>
                 </thead>
                 <tbody>
                   {lots.map((lot) => (
-                    <tr key={lot.id} className="border-t border-border hover:bg-muted/30 transition-colors">
+                    <tr key={lot.id} className={`border-t border-border transition-colors ${lot.excluded_from_analytics ? "bg-muted/40 opacity-70" : "hover:bg-muted/30"}`}>
                       <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{lot.lot_id}</td>
                       <td className="px-4 py-3">
                         <div className="max-w-xs truncate font-medium text-foreground">{lot.title}</div>
-                        {lot.purchase_type && <div className="text-[11px] text-muted-foreground">{lot.purchase_type}</div>}
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {lot.purchase_type && <span className="text-[11px] text-muted-foreground">{lot.purchase_type}</span>}
+                          {lot.excluded_from_analytics && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                              <EyeOff className="h-3 w-3" /> исключён
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex max-w-[220px] items-start gap-2">
@@ -494,13 +538,22 @@ function HistoricalAnalytics() {
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <button
-                          onClick={() => openEdit(lot)}
-                          title="Внести результат"
-                          className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="flex justify-end gap-1">
+                          <button
+                            onClick={() => openEdit(lot)}
+                            title="Внести результат"
+                            className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleToggleExcluded(lot)}
+                            title={lot.excluded_from_analytics ? "Вернуть в аналитику" : "Исключить из перерасчёта"}
+                            className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                          >
+                            {lot.excluded_from_analytics ? <RotateCcw className="h-3.5 w-3.5" /> : <Trash2 className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

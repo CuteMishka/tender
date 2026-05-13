@@ -9,10 +9,12 @@ import {
   getLocalApiBase,
   getTenderStatus,
   getViewedTenders,
+  getAllViewInfo,
   sanitizeApiText,
   tenderCompanyName,
   type TendersListResponse,
   type TenderItem,
+  type TenderViewInfo,
 } from "@/lib/tenders-api";
 import { pushNotification } from "@/hooks/use-notifications";
 
@@ -94,6 +96,7 @@ function TendersList() {
   const [actionLoading, setActionLoading] = useState<number | null>(null);
 
   const [viewedIds, setViewedIds] = useState<Set<number>>(() => getViewedTenders());
+  const [viewInfoMap, setViewInfoMap] = useState<Record<string, TenderViewInfo>>(() => getAllViewInfo());
   const [activeTab, setActiveTab] = useState("Все");
   const [showFilters, setShowFilters] = useState(false);
   const [searchText, setSearchText] = useState("");
@@ -110,7 +113,7 @@ function TendersList() {
 
   // Refresh viewed set when window regains focus (user navigated back from detail page)
   useEffect(() => {
-    const refresh = () => setViewedIds(getViewedTenders());
+    const refresh = () => { setViewedIds(getViewedTenders()); setViewInfoMap(getAllViewInfo()); };
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
   }, []);
@@ -297,11 +300,20 @@ function TendersList() {
                           <td className="px-4 py-4">
                             <div className="flex items-center gap-2">
                               <span className="max-w-sm font-medium text-foreground">{truncate(t.title, 100)}</span>
-                              {viewedIds.has(t.id) && (
-                                <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                                  Просмотрено
-                                </span>
-                              )}
+                              {viewedIds.has(t.id) && (() => {
+                                const vi = viewInfoMap[String(t.id)];
+                                return (
+                                  <span className="shrink-0 inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                    Просмотрено{vi?.viewer ? ` (${vi.viewer})` : ""}
+                                    {vi?.decision === "participating" && (
+                                      <span className="rounded-full bg-green-100 px-1.5 py-px text-[9px] font-semibold text-green-700">Участвуем</span>
+                                    )}
+                                    {vi?.decision === "rejected" && (
+                                      <span className="rounded-full bg-red-100 px-1.5 py-px text-[9px] font-semibold text-red-600">Отклонён</span>
+                                    )}
+                                  </span>
+                                );
+                              })()}
                             </div>
                             <div className="mt-1 max-w-sm text-xs font-medium text-foreground/80">
                               {companyName || "Компания не указана"}

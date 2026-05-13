@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { Search } from "lucide-react";
+import { getLocalApiBase } from "@/lib/tenders-api";
 
 export const Route = createFileRoute("/_admin/users")({
   component: Users,
@@ -15,9 +16,59 @@ const users = [
   { name: "Дмитрий Васин", email: "d.vasin@admin.ru", role: "Модератор", company: "—", status: "Активен" },
 ];
 
+type BackendUser = {
+  id: number;
+  email: string;
+  name?: string;
+  created_at?: string;
+};
+
+type UserRow = {
+  name: string;
+  email: string;
+  role: string;
+  company: string;
+  status: string;
+};
+
+function mapBackendUser(u: BackendUser): UserRow {
+  return {
+    name: u.name?.trim() || u.email,
+    email: u.email,
+    role: "Пользователь",
+    company: "—",
+    status: "Активен",
+  };
+}
+
 function Users() {
   const [searchText, setSearchText] = useState("");
-  const visibleUsers = users.filter((u) => {
+  const [rows, setRows] = useState<UserRow[]>(users);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    fetch(`${getLocalApiBase()}/api/v1/users`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 160)}`);
+        return res.json() as Promise<BackendUser[]>;
+      })
+      .then((data) => {
+        if (!cancelled && Array.isArray(data) && data.length > 0) setRows(data.map(mapBackendUser));
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setLoadError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const visibleUsers = rows.filter((u) => {
     const q = searchText.trim().toLowerCase();
     if (!q) return true;
     return `${u.name} ${u.email} ${u.role} ${u.company} ${u.status}`.toLowerCase().includes(q);
@@ -27,6 +78,11 @@ function Users() {
     <>
       <PageHeader title="Пользователи" description="Учётные записи на платформе" />
       <div className="space-y-4 p-8">
+        {loadError && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Backend users недоступен, показан локальный список: {loadError}
+          </div>
+        )}
         <div className="relative max-w-xl">
           <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
           <input
@@ -79,7 +135,7 @@ function Users() {
               {visibleUsers.length === 0 && (
                 <tr>
                   <td colSpan={4} className="px-6 py-16 text-center text-sm text-muted-foreground">
-                    Пользователи не найдены
+                    {loading ? "Загрузка пользователей…" : "Пользователи не найдены"}
                   </td>
                 </tr>
               )}

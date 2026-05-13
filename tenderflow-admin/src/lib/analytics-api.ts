@@ -21,6 +21,7 @@ export type HistoricalLot = {
   winner_id: string;
   partner_link: string;
   lot_source: string;
+  excluded_from_analytics: boolean;
   start_date: string | null;
   end_date: string | null;
   publish_date: string | null;
@@ -35,6 +36,7 @@ export type AnalyticsStats = {
   avg_discount: number;
   with_winner: number;
   with_contract: number;
+  excluded_lots: number;
 };
 
 export type DynamicsPoint = {
@@ -103,11 +105,13 @@ export type LotsFilters = {
   purchase_type?: string;
   region?: string;
   winner?: string;
+  status?: string;
   date_from?: string;
   date_to?: string;
   amount_min?: string;
   amount_max?: string;
   participation?: "our";
+  excluded?: "include" | "only";
   page?: number;
   limit?: number;
 };
@@ -187,17 +191,25 @@ export const analyticsApi = {
       purchase_type: filters.purchase_type,
       region: filters.region,
       winner: filters.winner,
+      status: filters.status,
       date_from: filters.date_from,
       date_to: filters.date_to,
       amount_min: filters.amount_min,
       amount_max: filters.amount_max,
       participation: filters.participation,
+      excluded: filters.excluded,
       page: filters.page ?? 1,
       limit: filters.limit ?? 20,
     }),
 
-  updateLot: (id: number, data: { winner_name?: string; winner_id?: string; contract_amount?: number; status?: string; region?: string }) =>
+  updateLot: (id: number, data: { winner_name?: string; winner_id?: string; contract_amount?: number; status?: string; region?: string; excluded_from_analytics?: boolean }) =>
     put<{ success: boolean }>(`/api/v1/analytics/lots/${id}`, data),
+
+  excludeLot: (id: number) =>
+    put<{ success: boolean }>(`/api/v1/analytics/lots/${id}`, { excluded_from_analytics: true }),
+
+  restoreLot: (id: number) =>
+    put<{ success: boolean }>(`/api/v1/analytics/lots/${id}`, { excluded_from_analytics: false }),
 
   getStats: () => get<AnalyticsStats>("/api/v1/analytics/stats"),
 
@@ -205,8 +217,25 @@ export const analyticsApi = {
 
   getFilters: () => get<FilterOptions>("/api/v1/analytics/filters"),
 
-  exportCSV: () => {
-    window.open(`${base()}/api/v1/analytics/export`, "_blank");
+  exportCSV: (filters: LotsFilters = {}) => {
+    const url = new URL(`${base()}/api/v1/analytics/export`);
+    const params: Record<string, string | number | undefined> = {
+      customer: filters.customer,
+      purchase_type: filters.purchase_type,
+      region: filters.region,
+      winner: filters.winner,
+      status: filters.status,
+      date_from: filters.date_from,
+      date_to: filters.date_to,
+      amount_min: filters.amount_min,
+      amount_max: filters.amount_max,
+      participation: filters.participation,
+      excluded: filters.excluded,
+    };
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
+    }
+    window.open(url.toString(), "_blank");
   },
 
   getCustomers: () => get<TrackedCustomer[]>("/api/v1/analytics/customers"),

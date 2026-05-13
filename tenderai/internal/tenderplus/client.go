@@ -42,11 +42,12 @@ type LotName struct {
 
 // LotBuy — блок закупки (поля подтверждены из документации TenderPlus).
 type LotBuy struct {
-	BeginDate   *string  `json:"begin_date"`
-	EndDate     *string  `json:"end_date"`
-	Partner     *LotName `json:"partner"`
-	LotStatusID *int     `json:"lot_status_id"`
-	LotStatus   *LotName `json:"lotStatus"`
+	BeginDate   *string       `json:"begin_date"`
+	EndDate     *string       `json:"end_date"`
+	Partner     *LotName      `json:"partner"`
+	LotStatusID *int          `json:"lot_status_id"`
+	LotStatus   *LotName      `json:"lotStatus"`
+	Documents   []LotDocument `json:"documents"`
 }
 
 // Lot — одна запись лота из GraphQL TenderPlus.
@@ -117,6 +118,10 @@ func (c *Client) ListLotsByKeywords(ctx context.Context, keywords []string, page
 		lotBuy {
 			begin_date
 			end_date
+			documents {
+				name
+				downloadLink
+			}
 			partner {
 				name
 			}

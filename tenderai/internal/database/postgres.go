@@ -5,6 +5,7 @@ import (
 	"os"
 
 	analyticsModels "github.com/dauren/tender/internal/analytics"
+	"github.com/dauren/tender/internal/domain"
 	"github.com/dauren/tender/internal/tenderplus"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -23,7 +24,7 @@ func InitDB() *gorm.DB {
 		log.Fatalf("Ошибка подключения к базе данных: %v", err)
 	}
 
-	if err := db.AutoMigrate(&tenderplus.SavedLot{}, &analyticsModels.HistoricalLot{}, &analyticsModels.TrackedCustomer{}); err != nil {
+	if err := db.AutoMigrate(&domain.User{}, &tenderplus.SavedLot{}, &analyticsModels.HistoricalLot{}, &analyticsModels.TrackedCustomer{}); err != nil {
 		log.Fatalf("Ошибка AutoMigrate: %v", err)
 	}
 

@@ -1,10 +1,19 @@
 package tenderplus
 
 func (l Lot) AllDocuments() []LotDocument {
-	if len(l.Documents) == 0 {
+	total := len(l.Documents)
+	if l.LotBuy != nil {
+		total += len(l.LotBuy.Documents)
+	}
+	if total == 0 {
 		return []LotDocument{}
 	}
-	return dedupeDocuments(l.Documents)
+	out := make([]LotDocument, 0, total)
+	out = append(out, l.Documents...)
+	if l.LotBuy != nil {
+		out = append(out, l.LotBuy.Documents...)
+	}
+	return dedupeDocuments(out)
 }
 
 func dedupeDocuments(in []LotDocument) []LotDocument {

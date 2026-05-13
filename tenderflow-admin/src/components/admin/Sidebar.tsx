@@ -2,11 +2,12 @@ import { Link, useNavigate, useLocation } from "@tanstack/react-router";
 import {
   LayoutDashboard, FileText, Gavel, Settings, LogOut, Cloud,
   BarChart2, History, Building2, Trophy, TrendingDown, ChevronDown, ChevronRight,
-  Bell, BookOpen,
+  Bell, BookOpen, Palette,
 } from "lucide-react";
 import { logout } from "@/lib/auth";
 import { useState } from "react";
 import { useNotifications } from "@/hooks/use-notifications";
+import { useTheme, THEMES } from "@/hooks/use-theme";
 
 const mainNav = [
   { to: "/dashboard", label: "Дашборд", icon: LayoutDashboard },
@@ -33,6 +34,8 @@ export function Sidebar() {
   const isAnalytics = location.pathname.startsWith("/analytics");
   const [analyticsOpen, setAnalyticsOpen] = useState(isAnalytics);
   const { unreadCount } = useNotifications();
+  const { theme, setTheme } = useTheme();
+  const [themeOpen, setThemeOpen] = useState(false);
 
   const handleLogout = () => {
     logout();
@@ -142,6 +145,32 @@ export function Sidebar() {
           })}
         </div>
       </nav>
+
+      {/* Theme switcher */}
+      <div className="border-t border-sidebar-border px-3 pt-3 pb-1">
+        <button
+          onClick={() => setThemeOpen((v) => !v)}
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/50 hover:text-sidebar-foreground/80 transition-colors"
+        >
+          <Palette className="h-3.5 w-3.5" />
+          <span className="flex-1 text-left">Тема</span>
+        </button>
+        {themeOpen && (
+          <div className="mt-1 flex flex-wrap gap-2 px-3 pb-2">
+            {THEMES.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setTheme(t.key)}
+                title={t.label}
+                className={`h-6 w-6 rounded-full border-2 transition-transform hover:scale-110 ${
+                  theme === t.key ? "border-white scale-110 shadow-lg" : "border-transparent opacity-70"
+                }`}
+                style={{ backgroundColor: t.color }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* User footer */}
       <div className="border-t border-sidebar-border p-3">

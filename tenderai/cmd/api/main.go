@@ -9,6 +9,8 @@ import (
 	"github.com/dauren/tender/internal/api"
 	"github.com/dauren/tender/internal/config"
 	"github.com/dauren/tender/internal/database"
+	"github.com/dauren/tender/internal/repository"
+	"github.com/dauren/tender/internal/service"
 	"github.com/dauren/tender/internal/tenderplus"
 	"github.com/go-chi/chi/v5"
 )
@@ -34,17 +36,17 @@ func run() error {
 	}
 
 	fd := api.NewFetchDocumentProxy(cfg.FetchDocument)
+	db := database.InitDB()
+	users := service.NewUserService(repository.NewUserRepository(db))
 	srv := api.NewRouter(&api.Handler{
 		TP:              tp,
 		TendersKeywords: cfg.TendersKeywords,
-		// DB-часть временно отключена: /api/v1/users не регистрируется.
-		Users:    nil,
-		FetchDoc: fd,
+		Users:           users,
+		FetchDoc:        fd,
 	}, cfg.CORSAllowedOrigins)
 
 	// Подключаем локальную БД, сидируем данные и добавляем новые эндпоинты
 	if r, ok := srv.(chi.Router); ok {
-		db := database.InitDB()
 		tenderplus.SeedTestData(db)
 		analytics.SeedHistoricalDemoData(db)
 
