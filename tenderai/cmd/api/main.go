@@ -32,24 +32,20 @@ func run() error {
 	if cfg.HasTenderPlus() {
 		tp = tenderplus.NewClient(cfg.TenderPlusURL, cfg.TenderPlusToken)
 	} else {
-		log.Print("warning: TENDERPLUS_TOKEN is empty; GET /api/v1/tenders will return 503")
+		log.Print("warning: TENDERPLUS_TOKEN is empty; analytics sync from TenderPlus is disabled")
 	}
 
 	fd := api.NewFetchDocumentProxy(cfg.FetchDocument)
 	db := database.InitDB()
 	users := service.NewUserService(repository.NewUserRepository(db))
 	srv := api.NewRouter(&api.Handler{
-		TP:              tp,
-		TendersKeywords: cfg.TendersKeywords,
-		Users:           users,
-		FetchDoc:        fd,
+		DB:       db,
+		Users:    users,
+		FetchDoc: fd,
 	}, cfg.CORSAllowedOrigins)
 
-	// Подключаем локальную БД, сидируем данные и добавляем новые эндпоинты
+	// Подключаем локальную БД и добавляем новые эндпоинты
 	if r, ok := srv.(chi.Router); ok {
-		tenderplus.SeedTestData(db)
-		analytics.SeedHistoricalDemoData(db)
-
 		r.Get("/api/v1/dashboard", tenderplus.DashboardHandler(db))
 		r.Post("/api/v1/lots/participate", tenderplus.ParticipateLotHandler(db))
 		r.Get("/api/v1/lots/saved", tenderplus.GetSavedLotsHandler(db))

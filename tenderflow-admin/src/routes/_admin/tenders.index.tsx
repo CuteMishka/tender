@@ -12,6 +12,7 @@ import {
   getAllViewInfo,
   sanitizeApiText,
   tenderCompanyName,
+  tenderSourceLabel,
   type TendersListResponse,
   type TenderItem,
   type TenderViewInfo,
@@ -58,6 +59,17 @@ const statusColorMap: Record<string, string> = {
   red: "bg-red-100 text-red-700",
   gray: "bg-muted/50 text-muted-foreground",
 };
+
+function sourceBadgeClass(source?: string | null): string {
+  switch ((source || "").toLowerCase()) {
+    case "samruk":
+      return "border-sky-200 bg-sky-50 text-sky-700";
+    case "goszakup":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    default:
+      return "border-border bg-muted/50 text-muted-foreground";
+  }
+}
 
 async function saveLot(tender: TenderItem, status: "participating" | "rejected") {
   const deadline = tender.endDate
@@ -262,6 +274,7 @@ function TendersList() {
                       const isExpiring = statusInfo.color === "red";
                       const isLoading = actionLoading === t.id;
                       const companyName = tenderCompanyName(t);
+                      const sourceLabel = tenderSourceLabel(t);
 
                       return (
                         <tr
@@ -293,9 +306,10 @@ function TendersList() {
                           </td>
                           <td className="px-4 py-4 font-mono text-xs text-foreground">
                             <div>{t.lot}</div>
-                            {t.lot_source_id && (
-                              <div className="mt-0.5 text-[10px] text-muted-foreground">{t.lot_source_id}</div>
-                            )}
+                            <span className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${sourceBadgeClass(t.source)}`}>
+                              {sourceLabel}
+                            </span>
+                            <div className="mt-0.5 text-[10px] text-muted-foreground">{t.lot_source_id || "—"}</div>
                           </td>
                           <td className="px-4 py-4">
                             <div className="flex items-center gap-2">

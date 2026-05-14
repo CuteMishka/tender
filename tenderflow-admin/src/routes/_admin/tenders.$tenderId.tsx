@@ -28,6 +28,7 @@ import {
   sanitizeApiText,
   sanitizeApiTextMultiline,
   tenderCompanyName,
+  tenderSourceLabel,
   tenderDocumentBlobToFile,
   type LotAnalyzeResult,
   type LotSpecSummary,
@@ -43,6 +44,17 @@ export const Route = createFileRoute("/_admin/tenders/$tenderId")({
 
 function blockText(s: string) {
   return sanitizeApiText(s) || "—";
+}
+
+function sourceBadgeClass(source?: string | null): string {
+  switch ((source || "").toLowerCase()) {
+    case "samruk":
+      return "border-sky-200 bg-sky-50 text-sky-700";
+    case "goszakup":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    default:
+      return "border-border bg-muted/50 text-muted-foreground";
+  }
 }
 
 function specText(s: string | undefined) {
@@ -481,6 +493,7 @@ function TenderDetail() {
 
   const statusInfo = tender ? getTenderStatus(tender.endDate) : null;
   const companyName = tender ? tenderCompanyName(tender) : "";
+  const sourceLabel = tender ? tenderSourceLabel(tender) : "";
 
   return (
     <>
@@ -519,6 +532,11 @@ function TenderDetail() {
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Решение об участии</p>
+                  {tender.source && (
+                    <span className={`mb-2 inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${sourceBadgeClass(tender.source)}`}>
+                      {sourceLabel}
+                    </span>
+                  )}
                   <p className="text-sm text-muted-foreground">
                     Подходит ли лот профилю компании? Выберите действие.
                   </p>
@@ -648,7 +666,12 @@ function TenderDetail() {
                     </div>
                     <div className="py-3">
                       <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Источник лота</dt>
-                      <dd className="mt-1 font-mono text-xs text-foreground">{tender.lot_source_id ?? "—"}</dd>
+                      <dd className="mt-1 space-y-1">
+                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${sourceBadgeClass(tender.source)}`}>
+                          {sourceLabel}
+                        </span>
+                        <div className="font-mono text-xs text-foreground">{tender.lot_source_id ?? "—"}</div>
+                      </dd>
                     </div>
                   </dl>
                 </div>

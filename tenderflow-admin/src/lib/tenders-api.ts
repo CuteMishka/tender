@@ -163,6 +163,8 @@ export type TenderItem = {
   id: number;
   lot: string;
   lot_source_id: string | null;
+  source?: string | null;
+  sourceLabel?: string | null;
   title: string;
   description: string;
   cost: number;
@@ -213,6 +215,18 @@ export function tenderCompanyName(tender: TenderItem): string {
     tender.partner ||
     ""
   ).trim();
+}
+
+export function tenderSourceLabel(tender: TenderItem): string {
+  if (tender.sourceLabel?.trim()) return tender.sourceLabel.trim();
+  switch ((tender.source || "").trim().toLowerCase()) {
+    case "goszakup":
+      return "Госзакупки";
+    case "samruk":
+      return "Самрук.kz";
+    default:
+      return "Источник не указан";
+  }
 }
 
 export type TendersListResponse = {
@@ -319,6 +333,8 @@ function normalizeTenderPayload(body: unknown): TenderItem | null {
       startDate: typeof o.startDate === "string" ? o.startDate : null,
       region: typeof o.region === "string" ? o.region : null,
       partner: typeof o.partner === "string" ? o.partner : null,
+      source: typeof o.source === "string" ? o.source : null,
+      sourceLabel: typeof o.sourceLabel === "string" ? o.sourceLabel : null,
       organizer_name: typeof o.organizer_name === "string" ? o.organizer_name : null,
       organizerName: typeof o.organizerName === "string" ? o.organizerName : null,
       customer_name: typeof o.customer_name === "string" ? o.customer_name : null,

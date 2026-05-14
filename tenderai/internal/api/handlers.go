@@ -2,23 +2,22 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dauren/tender/internal/service"
-	"github.com/dauren/tender/internal/tenderplus"
 	"github.com/go-chi/chi/v5"
+	"gorm.io/gorm"
 )
 
-const hardcodedTendersKeywords = "IaaS,сервер"
-
 type Handler struct {
-	TP              *tenderplus.Client
-	TendersKeywords string
-	Users           *service.UserService
-	FetchDoc        *FetchDocumentProxy
+	DB       *gorm.DB
+	Users    *service.UserService
+	FetchDoc *FetchDocumentProxy
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
@@ -26,28 +25,34 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// LotDTO — плоский JSON для React.
+type LotDocumentDTO struct {
+	Name         *string `json:"name"`
+	DownloadLink *string `json:"downloadLink"`
+}
+
 type LotDTO struct {
-	ID            int                      `json:"id"`
-	Lot           *string                  `json:"lot"`
-	LotSourceID   *string                  `json:"lot_source_id"`
-	Title         *string                  `json:"title"`
-	Description   *string                  `json:"description"`
-	Cost          *float64                 `json:"cost"`
-	OneCost       *float64                 `json:"one_cost,omitempty"`
-	Counts        *int                     `json:"counts,omitempty"`
-	PartnerLink   *string                  `json:"partnerLink"`
-	Place         *string                  `json:"place"`
-	BuyID         *int                     `json:"buy_id"`
-	EndDate       *string                  `json:"endDate,omitempty"`
-	StartDate     *string                  `json:"startDate,omitempty"`
-	Region        *string                  `json:"region,omitempty"`
-	Partner       *string                  `json:"partner,omitempty"`
-	OrganizerName *string                  `json:"organizer_name,omitempty"`
-	CustomerName  *string                  `json:"customer_name,omitempty"`
-	Status        *string                  `json:"status,omitempty"`
-	PurchaseType  *string                  `json:"purchaseType,omitempty"`
-	Documents     []tenderplus.LotDocument `json:"documents"`
+	ID            int              `json:"id"`
+	Lot           *string          `json:"lot"`
+	LotSourceID   *string          `json:"lot_source_id"`
+	Source        *string          `json:"source"`
+	SourceLabel   *string          `json:"sourceLabel"`
+	Title         *string          `json:"title"`
+	Description   *string          `json:"description"`
+	Cost          *float64         `json:"cost"`
+	OneCost       *float64         `json:"one_cost,omitempty"`
+	Counts        *int             `json:"counts,omitempty"`
+	PartnerLink   *string          `json:"partnerLink"`
+	Place         *string          `json:"place"`
+	BuyID         *int             `json:"buy_id"`
+	EndDate       *string          `json:"endDate,omitempty"`
+	StartDate     *string          `json:"startDate,omitempty"`
+	Region        *string          `json:"region,omitempty"`
+	Partner       *string          `json:"partner,omitempty"`
+	OrganizerName *string          `json:"organizer_name,omitempty"`
+	CustomerName  *string          `json:"customer_name,omitempty"`
+	Status        *string          `json:"status,omitempty"`
+	PurchaseType  *string          `json:"purchaseType,omitempty"`
+	Documents     []LotDocumentDTO `json:"documents"`
 }
 
 type TendersListResponse struct {
@@ -55,105 +60,110 @@ type TendersListResponse struct {
 	Meta  map[string]interface{} `json:"meta,omitempty"`
 }
 
-func strPtr(v string) *string     { return &v }
-func intPtr(v int) *int           { return &v }
+type ParserLot struct {
+	ID            int        `gorm:"column:id"`
+	StableID      string     `gorm:"column:stable_id"`
+	Source        string     `gorm:"column:source"`
+	ExternalID    string     `gorm:"column:external_id"`
+	URL           string     `gorm:"column:url"`
+	Title         string     `gorm:"column:title"`
+	Description   string     `gorm:"column:description"`
+	Amount        *float64   `gorm:"column:amount"`
+	StartDate     *time.Time `gorm:"column:start_date"`
+	EndDate       *time.Time `gorm:"column:end_date"`
+	Place         *string    `gorm:"column:place"`
+	CustomerName  *string    `gorm:"column:customer_name"`
+	OrganizerName *string    `gorm:"column:organizer_name"`
+	PurchaseType  *string    `gorm:"column:purchase_type"`
+	Status        string     `gorm:"column:status"`
+	UpdatedAt     time.Time  `gorm:"column:updated_at"`
+}
+
+func (ParserLot) TableName() string {
+	return "parser_lots"
+}
+
+type ParserDocument struct {
+	LotStableID string  `gorm:"column:lot_stable_id"`
+	Name        string  `gorm:"column:name"`
+	URL         string  `gorm:"column:url"`
+	LocalPath   *string `gorm:"column:local_path"`
+}
+
+func (ParserDocument) TableName() string {
+	return "parser_documents"
+}
+
+func strPtr(v string) *string { return &v }
+
+func intPtr(v int) *int { return &v }
+
 func floatPtr(v float64) *float64 { return &v }
 
-func demoActiveLotsDTO() []LotDTO {
-	now := time.Now()
-	date := func(days int) *string {
-		v := now.AddDate(0, 0, days).Format(time.RFC3339)
-		return &v
+func timePtrRFC3339(value *time.Time) *string {
+	if value == nil {
+		return nil
 	}
-	return []LotDTO{
-		{
-			ID: 91001, Lot: strPtr("91001-1"), LotSourceID: strPtr("demo-active"), Title: strPtr("Аренда облачной IaaS инфраструктуры для eGov"),
-			Description: strPtr("Виртуальные серверы, резервное копирование, мониторинг 24/7"), Cost: floatPtr(18500000), PartnerLink: strPtr("https://example.local/tenders/91001"),
-			Place: strPtr("Астана"), BuyID: intPtr(91001), StartDate: date(-1), EndDate: date(14), Region: strPtr("Астана"), Partner: strPtr("АО Национальные информационные технологии"), OrganizerName: strPtr("АО Национальные информационные технологии"), CustomerName: strPtr("АО Национальные информационные технологии"), Status: strPtr("Активный"), PurchaseType: strPtr("Открытый конкурс"),
-		},
-		{
-			ID: 91002, Lot: strPtr("91002-1"), LotSourceID: strPtr("demo-active"), Title: strPtr("Поставка серверов и СХД для резервного ЦОДа"),
-			Description: strPtr("Серверное оборудование, дисковые массивы, монтаж и пусконаладка"), Cost: floatPtr(42700000), PartnerLink: strPtr("https://example.local/tenders/91002"),
-			Place: strPtr("Алматы"), BuyID: intPtr(91002), StartDate: date(-2), EndDate: date(6), Region: strPtr("Алматы"), Partner: strPtr("ТОО Smart City Almaty"), OrganizerName: strPtr("ТОО Smart City Almaty"), CustomerName: strPtr("ТОО Smart City Almaty"), Status: strPtr("Активный"), PurchaseType: strPtr("Запрос ценовых предложений"),
-		},
-		{
-			ID: 91003, Lot: strPtr("91003-1"), LotSourceID: strPtr("demo-active"), Title: strPtr("Техническая поддержка корпоративной виртуализации"),
-			Description: strPtr("Поддержка VMware/Proxmox, SLA, реагирование на инциденты"), Cost: floatPtr(9600000), PartnerLink: strPtr("https://example.local/tenders/91003"),
-			Place: strPtr("Астана"), BuyID: intPtr(91003), StartDate: date(-3), EndDate: date(3), Region: strPtr("Астана"), Partner: strPtr("ГУ Управление цифровизации Астаны"), OrganizerName: strPtr("ГУ Управление цифровизации Астаны"), CustomerName: strPtr("ГУ Управление цифровизации Астаны"), Status: strPtr("Активный"), PurchaseType: strPtr("Открытый конкурс"),
-		},
+	formatted := value.Format(time.RFC3339)
+	return &formatted
+}
+
+func sourceLabel(source string) string {
+	switch source {
+	case "goszakup":
+		return "Госзакупки"
+	case "samruk":
+		return "Самрук.kz"
+	default:
+		return source
 	}
 }
 
-func findDemoLotDTO(id int) (LotDTO, bool) {
-	for _, lot := range demoActiveLotsDTO() {
-		if lot.ID == id {
-			return lot, true
-		}
+func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
+	amount := 0.0
+	if row.Amount != nil {
+		amount = *row.Amount
 	}
-	return LotDTO{}, false
+	documents := make([]LotDocumentDTO, 0, len(docs))
+	for _, doc := range docs {
+		name := doc.Name
+		url := doc.URL
+		documents = append(documents, LotDocumentDTO{Name: &name, DownloadLink: &url})
+	}
+	source := row.Source
+	label := sourceLabel(row.Source)
+	return LotDTO{
+		ID:            row.ID,
+		Lot:           strPtr(row.ExternalID),
+		LotSourceID:   strPtr(row.StableID),
+		Source:        &source,
+		SourceLabel:   &label,
+		Title:         strPtr(row.Title),
+		Description:   strPtr(row.Description),
+		Cost:          floatPtr(amount),
+		PartnerLink:   strPtr(row.URL),
+		Place:         row.Place,
+		BuyID:         intPtr(row.ID),
+		EndDate:       timePtrRFC3339(row.EndDate),
+		StartDate:     timePtrRFC3339(row.StartDate),
+		Partner:       &label,
+		OrganizerName: row.OrganizerName,
+		CustomerName:  row.CustomerName,
+		Status:        strPtr(row.Status),
+		PurchaseType:  row.PurchaseType,
+		Documents:     documents,
+	}
 }
 
-func lotToDTO(row tenderplus.Lot) LotDTO {
-	docs := row.AllDocuments()
-	dto := LotDTO{
-		ID:          row.ID,
-		Lot:         row.Lot,
-		LotSourceID: row.LotSourceID,
-		Title:       row.Title,
-		Description: row.Description,
-		Cost:        row.Cost,
-		OneCost:     row.OneCost,
-		Counts:      row.Counts,
-		PartnerLink: row.PartnerLink,
-		Place:       row.Place,
-		BuyID:       row.BuyID,
-		Documents:   docs,
-	}
-	if row.Region != nil {
-		dto.Region = row.Region.Name
-	}
-	if row.LotBuy != nil {
-		lb := row.LotBuy
-		dto.EndDate = lb.EndDate
-		dto.StartDate = lb.BeginDate
-		if lb.Partner != nil {
-			dto.Partner = lb.Partner.Name
-			dto.OrganizerName = lb.Partner.Name
-			dto.CustomerName = lb.Partner.Name
-		}
-		if lb.LotStatus != nil {
-			dto.Status = lb.LotStatus.Name
-			dto.PurchaseType = lb.LotStatus.Name
-		}
-	}
-	return dto
-}
-
-// GET /api/v1/tenders?keywords=IaaS,сервер&limit=10&page=1
 func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("keywords")
-	if strings.TrimSpace(q) == "" {
-		q = h.TendersKeywords
-	}
-	if strings.TrimSpace(q) == "" {
-		q = hardcodedTendersKeywords
-	}
-	parts := strings.Split(q, ",")
-	var keywords []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			keywords = append(keywords, p)
-		}
-	}
-	if len(keywords) == 0 {
-		http.Error(w, "at least one keyword is required", http.StatusBadRequest)
+	if h.DB == nil {
+		http.Error(w, `{"error":"database is not configured"}`, http.StatusServiceUnavailable)
 		return
 	}
 	limit := 10
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
+			limit = min(n, 50)
 		}
 	}
 	page := 1
@@ -163,67 +173,126 @@ func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	demoItems := []LotDTO{}
-	if page == 1 {
-		demoItems = demoActiveLotsDTO()
+	query := h.DB.Model(&ParserLot{}).Where("source IN ?", []string{"goszakup", "samruk"})
+	keywords := splitKeywords(r.URL.Query().Get("keywords"))
+	if len(keywords) > 0 {
+		query = applyKeywordFilter(query, keywords)
 	}
-	if h.TP == nil {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(TendersListResponse{Items: demoItems, Meta: map[string]interface{}{"pageCount": 1, "totalCount": len(demoItems)}})
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		http.Error(w, `{"error":"ошибка получения количества тендеров"}`, http.StatusInternalServerError)
 		return
 	}
-	rows, ext, err := h.TP.ListLotsByKeywords(r.Context(), keywords, page, limit)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(TendersListResponse{Items: demoItems, Meta: map[string]interface{}{"pageCount": 1, "totalCount": len(demoItems), "source": "demo_fallback"}})
+
+	var rows []ParserLot
+	if err := query.Order("updated_at desc, id desc").Limit(limit).Offset((page - 1) * limit).Find(&rows).Error; err != nil {
+		http.Error(w, `{"error":"ошибка получения тендеров"}`, http.StatusInternalServerError)
 		return
 	}
-	items := make([]LotDTO, 0, len(demoItems)+len(rows))
-	items = append(items, demoItems...)
+
+	docsByLot := h.documentsByStableID(rows)
+	items := make([]LotDTO, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, lotToDTO(row))
+		items = append(items, parserLotToDTO(row, docsByLot[row.StableID]))
 	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(TendersListResponse{Items: items, Meta: ext})
+	_ = json.NewEncoder(w).Encode(TendersListResponse{
+		Items: items,
+		Meta: map[string]interface{}{
+			"firstId":    firstItemID(items),
+			"lastId":     lastItemID(items),
+			"limitPage":  limit,
+			"pageCount":  int(math.Ceil(float64(total) / float64(limit))),
+			"totalCount": total,
+			"source":     "parser",
+		},
+	})
 }
 
-// GET /api/v1/tenders/{tenderId}
 func (h *Handler) GetTender(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		http.Error(w, `{"error":"database is not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
 	idStr := chi.URLParam(r, "tenderId")
 	id, err := strconv.Atoi(idStr)
 	if err != nil || id < 1 {
 		http.Error(w, `{"error":"некорректный ID"}`, http.StatusBadRequest)
 		return
 	}
-	if demo, ok := findDemoLotDTO(id); ok {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(demo)
+
+	var row ParserLot
+	err = h.DB.Where("id = ? AND source IN ?", id, []string{"goszakup", "samruk"}).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		http.Error(w, `{"error":"тендер не найден"}`, http.StatusNotFound)
 		return
 	}
-	if h.TP == nil {
-		http.Error(w, "tenderplus client not configured", http.StatusServiceUnavailable)
-		return
-	}
-
-	q := h.TendersKeywords
-	if strings.TrimSpace(q) == "" {
-		q = hardcodedTendersKeywords
-	}
-	parts := strings.Split(q, ",")
-	var keywords []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			keywords = append(keywords, p)
-		}
-	}
-
-	lot, err := h.TP.GetLotByID(r.Context(), id, keywords)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, `{"error":"ошибка получения тендера"}`, http.StatusInternalServerError)
 		return
 	}
+
+	var docs []ParserDocument
+	_ = h.DB.Where("lot_stable_id = ?", row.StableID).Order("updated_at desc, id desc").Find(&docs).Error
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(lotToDTO(*lot))
+	_ = json.NewEncoder(w).Encode(parserLotToDTO(row, docs))
+}
+
+func splitKeywords(raw string) []string {
+	parts := strings.Split(raw, ",")
+	keywords := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			keywords = append(keywords, part)
+		}
+	}
+	return keywords
+}
+
+func applyKeywordFilter(query *gorm.DB, keywords []string) *gorm.DB {
+	conditions := make([]string, 0, len(keywords))
+	args := make([]interface{}, 0, len(keywords)*6)
+	for _, keyword := range keywords {
+		like := "%" + keyword + "%"
+		conditions = append(conditions, "(title ILIKE ? OR description ILIKE ? OR customer_name ILIKE ? OR organizer_name ILIKE ? OR purchase_type ILIKE ? OR external_id ILIKE ?)")
+		args = append(args, like, like, like, like, like, like)
+	}
+	return query.Where(strings.Join(conditions, " OR "), args...)
+}
+
+func (h *Handler) documentsByStableID(rows []ParserLot) map[string][]ParserDocument {
+	result := make(map[string][]ParserDocument)
+	if len(rows) == 0 || h.DB == nil {
+		return result
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.StableID)
+	}
+	var docs []ParserDocument
+	if err := h.DB.Where("lot_stable_id IN ?", ids).Order("updated_at desc, id desc").Find(&docs).Error; err != nil {
+		return result
+	}
+	for _, doc := range docs {
+		result[doc.LotStableID] = append(result[doc.LotStableID], doc)
+	}
+	return result
+}
+
+func firstItemID(items []LotDTO) int {
+	if len(items) == 0 {
+		return 0
+	}
+	return items[0].ID
+}
+
+func lastItemID(items []LotDTO) int {
+	if len(items) == 0 {
+		return 0
+	}
+	return items[len(items)-1].ID
 }
