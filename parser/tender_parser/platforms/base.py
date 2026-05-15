@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 
 from tender_parser.schemas import TenderLot
 
@@ -7,7 +8,7 @@ class TenderPlatform(ABC):
     name: str
 
     @abstractmethod
-    def search(self, keywords: list[str]) -> list[TenderLot]:
+    def search(self, keywords: list[str], is_seen: Callable[[str], bool] | None = None) -> list[TenderLot]:
         raise NotImplementedError
 
     @abstractmethod

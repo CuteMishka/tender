@@ -4,8 +4,9 @@
 
 ## Возможности
 
-- многопоточный цикл мониторинга каждые 5 минут;
+- многопоточный цикл мониторинга публичной страницы `zakup.gov.kz/home/lots` через Playwright каждые 30 минут;
 - Playwright для динамических страниц;
+- умная фильтрация по ключам: exact match, лемматизация `pymorphy3`, опциональные embeddings и LLM-фильтр;
 - PostgreSQL-хранилище с защитой от дублей по `source + external_id`;
 - таблицы для ключевых слов, документов, запусков и уведомлений;
 - скачивание PDF/DOC/DOCX технических спецификаций;
@@ -38,6 +39,8 @@ parser/
     ├── text_extract.py
     └── platforms/
         ├── base.py
+        ├── zakup.py
+        ├── zakup_ows.py
         ├── goszakup.py
         ├── samruk.py
         └── utils.py
@@ -66,11 +69,27 @@ copy .env.example .env
 ```env
 DATABASE_URL=postgresql+psycopg://tender:tender@localhost:5433/tender
 RAG_API_BASE=http://localhost:8083
-POLL_INTERVAL_SECONDS=300
+DICTIONARIES_API_URL=http://localhost:8082/api/v1/dictionaries?kind=keywords
+POLL_INTERVAL_SECONDS=1800
 MAX_WORKERS=4
-PLATFORMS=goszakup,samruk
-DEFAULT_KEYWORDS=кибербезопасность,ОЦИБ,EDR,пентест,аудит безопасности,сервер,облако,виртуализация,backup
+STRICT_KEYWORD_FILTER=true
+SMART_MATCH_ENABLED=true
+SMART_MATCH_USE_MORPHOLOGY=true
+SEMANTIC_MATCH_ENABLED=false
+AI_LOT_FILTER_ENABLED=false
+STOP_AT_FIRST_SEEN_LOT=true
+PROCESS_EXISTING_LOTS=false
+MAX_LOTS_PER_CYCLE=0
+PLATFORMS=zakup
+DEFAULT_KEYWORDS=
+ZAKUP_PUBLIC_BASE_URL=https://zakup.gov.kz
+ZAKUP_LOTS_URL=https://zakup.gov.kz/home/lots
+ZAKUP_LOTS_LIMIT=10
+ZAKUP_LOTS_MAX_PAGES=50
+ZAKUP_LOTS_SYSTEM_IDS=1__2__3
 OUR_BINS=123456789012
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
 ```
 
 PostgreSQL можно использовать тот же, что и `tenderai`:
@@ -100,7 +119,31 @@ python main.py --once
 
 ## Ключевые слова
 
-При первом запуске парсер создаёт `parser_keywords` из `DEFAULT_KEYWORDS`. Далее можно управлять словами SQL-запросом:
+Парсер каждый цикл пытается загрузить активные ключи из `DICTIONARIES_API_URL`. Если пользователь добавит слово в справочник `/dictionaries`, следующий 30-минутный цикл автоматически возьмёт обновлённый список. Если backend справочника недоступен или вернул пустой список, parser использует таблицу `parser_keywords`, а затем fallback `DEFAULT_KEYWORDS`.
+
+`STRICT_KEYWORD_FILTER=true` дополнительно проверяет, что найденная строка результата действительно содержит ключевое слово. В `raw` лота сохраняется `matched_keyword`.
+
+`SMART_MATCH_USE_MORPHOLOGY=true` включает лемматизацию русского языка через `pymorphy3`: формы вроде `серверов`, `серверное`, `сервер` считаются совпадением по одной базовой форме.
+
+`SEMANTIC_MATCH_ENABLED=false` по умолчанию выключен. Если установить `sentence-transformers` и включить этот флаг, парсер сможет сравнивать смысл текста лота и ключевых фраз через embeddings.
+
+`AI_LOT_FILTER_ENABLED=false` по умолчанию выключен. Если включить, parser будет отправлять текст лота в `tender-rag` endpoint `/v1/lot/analyze` и сохранять результат в `raw.ai_filter`, `raw.ai_score`, `raw.ai_passed`.
+
+`STOP_AT_FIRST_SEEN_LOT=true`, `PROCESS_EXISTING_LOTS=false` и `MAX_LOTS_PER_CYCLE=0` заставляют parser идти по выдаче `/home/lots` до первого уже известного лота и обрабатывать все новые подходящие тендеры.
+
+## Telegram-уведомления
+
+1. Создайте бота через `@BotFather` и получите token.
+2. Напишите своему боту любое сообщение.
+3. Откройте `https://api.telegram.org/bot<token>/getUpdates` и возьмите `chat.id`.
+4. Заполните `.env`:
+
+```env
+TELEGRAM_BOT_TOKEN=123456:telegram-token
+TELEGRAM_CHAT_ID=123456789
+```
+
+Telegram-сообщение отправляется только для нового релевантного лота после успешного `upsert_lot`. Если переменные пустые, parser продолжает работать без Telegram.
 
 ```sql
 INSERT INTO parser_keywords(value, active)
@@ -123,8 +166,8 @@ SELECT * FROM parser_runs ORDER BY started_at DESC;
 2. Унаследуйте класс от `TenderPlatform`.
 3. Реализуйте `search`, `enrich`, `load_final_protocol`.
 4. Зарегистрируйте адаптер в `tender_parser/platforms/__init__.py`.
-5. Добавьте имя площадки в `.env`: `PLATFORMS=goszakup,samruk,new_platform`.
+5. Добавьте имя площадки в `.env`: `PLATFORMS=zakup,new_platform`.
 
 ## Важное ограничение
 
-Селекторы публичных порталов часто меняются. `goszakup` и `samruk/zakupki.kz` сделаны устойчивыми за счёт универсальных селекторов и regex, но после первого живого запуска стоит уточнить селекторы под фактическую HTML-разметку текущего портала.
+Основной адаптер `zakup` работает без OWS-токена через Playwright и публичный route `/home/lots?limit=10&offset=0&ord=undefined&system_id__in=1__2__3`. Если позже появится OWS-токен, отдельный режим `PLATFORMS=zakup_ows` оставлен в проекте.

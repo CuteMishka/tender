@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { Gavel, FileText, Building2, DollarSign, Download, ArrowRight, ChevronRight, Bell } from "lucide-react";
+import { Gavel, FileText, Building2, DollarSign, Download, ArrowRight, ChevronRight, Bell, Clock } from "lucide-react";
 import { getLocalApiBase, formatTenderAmount } from "@/lib/tenders-api";
 import { useNotifications } from "@/hooks/use-notifications";
 
@@ -23,11 +23,48 @@ interface SavedLot {
   updated_at: string;
 }
 
+interface ParserStatus {
+  configured: boolean;
+  intervalSeconds: number;
+  nextRunAt?: string;
+  lastRun?: {
+    id: number;
+    startedAt: string;
+    finishedAt?: string;
+    status: string;
+    platforms: string[];
+    keywords: string[];
+    lotsFound: number;
+    lotsChanged: number;
+    errors: Array<Record<string, unknown>>;
+  };
+}
+
 const STATUS_RU: Record<string, { label: string; cls: string }> = {
   active:        { label: "Активный",   cls: "bg-green-100 text-green-700" },
   participating: { label: "Участвуем",  cls: "bg-blue-100 text-blue-700" },
   rejected:      { label: "Отклонён",   cls: "bg-red-100 text-red-600" },
 };
+
+function formatDateTime(value?: string) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString("ru-KZ", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatSince(value?: string) {
+  if (!value) return "нет запусков";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "нет запусков";
+  const diff = Math.max(0, Date.now() - date.getTime());
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return "только что";
+  if (minutes < 60) return `${minutes} мин. назад`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `${hours} ч. ${rest} мин. назад`;
+}
 
 function Dashboard() {
   const navigate = useNavigate();
@@ -36,17 +73,25 @@ function Dashboard() {
     active_count: 0, participating_count: 0, total_amount: 0, participating_amount: 0,
   });
   const [savedLots, setSavedLots] = useState<SavedLot[]>([]);
+  const [parserStatus, setParserStatus] = useState<ParserStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const base = getLocalApiBase();
+    const loadParserStatus = () => {
+      fetch(`${base}/api/v1/parser/status`).then((r) => r.json()).then((body) => setParserStatus(body)).catch(() => setParserStatus(null));
+    };
     Promise.all([
       fetch(`${base}/api/v1/dashboard`).then((r) => r.json()).catch(() => null),
       fetch(`${base}/api/v1/lots/saved`).then((r) => r.json()).catch(() => []),
-    ]).then(([stats, lots]) => {
+      fetch(`${base}/api/v1/parser/status`).then((r) => r.json()).catch(() => null),
+    ]).then(([stats, lots, parser]) => {
       if (stats && !stats.error) setDbStats(stats);
       if (Array.isArray(lots)) setSavedLots(lots);
+      if (parser && !parser.error) setParserStatus(parser);
     }).finally(() => setLoading(false));
+    const timer = window.setInterval(loadParserStatus, 30_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const stats = [
@@ -131,6 +176,39 @@ function Dashboard() {
       />
 
       <div className="space-y-6 p-8">
+        <div className="rounded-xl border border-border bg-card p-5" style={{ boxShadow: "var(--shadow-sm)" }}>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
+                <Clock className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold">Таймер парсера zakup.gov.kz</h3>
+                <p className="text-sm text-muted-foreground">
+                  Последний запуск: {formatSince(parserStatus?.lastRun?.startedAt)}
+                </p>
+              </div>
+            </div>
+            <div className="grid gap-3 text-sm sm:grid-cols-4">
+              <div>
+                <p className="text-xs text-muted-foreground">Статус</p>
+                <p className="font-medium">{parserStatus?.lastRun?.status || (parserStatus?.configured ? "ожидает" : "нет запусков")}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Время</p>
+                <p className="font-medium">{formatDateTime(parserStatus?.lastRun?.startedAt)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Найдено / изменено</p>
+                <p className="font-medium">{parserStatus?.lastRun ? `${parserStatus.lastRun.lotsFound} / ${parserStatus.lastRun.lotsChanged}` : "—"}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Следующий запуск</p>
+                <p className="font-medium">{formatDateTime(parserStatus?.nextRunAt)}</p>
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* Карточки статистики */}
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

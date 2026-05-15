@@ -27,6 +27,12 @@ func NewRouter(h *Handler, allowedOrigins []string) http.Handler {
 	r.Route("/api/v1", func(s chi.Router) {
 		s.Get("/tenders", h.ListTenders)
 		s.Get("/tenders/{tenderId}", h.GetTender)
+		s.Get("/dictionaries", h.ListDictionaries)
+		s.Post("/dictionaries", h.CreateDictionaryItem)
+		s.Get("/dictionaries/{id}", h.GetDictionaryItem)
+		s.Put("/dictionaries/{id}", h.UpdateDictionaryItem)
+		s.Delete("/dictionaries/{id}", h.DeleteDictionaryItem)
+		s.Get("/parser/status", h.GetParserStatus)
 		if h.FetchDoc != nil {
 			s.Post("/fetch-document", h.FetchDocument)
 		}

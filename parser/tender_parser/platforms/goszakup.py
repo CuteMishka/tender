@@ -1,9 +1,11 @@
 import re
+from collections.abc import Callable
 from urllib.parse import urlencode
 
 from playwright.sync_api import sync_playwright
 
 from tender_parser.config import Settings
+from tender_parser.matching import SmartMatcher
 from tender_parser.platforms.base import TenderPlatform
 from tender_parser.platforms.utils import absolute_url, attr_or_empty, clean_text, find_first_regex, first_text, html_text, parse_amount, parse_datetime
 from tender_parser.schemas import TenderDocument, TenderLot
@@ -15,8 +17,9 @@ class GoszakupPlatform(TenderPlatform):
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    def search(self, keywords: list[str]) -> list[TenderLot]:
+    def search(self, keywords: list[str], is_seen: Callable[[str], bool] | None = None) -> list[TenderLot]:
         lots: dict[str, TenderLot] = {}
+        matcher = self._build_matcher(keywords)
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=self.settings.headless)
             page = browser.new_page(locale="ru-RU", user_agent="TenderMachineV2Parser/1.0")
@@ -26,6 +29,18 @@ class GoszakupPlatform(TenderPlatform):
                     page.goto(url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
                     page.wait_for_timeout(1000)
                     for lot in self._parse_search_page(page, keyword):
+                        match_text = str(lot.raw.get("match_text") or lot.title)
+                        match = matcher.match(match_text, keyword)
+                        if self.settings.strict_keyword_filter and not match.matched:
+                            continue
+                        lot.raw.update({
+                            "matched_keyword": match.keyword or keyword,
+                            "match_score": round(match.score, 4),
+                            "match_method": match.method,
+                            "match_reason": match.reason,
+                        })
+                        if is_seen and self.settings.stop_at_first_seen_lot and is_seen(lot.stable_id):
+                            break
                         lots[lot.stable_id] = lot
             finally:
                 browser.close()
@@ -109,6 +124,7 @@ class GoszakupPlatform(TenderPlatform):
                 continue
             lot_title = clean_text(lot_link.inner_text(timeout=1000)) or self._extract_title(row, text)
             announce_title = clean_text(announce_link.inner_text(timeout=1000))
+            match_text = " ".join([text, lot_title, announce_title])
             cells = row.locator("td")
             amount = parse_amount(clean_text(cells.nth(4).inner_text(timeout=1000))) if cells.count() > 4 else parse_amount(text)
             purchase_type = clean_text(cells.nth(5).inner_text(timeout=1000)) if cells.count() > 5 else None
@@ -123,7 +139,14 @@ class GoszakupPlatform(TenderPlatform):
                 customer_name=customer_name,
                 purchase_type=purchase_type,
                 status=status or "active",
-                raw={"keyword": keyword, "row_text": text[:2000], "announce_url": absolute_url(self.settings.goszakup_base_url, announce_href) if announce_href else None},
+                raw={
+                    "platform": self.name,
+                    "keyword": keyword,
+                    "matched_keyword": keyword,
+                    "match_text": match_text[:4000],
+                    "row_text": text[:2000],
+                    "announce_url": absolute_url(self.settings.goszakup_base_url, announce_href) if announce_href else None,
+                },
             ))
         if lots:
             return lots
@@ -144,9 +167,19 @@ class GoszakupPlatform(TenderPlatform):
                 external_id=lot_id,
                 url=absolute_url(self.settings.goszakup_base_url, href),
                 title=text or f"Лот {lot_id}",
-                raw={"keyword": keyword},
+                raw={"platform": self.name, "keyword": keyword, "matched_keyword": keyword, "match_text": text[:4000]},
             ))
         return lots
+
+    def _build_matcher(self, keywords: list[str]) -> SmartMatcher:
+        return SmartMatcher(
+            keywords,
+            use_morphology=self.settings.smart_match_enabled and self.settings.smart_match_use_morphology,
+            semantic_enabled=self.settings.smart_match_enabled and self.settings.semantic_match_enabled,
+            semantic_model_name=self.settings.semantic_model_name,
+            semantic_threshold=self.settings.semantic_match_threshold,
+            min_score=self.settings.min_keyword_score,
+        )
 
     def _extract_lot_id(self, text: str, href: str) -> str | None:
         subprice_match = re.search(r"/subpriceoffer/index/\d+/(\d+)", href or "", re.IGNORECASE)

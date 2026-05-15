@@ -32,3 +32,13 @@ class RagClient:
             res = client.post(f"{self.base_url}/v1/lots/{lot_id}/index", json=payload)
             if res.is_error:
                 raise RuntimeError(f"RAG {res.status_code}: {res.text[:1000]}")
+
+    def analyze_lot(self, lot_text: str, profile: str | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"lot_text": lot_text}
+        if profile:
+            payload["profile"] = profile
+        with httpx.Client(timeout=self.timeout_seconds, follow_redirects=True) as client:
+            res = client.post(f"{self.base_url}/v1/lot/analyze", json=payload)
+            if res.is_error:
+                raise RuntimeError(f"RAG {res.status_code}: {res.text[:1000]}")
+            return res.json()

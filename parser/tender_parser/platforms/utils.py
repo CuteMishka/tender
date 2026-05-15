@@ -20,8 +20,14 @@ def parse_amount(value: str | None) -> Decimal | None:
         return None
     if "," in text and "." in text:
         text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        parts = text.split(",")
+        if len(parts[-1]) == 3 and all(part.isdigit() for part in parts):
+            text = "".join(parts)
+        else:
+            text = text.replace(",", ".")
     else:
-        text = text.replace(",", ".")
+        text = text
     try:
         return Decimal(text)
     except InvalidOperation:
@@ -32,6 +38,9 @@ def parse_datetime(value: str | None) -> datetime | None:
     text = clean_text(value)
     if not text:
         return None
+    text = text.replace("T", " ")
+    text = re.sub(r"(?<=\d{2}:\d{2}:\d{2})\.\d+", "", text)
+    text = re.sub(r"\s*(?:Z|[+-]\d{2}:?\d{2})$", "", text)
     patterns = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y", "%Y-%m-%d"]
     for pattern in patterns:
         try:

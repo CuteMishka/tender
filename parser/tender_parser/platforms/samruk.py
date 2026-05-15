@@ -1,9 +1,11 @@
 import re
+from collections.abc import Callable
 from urllib.parse import urlencode
 
 from playwright.sync_api import sync_playwright
 
 from tender_parser.config import Settings
+from tender_parser.matching import SmartMatcher
 from tender_parser.platforms.base import TenderPlatform
 from tender_parser.platforms.utils import absolute_url, attr_or_empty, clean_text, find_first_regex, html_text, parse_amount, parse_datetime
 from tender_parser.schemas import TenderDocument, TenderLot
@@ -15,8 +17,9 @@ class SamrukPlatform(TenderPlatform):
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    def search(self, keywords: list[str]) -> list[TenderLot]:
+    def search(self, keywords: list[str], is_seen: Callable[[str], bool] | None = None) -> list[TenderLot]:
         lots: dict[str, TenderLot] = {}
+        matcher = self._build_matcher(keywords)
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=self.settings.headless)
             page = browser.new_page(locale="ru-RU", user_agent="TenderMachineV2Parser/1.0")
@@ -26,6 +29,18 @@ class SamrukPlatform(TenderPlatform):
                     page.goto(url, wait_until="networkidle", timeout=self.settings.request_timeout_seconds * 1000)
                     page.wait_for_timeout(2500)
                     for lot in self._parse_cards(page, keyword):
+                        match_text = str(lot.raw.get("match_text") or lot.raw.get("card_text") or lot.title)
+                        match = matcher.match(match_text, keyword)
+                        if self.settings.strict_keyword_filter and not match.matched:
+                            continue
+                        lot.raw.update({
+                            "matched_keyword": match.keyword or keyword,
+                            "match_score": round(match.score, 4),
+                            "match_method": match.method,
+                            "match_reason": match.reason,
+                        })
+                        if is_seen and self.settings.stop_at_first_seen_lot and is_seen(lot.stable_id):
+                            break
                         lots[lot.stable_id] = lot
             finally:
                 browser.close()
@@ -84,15 +99,26 @@ class SamrukPlatform(TenderPlatform):
                 continue
             seen.add(lot_id)
             container_text = self._container_text(link) or text
+            match_text = f"{text} {container_text}"
             lots.append(TenderLot(
                 source=self.name,
                 external_id=lot_id,
                 url=absolute_url(self.settings.samruk_search_url, href),
                 title=text or self._title_from_text(container_text, lot_id),
                 amount=parse_amount(container_text),
-                raw={"keyword": keyword, "card_text": container_text[:2000]},
+                raw={"platform": self.name, "keyword": keyword, "matched_keyword": keyword, "match_text": match_text[:4000], "card_text": container_text[:2000]},
             ))
         return lots
+
+    def _build_matcher(self, keywords: list[str]) -> SmartMatcher:
+        return SmartMatcher(
+            keywords,
+            use_morphology=self.settings.smart_match_enabled and self.settings.smart_match_use_morphology,
+            semantic_enabled=self.settings.smart_match_enabled and self.settings.semantic_match_enabled,
+            semantic_model_name=self.settings.semantic_model_name,
+            semantic_threshold=self.settings.semantic_match_threshold,
+            min_score=self.settings.min_keyword_score,
+        )
 
     def _parse_documents(self, page, lot_url: str) -> list[TenderDocument]:
         docs: list[TenderDocument] = []

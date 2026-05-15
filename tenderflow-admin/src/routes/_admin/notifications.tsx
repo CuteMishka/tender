@@ -1,8 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Bell, CheckCheck, Clock, Gavel, Megaphone, MessageSquare, RefreshCw, Trash2, Users, X, Search } from "lucide-react";
+import { Bell, CheckCheck, Clock, Gavel, MessageSquare, RefreshCw, Trash2, Users, X, Search } from "lucide-react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { pushNotification, useNotifications, type AppNotification, type NotificationCategory } from "@/hooks/use-notifications";
+import { useNotifications, type AppNotification, type NotificationCategory } from "@/hooks/use-notifications";
 
 export const Route = createFileRoute("/_admin/notifications")({
   component: NotificationsPage,
@@ -41,12 +41,6 @@ function getDateGroup(ts: number): string {
 }
 
 const DATE_GROUP_ORDER = ["Сегодня", "Вчера", "На этой неделе", "Ранее"];
-
-function seedNotifications() {
-  pushNotification("warning", "Дедлайн через 2 дня", "Лот требует первичной фильтрации и решения по участию.", "/tenders", "deadline");
-  pushNotification("info", "Новый лот по ключевым словам", "Парсер нашёл закупку по справочнику ключевых слов.", "/tenders", "updates");
-  pushNotification("success", "Заказчик добавлен в избранное", "Отслеживание заказчика активно для новых закупок.", "/analytics/customers", "mentions");
-}
 
 function NotificationsPage() {
   const navigate = useNavigate();
@@ -87,9 +81,6 @@ function NotificationsPage() {
         description={`${unreadCount} непрочитанных · дедлайны, обновления, упоминания и ревью`}
         actions={
           <div className="flex flex-wrap gap-2">
-            <button onClick={seedNotifications} className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
-              <Megaphone className="h-4 w-4" /> Тестовые
-            </button>
             <button onClick={() => active === "all" ? markAllRead() : markCategoryRead(active)} className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
               <CheckCheck className="h-4 w-4" /> Отметить прочитанными
             </button>

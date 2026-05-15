@@ -12,9 +12,12 @@ import (
 )
 
 // InitDB подключается к PostgreSQL и применяет миграции.
-// DSN берётся из переменной окружения LOCAL_DB_DSN; если не задана — используется дефолтное значение для Docker.
+// DSN берётся из DATABASE_URL или LOCAL_DB_DSN; если не задана — используется дефолтное значение для Docker.
 func InitDB() *gorm.DB {
-	dsn := os.Getenv("LOCAL_DB_DSN")
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("LOCAL_DB_DSN")
+	}
 	if dsn == "" {
 		dsn = "host=localhost user=tender password=tender dbname=tender port=5433 sslmode=disable TimeZone=Asia/Almaty"
 	}
@@ -24,7 +27,7 @@ func InitDB() *gorm.DB {
 		log.Fatalf("Ошибка подключения к базе данных: %v", err)
 	}
 
-	if err := db.AutoMigrate(&domain.User{}, &tenderplus.SavedLot{}, &analyticsModels.HistoricalLot{}, &analyticsModels.TrackedCustomer{}); err != nil {
+	if err := db.AutoMigrate(&domain.User{}, &domain.DictionaryItem{}, &tenderplus.SavedLot{}, &analyticsModels.HistoricalLot{}, &analyticsModels.TrackedCustomer{}); err != nil {
 		log.Fatalf("Ошибка AutoMigrate: %v", err)
 	}
 

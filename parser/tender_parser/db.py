@@ -149,6 +149,28 @@ class Database:
             run.errors = errors
             session.commit()
 
+    def lot_exists(self, stable_id: str) -> bool:
+        with self.session() as session:
+            return session.scalar(select(ParserLot.id).where(ParserLot.stable_id == stable_id).limit(1)) is not None
+
+    def filter_new_lots(self, lots: list[TenderLot], stop_at_first_seen: bool, max_lots: int) -> tuple[list[TenderLot], int]:
+        if not lots:
+            return [], 0
+        selected: list[TenderLot] = []
+        skipped_seen = 0
+        with self.session() as session:
+            for lot in lots:
+                exists = session.scalar(select(ParserLot.id).where(ParserLot.stable_id == lot.stable_id).limit(1)) is not None
+                if exists:
+                    skipped_seen += 1
+                    if stop_at_first_seen:
+                        break
+                    continue
+                selected.append(lot)
+                if max_lots > 0 and len(selected) >= max_lots:
+                    break
+        return selected, skipped_seen
+
     def upsert_lot(self, lot: TenderLot) -> tuple[bool, list[str]]:
         now = datetime.now(timezone.utc)
         fingerprint = self._lot_fingerprint(lot)

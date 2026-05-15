@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Check, Edit2, Plus, Save, Trash2, X, Download, Search } from "lucide-react";
 import { PageHeader } from "@/components/admin/PageHeader";
+import { getLocalApiBase } from "@/lib/tenders-api";
 
 export const Route = createFileRoute("/_admin/dictionaries")({
   component: DictionariesPage,
@@ -11,17 +12,18 @@ type DictKind = "advantages" | "blockers" | "keywords" | "tru" | "companies";
 
 type DictItem = {
   id: string;
+  kind?: DictKind;
   value: string;
   active: boolean;
   lastLot?: string;
 };
 
-const tabs: { key: DictKind; label: string; hint: string; seed: string[] }[] = [
-  { key: "advantages", label: "Преимущества", hint: "Что усиливает релевантность тендера", seed: ["Информационная безопасность", "SOC", "DLP", "NGFW"] },
-  { key: "blockers", label: "Блокеры", hint: "Что исключает тендер на этапе парсинга", seed: ["Строительные работы", "Поставка мебели", "Медицинское оборудование"] },
-  { key: "keywords", label: "Ключевые слова", hint: "Слова для поиска тендеров и парсера", seed: ["кибербезопасность", "ОЦИБ", "EDR", "пентест", "аудит безопасности"] },
-  { key: "tru", label: "ТРУ коды", hint: "Коды товаров/работ/услуг для будущего парсера", seed: ["620920.000.000000", "631111.000.000000", "749020.000.000000"] },
-  { key: "companies", label: "Компании / BIN", hint: "Наши компании, конкуренты и заказчики", seed: ["Freedom Cloud", "CitizenSec", "ТОО пример / 123456789012"] },
+const tabs: { key: DictKind; label: string; hint: string }[] = [
+  { key: "advantages", label: "Преимущества", hint: "Что усиливает релевантность тендера" },
+  { key: "blockers", label: "Блокеры", hint: "Что исключает тендер на этапе парсинга" },
+  { key: "keywords", label: "Ключевые слова", hint: "Слова для поиска тендеров и парсера" },
+  { key: "tru", label: "ТРУ коды", hint: "Коды товаров/работ/услуг для будущего парсера" },
+  { key: "companies", label: "Компании / BIN", hint: "Наши компании, конкуренты и заказчики" },
 ];
 
 const storageKey = "parser_dictionaries_v1";
@@ -30,25 +32,73 @@ function createItem(value: string): DictItem {
   return { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, value, active: true };
 }
 
-function seedData(): Record<DictKind, DictItem[]> {
-  return Object.fromEntries(tabs.map((tab) => [tab.key, tab.seed.map(createItem)])) as Record<DictKind, DictItem[]>;
+function emptyData(): Record<DictKind, DictItem[]> {
+  return {
+    advantages: [],
+    blockers: [],
+    keywords: [],
+    tru: [],
+    companies: [],
+  };
 }
 
 function loadData(): Record<DictKind, DictItem[]> {
   try {
     const raw = localStorage.getItem(storageKey);
-    if (!raw) return seedData();
+    if (!raw) return emptyData();
     const parsed = JSON.parse(raw) as Partial<Record<DictKind, DictItem[]>>;
-    const seeded = seedData();
-    for (const tab of tabs) seeded[tab.key] = Array.isArray(parsed[tab.key]) ? parsed[tab.key]! : seeded[tab.key];
-    return seeded;
+    const data = emptyData();
+    for (const tab of tabs) data[tab.key] = Array.isArray(parsed[tab.key]) ? parsed[tab.key]! : [];
+    return data;
   } catch {
-    return seedData();
+    return emptyData();
   }
 }
 
 function saveData(data: Record<DictKind, DictItem[]>) {
   localStorage.setItem(storageKey, JSON.stringify(data));
+}
+
+function normalizeData(items: DictItem[]): Record<DictKind, DictItem[]> {
+  const data = emptyData();
+  for (const item of items) {
+    const kind = item.kind;
+    if (!kind || !(kind in data)) continue;
+    data[kind].push({ ...item, id: String(item.id), kind });
+  }
+  return data;
+}
+
+async function fetchDictionaries(): Promise<Record<DictKind, DictItem[]>> {
+  const res = await fetch(`${getLocalApiBase()}/api/v1/dictionaries`);
+  if (!res.ok) throw new Error(`Dictionaries API ${res.status}`);
+  const payload = await res.json() as { items?: DictItem[]; data?: DictItem[] };
+  return normalizeData(Array.isArray(payload.items) ? payload.items : Array.isArray(payload.data) ? payload.data : []);
+}
+
+async function createDictionaryItem(kind: DictKind, value: string): Promise<DictItem> {
+  const res = await fetch(`${getLocalApiBase()}/api/v1/dictionaries`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, value, active: true }),
+  });
+  if (!res.ok) throw new Error((await res.text()).slice(0, 200));
+  return await res.json() as DictItem;
+}
+
+async function updateDictionaryItem(item: DictItem): Promise<DictItem> {
+  const res = await fetch(`${getLocalApiBase()}/api/v1/dictionaries/${encodeURIComponent(item.id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind: item.kind, value: item.value, active: item.active, lastLot: item.lastLot || "" }),
+  });
+  if (!res.ok) throw new Error((await res.text()).slice(0, 200));
+  return await res.json() as DictItem;
+}
+
+async function deleteDictionaryItem(id: string): Promise<void> {
+  const res = await fetch(`${getLocalApiBase()}/api/v1/dictionaries/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) throw new Error((await res.text()).slice(0, 200));
 }
 
 function DictionariesPage() {
@@ -58,8 +108,27 @@ function DictionariesPage() {
   const [searchText, setSearchText] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
+  const [syncStatus, setSyncStatus] = useState<"loading" | "online" | "offline">("loading");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => saveData(data), [data]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchDictionaries()
+      .then((remoteData) => {
+        if (cancelled) return;
+        setData(remoteData);
+        setSyncStatus("online");
+        setError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setSyncStatus("offline");
+        setError(err instanceof Error ? err.message : "Справочник работает локально");
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const activeTab = tabs.find((tab) => tab.key === active)!;
   const items = data[active];
@@ -84,19 +153,45 @@ function DictionariesPage() {
     URL.revokeObjectURL(url);
   };
 
-  const add = () => {
+  const add = async () => {
     const value = draft.trim();
     if (!value) return;
-    setData((prev) => ({ ...prev, [active]: [...prev[active], createItem(value)] }));
+    const optimistic = { ...createItem(value), kind: active };
+    setData((prev) => ({ ...prev, [active]: [...prev[active], optimistic] }));
     setDraft("");
+    if (syncStatus !== "online") return;
+    try {
+      const saved = await createDictionaryItem(active, value);
+      setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === optimistic.id ? { ...saved, kind: active, id: String(saved.id) } : item) }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось сохранить значение");
+    }
   };
 
-  const remove = (id: string) => {
+  const remove = async (id: string) => {
+    const previous = data;
     setData((prev) => ({ ...prev, [active]: prev[active].filter((item) => item.id !== id) }));
+    if (syncStatus !== "online") return;
+    try {
+      await deleteDictionaryItem(id);
+    } catch (err) {
+      setData(previous);
+      setError(err instanceof Error ? err.message : "Не удалось удалить значение");
+    }
   };
 
-  const toggle = (id: string) => {
-    setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === id ? { ...item, active: !item.active } : item) }));
+  const toggle = async (id: string) => {
+    const current = data[active].find((item) => item.id === id);
+    if (!current) return;
+    const updated = { ...current, kind: current.kind || active, active: !current.active };
+    setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === id ? updated : item) }));
+    if (syncStatus !== "online") return;
+    try {
+      const saved = await updateDictionaryItem(updated);
+      setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === id ? { ...saved, kind: active, id: String(saved.id) } : item) }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось обновить значение");
+    }
   };
 
   const startEdit = (item: DictItem) => {
@@ -104,13 +199,23 @@ function DictionariesPage() {
     setEditingValue(item.value);
   };
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editingId) return;
     const value = editingValue.trim();
     if (!value) return;
-    setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === editingId ? { ...item, value } : item) }));
+    const current = data[active].find((item) => item.id === editingId);
+    if (!current) return;
+    const updated = { ...current, kind: current.kind || active, value };
+    setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === editingId ? updated : item) }));
     setEditingId(null);
     setEditingValue("");
+    if (syncStatus !== "online") return;
+    try {
+      const saved = await updateDictionaryItem(updated);
+      setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === updated.id ? { ...saved, kind: active, id: String(saved.id) } : item) }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось сохранить изменение");
+    }
   };
 
   return (
@@ -119,13 +224,24 @@ function DictionariesPage() {
         title="Справочники"
         description="Преимущества, блокеры, ключевые слова, ТРУ коды и переменные для будущего парсера"
         actions={
-          <button onClick={() => setData(seedData())} className="rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
-            Сбросить демо
-          </button>
+          <div className="flex items-center gap-2">
+            <span className={`rounded-full px-2 py-1 text-xs font-medium ${syncStatus === "online" ? "bg-green-100 text-green-700" : syncStatus === "loading" ? "bg-blue-100 text-blue-700" : "bg-yellow-100 text-yellow-700"}`}>
+              {syncStatus === "online" ? "Backend sync" : syncStatus === "loading" ? "Загрузка" : "Local fallback"}
+            </span>
+            <button onClick={() => setData(emptyData())} className="rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
+              Очистить локально
+            </button>
+          </div>
         }
       />
 
       <div className="space-y-5 p-8">
+        {error && (
+          <div className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
+            {syncStatus === "offline" ? "Backend справочников недоступен, изменения сохраняются локально. " : ""}
+            {error}
+          </div>
+        )}
         <div className="flex flex-wrap gap-2">
           {tabs.map((tab) => {
             const t = totals[tab.key];

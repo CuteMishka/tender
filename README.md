@@ -1,12 +1,13 @@
-# Tender — Локальный запуск
+# Tender — запуск и production
 
-Проект состоит из **трёх** сервисов:
+Проект состоит из **четырёх** сервисов:
 
 | Сервис | Стек | Порт | Описание |
 |--------|------|------|----------|
 | **tenderai** | Go 1.22, Chi, GORM | `8082` | Основной бэкенд: API тендеров, аналитика, дашборд, заявки |
 | **tender-rag** | Python, FastAPI, pgvector | `8083` | RAG-сервис: семантический поиск и AI-анализ тендеров |
-| **tenderflow-admin** | React 19, Vite, TailwindCSS 4, TanStack Router | `5173` | Фронтенд админ-панель |
+| **tenderflow-admin** | React 19, Vite, TailwindCSS 4, TanStack Router | `5173` / `8080` | Фронтенд админ-панель |
+| **parser** | Python, Playwright, SQLAlchemy | scheduled | Парсер площадок, загрузка документов, smart matching |
 
 ---
 
@@ -16,6 +17,66 @@
 - **Node.js** ≥ 20 + **npm** → [nodejs.org](https://nodejs.org/)
 - **Docker** + **Docker Compose** → [docker.com](https://www.docker.com/)
 - (Опционально) **Python** ≥ 3.11 — только если запускаете RAG без Docker
+
+---
+
+## Production quick start
+
+Скопируйте env-шаблон:
+
+```bash
+cp .env.production.example .env
+```
+
+Заполните секреты и публичные URL:
+
+```env
+POSTGRES_PASSWORD=...
+RAG_POSTGRES_PASSWORD=...
+PUBLIC_BACKEND_URL=https://api.example.com
+PUBLIC_RAG_URL=https://rag.example.com
+CORS_ALLOWED_ORIGINS=https://app.example.com,https://api.example.com
+TENDERPLUS_TOKEN=...
+GEMINI_API_KEY=...
+```
+
+Поднимите всю платформу:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env up --build -d
+```
+
+Production compose поднимает frontend, backend, parser, tender-rag и две PostgreSQL БД. Parser работает через публичную страницу `zakup.gov.kz/home/lots` в Playwright-режиме и автоматически читает ключевые слова из backend справочника:
+
+```env
+DICTIONARIES_API_URL=http://backend:8082/api/v1/dictionaries?kind=keywords
+```
+
+Проверки:
+
+```bash
+curl http://localhost:8082/health
+curl http://localhost:8082/api/v1/dictionaries?kind=keywords
+curl http://localhost:8082/api/v1/parser/status
+curl http://localhost:8083/health
+```
+
+---
+
+## Справочник в production
+
+Справочник больше не зависит только от `localStorage`.
+
+- **Backend API**: `/api/v1/dictionaries`.
+- **Frontend**: страница `/dictionaries` работает через API и сохраняет локальный fallback при недоступном backend.
+- **Parser**: каждый цикл перечитывает активные `keywords` из backend API и автоматически использует новые слова.
+- **Группы**: `keywords`, `advantages`, `blockers`, `tru`, `companies`.
+
+Для локального parser `.env`:
+
+```env
+DICTIONARIES_API_URL=http://localhost:8082/api/v1/dictionaries?kind=keywords
+```
 
 ---
 
@@ -72,7 +133,7 @@ go run ./cmd/api
 curl http://localhost:8082/health
 ```
 
-При первом старте GORM выполнит `AutoMigrate` — таблицы `saved_lots`, `historical_lots`, `tracked_customers` создадутся автоматически. Также засидятся тестовые данные.
+При первом старте GORM выполнит `AutoMigrate` — таблицы `saved_lots`, `historical_lots`, `tracked_customers` создадутся автоматически.
 
 ---
 
