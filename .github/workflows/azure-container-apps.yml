@@ -66,17 +66,27 @@ jobs:
 
       - name: Update backend Container App
         run: |
+          az containerapp secret set \
+            --name ${{ env.BACKEND_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --secrets telegram-bot-token=${{ secrets.TELEGRAM_BOT_TOKEN }}
           az containerapp update \
             --name ${{ env.BACKEND_APP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.ACR_LOGIN_SERVER }}/tender-backend:${{ github.sha }}
+            --image ${{ env.ACR_LOGIN_SERVER }}/tender-backend:${{ github.sha }} \
+            --set-env-vars TELEGRAM_BOT_TOKEN=secretref:telegram-bot-token
 
       - name: Update parser Container App
         run: |
+          az containerapp secret set \
+            --name ${{ env.PARSER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --secrets telegram-bot-token=${{ secrets.TELEGRAM_BOT_TOKEN }}
           az containerapp update \
             --name ${{ env.PARSER_APP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.ACR_LOGIN_SERVER }}/tender-parser:${{ github.sha }}
+            --image ${{ env.ACR_LOGIN_SERVER }}/tender-parser:${{ github.sha }} \
+            --set-env-vars TELEGRAM_BOT_TOKEN=secretref:telegram-bot-token
 
       - name: Update frontend Container App
         run: |

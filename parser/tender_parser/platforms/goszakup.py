@@ -96,24 +96,52 @@ class GoszakupPlatform(TenderPlatform):
             try:
                 announce_url = str(lot.raw.get("announce_url") or lot.url)
                 lot_url = str(lot.raw.get("lot_url") or lot.url)
+                lot_html = ""
+                announce_candidates: list[str] = []
                 if lot_url:
                     self._goto(page, lot_url)
-                    self._apply_lot_detail(lot, page.content())
-                self._goto(page, announce_url)
-                announce_html = page.content()
-                self._apply_announce_detail(lot, announce_html)
-                lot.documents = self._dedupe_documents([*lot.documents, *self._parse_documents_html(announce_html, announce_url, page)])
-                documents_url = self._tab_url(announce_url, "documents")
-                self._goto(page, documents_url)
-                documents_html = page.content()
-                lot.documents = self._dedupe_documents([*lot.documents, *self._parse_documents_html(documents_html, announce_url, page)])
-                protocols_url = self._tab_url(announce_url, "protocols")
-                self._goto(page, protocols_url)
-                protocols_html = page.content()
-                lot.documents = self._dedupe_documents([*lot.documents, *self._parse_documents_html(protocols_html, announce_url, page)])
-                body = html_text(" ".join([announce_html, documents_html]))
+                    lot_html = page.content()
+                    self._apply_lot_detail(lot, lot_html)
+                    announce_candidates.extend(self._extract_announce_urls(lot_html))
+                    announce_candidates.extend(self._extract_announce_urls(page.url))
+                announce_candidates.append(announce_url)
+                announce_candidates = self._dedupe_urls(announce_candidates)
+                used_announce_url = announce_candidates[0] if announce_candidates else announce_url
+                documents_url = self._tab_url(used_announce_url, "documents")
+                detail_text_parts = [lot_html]
+                documents_found = False
+                for candidate_url in announce_candidates:
+                    self._goto(page, candidate_url)
+                    announce_html = page.content()
+                    detail_text_parts.append(announce_html)
+                    self._apply_announce_detail(lot, announce_html)
+                    before_count = len(lot.documents)
+                    lot.documents = self._dedupe_documents([*lot.documents, *self._parse_documents_html(announce_html, candidate_url, page)])
+                    candidate_documents_url = self._tab_url(candidate_url, "documents")
+                    self._goto(page, candidate_documents_url)
+                    documents_html = page.content()
+                    detail_text_parts.append(documents_html)
+                    lot.documents = self._dedupe_documents([*lot.documents, *self._parse_documents_html(documents_html, candidate_url, page)])
+                    protocols_url = self._tab_url(candidate_url, "protocols")
+                    self._goto(page, protocols_url)
+                    protocols_html = page.content()
+                    detail_text_parts.append(protocols_html)
+                    lot.documents = self._dedupe_documents([*lot.documents, *self._parse_documents_html(protocols_html, candidate_url, page)])
+                    if len(lot.documents) > before_count:
+                        documents_found = True
+                        used_announce_url = candidate_url
+                        documents_url = candidate_documents_url
+                        break
+                body = html_text(" ".join(detail_text_parts))
                 lot.complaints_count = self._extract_complaints_count(body) or lot.complaints_count
-                lot.raw = {**lot.raw, "detail_text_sample": body[:4000], "documents_url": documents_url}
+                lot.raw = {
+                    **lot.raw,
+                    "announce_url": used_announce_url,
+                    "announce_candidates": announce_candidates,
+                    "detail_text_sample": body[:4000],
+                    "documents_url": documents_url,
+                    "documents_found": documents_found,
+                }
                 return lot
             finally:
                 context.close()
@@ -234,8 +262,8 @@ class GoszakupPlatform(TenderPlatform):
         lot.customer_name = lot.customer_name or lot.organizer_name
         lot.amount = parse_amount(self._first_field(fields, ["Сумма закупки", "Запланированная сумма", "Общая сумма"])) or lot.amount
         lot.status = (self._first_field(fields, ["Статус объявления", "Статус лота"]) or lot.status)[:64]
-        lot.start_date = parse_datetime(self._first_field(fields, ["Дата начала приема заявок", "Начало приема заявок", "Дата начала представления заявок"])) or lot.start_date
-        lot.end_date = parse_datetime(self._first_field(fields, ["Дата окончания приема заявок", "Окончание приема заявок", "Срок окончания приема заявок"])) or lot.end_date
+        lot.start_date = parse_datetime(self._first_field(fields, ["Дата начала приема заявок", "Начало приема заявок", "Дата начала представления заявок", "Срок начала приема заявок"])) or lot.start_date
+        lot.end_date = parse_datetime(self._first_field(fields, ["Дата окончания приема заявок", "Окончание приема заявок", "Срок окончания приема заявок", "Окончание с", "end_date"])) or lot.end_date
         lot.place = self._first_field(fields, ["Место поставки", "Место выполнения", "Адрес поставки", "Юр. адрес организатора"]) or lot.place
         lot.raw = {
             **lot.raw,
@@ -248,8 +276,8 @@ class GoszakupPlatform(TenderPlatform):
         lot.description = self._first_field(fields, ["Дополнительная характеристика", "Краткая характеристика", "Наименование и описание лота", "Описание", "Наименование ТРУ"]) or lot.description
         lot.place = self._first_field(fields, ["Место поставки товара, КАТО", "Место поставки", "Адрес поставки"]) or lot.place
         lot.amount = parse_amount(self._first_field(fields, ["Запланированная сумма", "Сумма 1 год", "Сумма, тг."])) or lot.amount
-        lot.start_date = parse_datetime(self._first_field(fields, ["Дата начала приема заявок", "Начало приема заявок"])) or lot.start_date
-        lot.end_date = parse_datetime(self._first_field(fields, ["Дата окончания приема заявок", "Окончание приема заявок"])) or lot.end_date
+        lot.start_date = parse_datetime(self._first_field(fields, ["Дата начала приема заявок", "Начало приема заявок", "Срок начала приема заявок"])) or lot.start_date
+        lot.end_date = parse_datetime(self._first_field(fields, ["Дата окончания приема заявок", "Окончание приема заявок", "Срок окончания приема заявок", "end_date"])) or lot.end_date
         status = self._first_field(fields, ["Статус лота", "Статус"])
         if status:
             lot.status = status[:64]
@@ -309,7 +337,10 @@ class GoszakupPlatform(TenderPlatform):
             label_node = group.select_one("label")
             label = clean_text(label_node.get_text(" ", strip=True) if label_node else "")
             value_node = group.select_one("input, textarea, select")
-            value = clean_text(value_node.get("value") if value_node else group.get_text(" ", strip=True).replace(label, "", 1))
+            if value_node:
+                value = clean_text(value_node.get("value") or value_node.get_text(" ", strip=True))
+            else:
+                value = clean_text(group.get_text(" ", strip=True).replace(label, "", 1))
             if label and value:
                 fields[label] = value
         for row in soup.select("table tr"):
@@ -361,6 +392,12 @@ class GoszakupPlatform(TenderPlatform):
         match = re.search(r"/subpriceoffer/index/\d+/(\d+)", value or "")
         return match.group(1) if match else None
 
+    def _extract_announce_urls(self, value: str) -> list[str]:
+        urls: list[str] = []
+        for match in re.finditer(r"(?:https://goszakup\.gov\.kz)?/ru/announce/index/(\d+)", value or ""):
+            urls.append(absolute_url(self.settings.goszakup_base_url, f"/ru/announce/index/{match.group(1)}"))
+        return urls
+
     def _extract_customer(self, value: str) -> str | None:
         match = re.search(r"Заказчик:\s*(.+?)(?:\s{2,}|$)", clean_text(value))
         return clean_text(match.group(1)) if match else None
@@ -386,6 +423,17 @@ class GoszakupPlatform(TenderPlatform):
 
     def _tab_url(self, url: str, tab: str) -> str:
         return f"{url}&tab={tab}" if "?" in url else f"{url}?tab={tab}"
+
+    def _dedupe_urls(self, urls: list[str]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for url in urls:
+            clean_url = clean_text(url)
+            if not clean_url or clean_url in seen:
+                continue
+            seen.add(clean_url)
+            result.append(clean_url)
+        return result
 
     def _dedupe_documents(self, docs: list[TenderDocument]) -> list[TenderDocument]:
         seen: set[str] = set()

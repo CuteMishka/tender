@@ -95,6 +95,6 @@ jobs:
           GOSZAKUP_LOTS_COUNT_RECORD: "50"
           GOSZAKUP_LOTS_MAX_PAGES: ${{ github.event.inputs.max_pages || '6' }}
           GOSZAKUP_OWS_TOKEN: ""
-          TELEGRAM_BOT_TOKEN: ""
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ""
         run: python main.py --once

@@ -124,6 +124,18 @@ class TelegramSettings(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
+class UserTelegramBinding(Base):
+    __tablename__ = "user_telegram_bindings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    chat_id: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    username: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
 class Database:
     def __init__(self, url: str) -> None:
         self.engine = create_engine(url, pool_pre_ping=True)
@@ -300,6 +312,18 @@ class Database:
             if not settings or not settings.enabled:
                 return "", ""
             return (settings.bot_token or "").strip(), (settings.chat_id or "").strip()
+
+    def load_user_telegram_chat_ids(self) -> list[str]:
+        with self.session() as session:
+            rows = list(session.scalars(select(UserTelegramBinding.chat_id).where(UserTelegramBinding.enabled.is_(True), UserTelegramBinding.chat_id != "").order_by(UserTelegramBinding.id.asc())))
+        seen: set[str] = set()
+        result: list[str] = []
+        for chat_id in rows:
+            normalized = (chat_id or "").strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                result.append(normalized)
+        return result
 
     def _lot_fingerprint(self, lot: TenderLot) -> str:
         return stable_json_hash({

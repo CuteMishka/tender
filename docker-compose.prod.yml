@@ -50,6 +50,7 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:5173}
       FETCH_DOCUMENT_ALLOWED_HOSTS: ${FETCH_DOCUMENT_ALLOWED_HOSTS:-v3bl.goszakup.gov.kz,goszakup.gov.kz,zakup.gov.kz,ows.goszakup.gov.kz}
       PARSER_POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-1800}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     ports:
       - "${BACKEND_PORT:-8082}:8082"
     healthcheck:

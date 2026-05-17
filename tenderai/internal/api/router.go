@@ -34,6 +34,9 @@ func NewRouter(h *Handler, allowedOrigins []string) http.Handler {
 		s.Delete("/dictionaries/{id}", h.DeleteDictionaryItem)
 		s.Get("/parser/status", h.GetParserStatus)
 		s.Post("/parser/run", h.RunParserNow)
+		s.Get("/settings/telegram", h.GetTelegramSettings)
+		s.Put("/settings/telegram", h.UpdateTelegramSettings)
+		s.Post("/settings/telegram/test", h.TestTelegramSettings)
 		if h.FetchDoc != nil {
 			s.Post("/fetch-document", h.FetchDocument)
 		}
@@ -43,6 +46,9 @@ func NewRouter(h *Handler, allowedOrigins []string) http.Handler {
 			s.Get("/users", h.ListUsers)
 			s.Patch("/users/{id}/role", h.UpdateUserRole)
 			s.Delete("/users/{id}", h.DeleteUser)
+			s.Get("/users/{id}/telegram", h.GetUserTelegramBinding)
+			s.Put("/users/{id}/telegram", h.UpdateUserTelegramBinding)
+			s.Post("/users/{id}/telegram/test", h.TestUserTelegramBinding)
 			s.Get("/registration-requests", h.ListRegistrationRequests)
 			s.Post("/registration-requests/{id}/approve", h.ApproveRegistrationRequest)
 			s.Post("/registration-requests/{id}/reject", h.RejectRegistrationRequest)

@@ -4,6 +4,7 @@ import { Bot, Check, Clock, Loader2, Monitor, Moon, Palette, Play, Send, Sun } f
 import { PageHeader } from "@/components/admin/PageHeader";
 import { pushNotification } from "@/hooks/use-notifications";
 import { useTheme, THEMES } from "@/hooks/use-theme";
+import { getCurrentUser } from "@/lib/auth";
 import { getLocalApiBase } from "@/lib/tenders-api";
 
 export const Route = createFileRoute("/_admin/settings")({
@@ -110,7 +111,6 @@ function Settings() {
   const [settings, setSettings] = useState<SettingsState>(loadSettings);
   const [parserStatus, setParserStatus] = useState<ParserStatus | null>(null);
   const [telegram, setTelegram] = useState<TelegramSettings>({ enabled: false, configured: false, chatId: "" });
-  const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
   const [telegramUsername, setTelegramUsername] = useState("");
   const [telegramLoading, setTelegramLoading] = useState(true);
@@ -119,6 +119,7 @@ function Settings() {
   const [parserRunning, setParserRunning] = useState(false);
   const { theme, setTheme, appearance, setAppearance } = useTheme();
   const parserRequestActive = parserStatus?.lastRequest?.status === "pending" || parserStatus?.lastRequest?.status === "running";
+  const currentUser = getCurrentUser();
 
   useEffect(() => {
     localStorage.setItem(settingsKey, JSON.stringify(settings));
@@ -142,8 +143,12 @@ function Settings() {
   }, [parserRequestActive]);
 
   useEffect(() => {
+    if (!currentUser?.id) {
+      setTelegramLoading(false);
+      return;
+    }
     const base = getLocalApiBase();
-    fetch(`${base}/api/v1/settings/telegram`)
+    fetch(`${base}/api/v1/users/${currentUser.id}/telegram`)
       .then((res) => res.ok ? res.json() : null)
       .then((body) => {
         if (!body) return;
@@ -154,7 +159,7 @@ function Settings() {
       })
       .catch(() => null)
       .finally(() => setTelegramLoading(false));
-  }, []);
+  }, [currentUser?.id]);
 
   const save = () => {
     localStorage.setItem(settingsKey, JSON.stringify(settings));
@@ -164,13 +169,13 @@ function Settings() {
   const saveTelegram = async () => {
     setTelegramSaving(true);
     try {
+      if (!currentUser?.id) throw new Error("Пользователь не найден. Войдите заново.");
       const base = getLocalApiBase();
-      const res = await fetch(`${base}/api/v1/settings/telegram`, {
+      const res = await fetch(`${base}/api/v1/users/${currentUser.id}/telegram`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           enabled: telegram.enabled,
-          botToken: telegramToken.trim(),
           chatId: telegramChatId.trim(),
           username: telegramUsername.trim(),
         }),
@@ -181,7 +186,6 @@ function Settings() {
       setTelegram(data);
       setTelegramChatId(data.chatId || "");
       setTelegramUsername(data.username ? `@${data.username}` : "");
-      setTelegramToken("");
       pushNotification("success", "Telegram сохранён", "Привязка Telegram обновлена.", "/settings");
     } catch (error) {
       pushNotification("error", "Ошибка Telegram", error instanceof Error ? error.message : "Не удалось сохранить настройки.", "/settings");
@@ -193,13 +197,14 @@ function Settings() {
   const testTelegram = async () => {
     setTelegramTesting(true);
     try {
+      if (!currentUser?.id) throw new Error("Пользователь не найден. Войдите заново.");
       const base = getLocalApiBase();
-      const res = await fetch(`${base}/api/v1/settings/telegram/test`, { method: "POST" });
+      const res = await fetch(`${base}/api/v1/users/${currentUser.id}/telegram/test`, { method: "POST" });
       const body = await res.json().catch(() => null);
       if (!res.ok) throw new Error(body?.error || "Не удалось отправить тест");
       pushNotification("success", "Тест отправлен", "Проверьте сообщение от Telegram-бота.", "/settings");
     } catch (error) {
-      pushNotification("error", "Telegram недоступен", error instanceof Error ? error.message : "Проверьте token и chat_id.", "/settings");
+      pushNotification("error", "Telegram недоступен", error instanceof Error ? error.message : "Проверьте @username/chat_id и что вы написали боту /start.", "/settings");
     } finally {
       setTelegramTesting(false);
     }
@@ -314,13 +319,12 @@ function Settings() {
                   </p>
                   <div className="mt-3 flex flex-wrap gap-2 text-xs">
                     <span className={`rounded-full px-2.5 py-1 font-medium ${telegram.configured ? "bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-300" : "bg-muted text-muted-foreground"}`}>
-                      {telegram.configured ? "Бот настроен" : "Бот не настроен"}
+                      {telegram.configured ? "Аккаунт привязан" : "Аккаунт не привязан"}
                     </span>
                     <span className={`rounded-full px-2.5 py-1 font-medium ${telegram.enabled ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
                       {telegram.enabled ? "Уведомления включены" : "Уведомления выключены"}
                     </span>
                     {telegram.username && <span className="rounded-full bg-muted px-2.5 py-1 font-medium text-muted-foreground">@{telegram.username}</span>}
-                    {telegram.maskedToken && <span className="rounded-full bg-muted px-2.5 py-1 font-medium text-muted-foreground">{telegram.maskedToken}</span>}
                   </div>
                 </div>
               </div>
@@ -336,17 +340,7 @@ function Settings() {
               </label>
             </div>
 
-            <div className="relative mt-6 grid gap-4 lg:grid-cols-[1fr_1fr_1fr_auto]">
-              <div>
-                <label className="mb-1.5 block text-sm font-medium">Bot token</label>
-                <input
-                  type="password"
-                  value={telegramToken}
-                  onChange={(e) => setTelegramToken(e.target.value)}
-                  placeholder={telegram.maskedToken ? "Оставьте пустым, чтобы не менять token" : "123456789:AA..."}
-                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
+            <div className="relative mt-6 grid gap-4 lg:grid-cols-[1fr_1fr_auto]">
               <div>
                 <label className="mb-1.5 block text-sm font-medium">@username</label>
                 <input
@@ -386,7 +380,7 @@ function Settings() {
               </div>
             </div>
             <p className="relative mt-4 text-xs text-muted-foreground">
-              Упрощённый вариант: укажите `Bot token` и свой `@username`, предварительно написав боту `/start`. Система сама найдёт `chat_id`. Если Telegram не нашёл пользователя, можно вручную вставить `chat_id`.
+              Напишите боту `/start`, укажите свой `@username` и нажмите «Сохранить». Система сама найдёт `chat_id`. Если Telegram не нашёл пользователя, можно вручную вставить `chat_id`.
             </p>
           </div>
         </div>

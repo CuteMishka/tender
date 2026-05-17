@@ -74,82 +74,94 @@ class NotificationService:
 
     def _send_telegram(self, text: str) -> None:
         bot_token, chat_id = self.db.load_telegram_settings()
-        if not bot_token or not chat_id:
+        if not bot_token:
             bot_token = self.telegram_bot_token
+        if not chat_id:
             chat_id = self.telegram_chat_id
-        if not bot_token or not chat_id:
+        user_chat_ids = self.db.load_user_telegram_chat_ids()
+        chat_ids = user_chat_ids or ([chat_id] if chat_id else [])
+        if not bot_token or not chat_ids:
             return
-        try:
-            response = httpx.post(
-                f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": text[:4096],
-                    "disable_web_page_preview": True,
-                },
-                timeout=self.timeout_seconds,
-            )
-            response.raise_for_status()
-        except Exception as exc:
-            self.log.warning("telegram_notification_failed", error=str(exc))
+        for target_chat_id in chat_ids:
+            try:
+                response = httpx.post(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    json={
+                        "chat_id": target_chat_id,
+                        "text": text[:4096],
+                        "parse_mode": "HTML",
+                        "disable_web_page_preview": False,
+                    },
+                    timeout=self.timeout_seconds,
+                )
+                response.raise_for_status()
+            except Exception as exc:
+                self.log.warning("telegram_notification_failed", chat_id=target_chat_id, error=str(exc))
 
     def _format_new_lot_message(self, lot: TenderLot) -> str:
         lines = [
-            "Новый подходящий тендер",
-            f"Площадка: {lot.source}",
-            f"Лот: {lot.external_id}",
-            f"Название: {lot.title}",
-            f"Ключ: {lot.raw.get('matched_keyword') or lot.raw.get('keyword') or 'не указан'}",
-            f"Статус: {lot.status or 'не указан'}",
+            "🟢 <b>Новый подходящий тендер</b>",
+            "",
+            f"🏛 <b>Площадка:</b> {lot.source}",
+            f"🔢 <b>Лот:</b> {lot.external_id}",
+            f"📌 <b>Название:</b> {self._escape(lot.title)}",
+            f"🎯 <b>Ключ:</b> {self._escape(str(lot.raw.get('matched_keyword') or lot.raw.get('keyword') or 'не указан'))}",
+            f"📍 <b>Статус:</b> {self._escape(lot.status or 'не указан')}",
         ]
         if lot.amount is not None:
-            lines.append(f"Сумма: {self._format_amount(lot.amount)}")
+            lines.append(f"💰 <b>Сумма:</b> {self._format_amount(lot.amount)}")
         if lot.end_date:
-            lines.append(f"Дедлайн: {lot.end_date:%d.%m.%Y %H:%M}")
+            lines.append(f"⏰ <b>Дедлайн:</b> {lot.end_date:%d.%m.%Y %H:%M}")
         if lot.customer_name:
-            lines.append(f"Заказчик: {lot.customer_name}")
+            lines.append(f"👤 <b>Заказчик:</b> {self._escape(lot.customer_name)}")
         if lot.place:
-            lines.append(f"Место: {lot.place}")
+            lines.append(f"📦 <b>Место:</b> {self._escape(lot.place)}")
+        documents_count = len(lot.documents or [])
+        if documents_count:
+            lines.append(f"📎 <b>Документы:</b> {documents_count}")
         if lot.url:
-            lines.append(f"Ссылка: {lot.url}")
+            lines.extend(["", f"🔗 <a href=\"{self._escape(lot.url)}\">Открыть на площадке</a>"])
         return "\n".join(lines)
 
     def _format_amount(self, amount: Decimal) -> str:
         return f"{amount:,.2f} ₸".replace(",", " ").replace(".00", "")
 
+    def _escape(self, value: str) -> str:
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     def _format_lot_changed_message(self, lot: TenderLot, message: str) -> str:
         lines = [
-            "Изменение по тендеру",
-            f"Площадка: {lot.source}",
-            f"Лот: {lot.external_id}",
-            f"Название: {lot.title}",
-            f"Изменения: {message}",
+            "⚠️ <b>Изменение по тендеру</b>",
+            f"🏛 <b>Площадка:</b> {lot.source}",
+            f"🔢 <b>Лот:</b> {lot.external_id}",
+            f"📌 <b>Название:</b> {self._escape(lot.title)}",
+            f"📝 <b>Изменения:</b> {self._escape(message)}",
         ]
         if lot.url:
-            lines.append(f"Ссылка: {lot.url}")
+            lines.extend(["", f"🔗 <a href=\"{self._escape(lot.url)}\">Открыть на площадке</a>"])
         return "\n".join(lines)
 
     def _format_rag_indexed_message(self, lot: TenderLot, document_name: str, text_chars: int | None) -> str:
         lines = [
-            "Документ индексирован в RAG",
-            f"Площадка: {lot.source}",
-            f"Лот: {lot.external_id}",
-            f"Документ: {document_name}",
-            f"Символов: {text_chars or 0}",
+            "📄 <b>Документ индексирован в RAG</b>",
+            f"🏛 <b>Площадка:</b> {lot.source}",
+            f"🔢 <b>Лот:</b> {lot.external_id}",
+            f"📎 <b>Документ:</b> {self._escape(document_name)}",
+            f"🔤 <b>Символов:</b> {text_chars or 0}",
         ]
         if lot.url:
-            lines.append(f"Ссылка: {lot.url}")
+            lines.extend(["", f"🔗 <a href=\"{self._escape(lot.url)}\">Открыть на площадке</a>"])
         return "\n".join(lines)
 
     def _format_winner_message(self, lot: TenderLot, won: bool) -> str:
         lines = [
-            "Мы выиграли тендер" if won else "Определён победитель тендера",
-            f"Площадка: {lot.source}",
-            f"Лот: {lot.external_id}",
-            f"Название: {lot.title}",
-            f"Победитель: {lot.winner_name or 'не указан'}",
-            f"БИН: {lot.winner_bin or 'не указан'}",
+            "🏆 <b>Мы выиграли тендер</b>" if won else "🏁 <b>Определён победитель тендера</b>",
+            f"🏛 <b>Площадка:</b> {lot.source}",
+            f"🔢 <b>Лот:</b> {lot.external_id}",
+            f"📌 <b>Название:</b> {self._escape(lot.title)}",
+            f"🏢 <b>Победитель:</b> {self._escape(lot.winner_name or 'не указан')}",
+            f"🆔 <b>БИН:</b> {self._escape(lot.winner_bin or 'не указан')}",
         ]
         if lot.url:
-            lines.append(f"Ссылка: {lot.url}")
+            lines.extend(["", f"🔗 <a href=\"{self._escape(lot.url)}\">Открыть на площадке</a>"])
         return "\n".join(lines)
