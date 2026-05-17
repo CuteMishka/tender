@@ -1,0 +1,74 @@
+function site_url() {
+    var lang = 'ru';
+    var url = window.location.href.split('/');
+    var http = location.protocol;
+    var hostname = window.location.hostname;
+
+    switch (url[3]) {
+        case 'kz':
+        case 'en':
+            lang = url[3];
+            break
+        default:
+            lang = 'ru';
+            break;
+    }
+
+    return http + '//' + hostname + '/' + lang + '/announce/';
+}
+function actionModalShowFiles(idAnno, idGroup)
+{
+    $('#ModalShowFilesBody').load(site_url() + 'actionAjaxModalShowFiles/' + idAnno + '/' + idGroup, function (result) {
+        $('#ModalShowFiles').modal({show: true, backdrop: 'static'});
+    });
+}
+
+$(function(){
+    $('.actionModalShowFiles').on('click', function(){
+        var id = $(this).data('id');
+        var group = $(this).data('group');
+        actionModalShowFiles(id, group);
+    });
+});
+
+
+function jsSignProtPredBySecretar(announce_id) {
+    var formProtPredSign = $('#signingProtPred');
+    if (typeof (form_sign_helper) != "undefined") {
+        var check_files_status = form_sign_helper.check_statuses();
+        if (check_files_status != null) {
+            if (check_files_status != true) {
+                alert('Дождитесь проверки файла');
+                return;
+            }
+        }
+        form_sign_helper.generate_input(formProtPredSign);
+    }
+    var dataS = formProtPredSign.serialize();
+    $.ajax({
+        type: "POST",
+        async: false,
+        cache: false,
+        url: site_url() + 'actionSignProtPredBySecretar/' + announce_id,
+        data: dataS,
+        dataType: 'json',
+        success: function (data) {
+            if (data.status == 1)
+            {
+                $('#errors_sign_ppd').html('<div class="alert alert-success">' + data.message + '</div>');
+                window.location.href = site_url() + 'index/' + announce_id;
+            }
+            if (data.status == 2)
+            {
+                $('#errors_sign_ppd').html('<div class="alert alert-danger">' + data.message + '</div>');
+            }
+            return;
+        },
+        error: function () {
+            $('#errors_sign_ppd').html('<div class="alert alert-danger">Ошибка выполнения запроса, попробуйте позже</div>');
+            return;
+        }
+    });
+}
+
+

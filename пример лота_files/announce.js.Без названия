@@ -1,0 +1,197 @@
+
+function site_url() {
+    var lang = 'ru';
+    var url = window.location.href.split('/');
+    var http = location.protocol;
+    var hostname = window.location.hostname;
+
+    switch (url[3]) {
+        case 'kz':
+        case 'en':
+            lang = url[3];
+            break;
+        default:
+            lang = 'ru';
+            break;
+    }
+
+    return http + '//' + hostname + '/' + lang + '/announce/';
+}
+
+function suspendAnnounce()
+{
+    var form = $('#formData');
+    var id = form.find('#id_record').val();
+
+    var lang = 'ru';
+    var url = window.location.href.split('/');
+    var http = location.protocol;
+    var hostname = window.location.hostname;
+
+    switch (url[3]) {
+        case 'kz':
+        case 'en':
+            lang = url[3];
+            break
+        default:
+            lang = 'ru';
+            break;
+    }
+
+    location.href = http + '//' + hostname + '/' + lang + '/announce_suspend/index/' + id;
+}
+
+function show_court_info(selector)
+{
+    var court = $(selector).data("court");
+    var element = $(selector).data("element");
+    var id_anno = $(selector).data("announce");
+    $('#ajax_result_court').empty();
+    $('.infoCourt').empty();
+    $.ajax({
+        type: "POST",
+        async: true,
+        cache: false,
+        url: site_url() + 'ajax_show_court_info/' + id_anno,
+        data: {idCourt: court},
+        dataType: 'json',
+        success: function (data) {
+            if (data.status == 1) {
+                $('#' + element + '' + court).html(data.html);
+            } else if (data.status == 2) {
+                $('#ajax_result_court').html('<div class="alert alert-danger">' + data.message + '</div>');
+            }
+        },
+        error: function () {
+            $('#ajax_result_court').html('<div class="alert alert-danger">Ошибка выполнения запроса, попробуйте позже</div>');
+            return;
+        }
+    });
+}
+
+$(document).ready(function () {
+    var lang = 'ru';
+    var url = window.location.href.split('/');
+    var http = location.protocol;
+    var hostname = window.location.hostname;
+
+    switch (url[3]) {
+        case 'kz':
+        case 'en':
+            lang = url[3];
+            break
+        default:
+            lang = 'ru';
+            break;
+    }
+
+    var url_con = http + '//' + hostname + '/' + lang + '/consideration/';
+    var announce_id = url[6];
+    $('#protocol_preliminary_admission').click(function () {
+        $.ajax({
+            type: "POST",
+            async: false,
+            cache: false,
+            url: url_con + 'actionCreateProtPret/' + announce_id,
+            dataType: 'json',
+            beforeSend: function ()
+            {
+                $('#errors').hide();
+            },
+            success: function (data) {
+                if (data.status == 1) {
+                    location.reload(true);
+                }
+                else
+                {
+                    $('#errors').html(data.message);
+                    $('#errors').show();
+                }
+            },
+            error: function () {
+                $('#errors').html('Ошибка выполнения запроса, попробуйте позже');
+                $('#errors').show();
+            }
+        });
+        return false;
+    });
+
+    $('#generatePD').click(function(){
+        generate_pd(announce_id);
+    });
+});
+
+function ajax_set_sign_pi_apartment(idAnno) {
+    var formData = $('#sign_pi_apartment').serialize();
+    $.ajax({
+        type: "POST",
+        async: true,
+        cache: false,
+        url: site_url() + 'ajax_set_sign_pi_apartment/' + idAnno,
+        data: formData,
+        dataType: 'json',
+        success: function (data) {
+            if (data.status == 1) {
+                location.reload(true);
+            } else if (data.status == 2) {
+                $('#result_sign_pi_apartment').html('<div class="alert alert-danger">' + data.message + '</div>');
+            }
+        },
+        error: function () {
+            $('#result_sign_pi_apartment').html('<div class="alert alert-danger">Ошибка выполнения запроса, попробуйте позже</div>');
+            return;
+        }
+    });
+}
+
+function ajax_setSignPod(idAnno)
+{
+    var formData = $('#setSignPod').serialize();
+    $.ajax({
+        type: "POST",
+        async: true,
+        cache: false,
+        url: site_url() + 'ajax_setSignPod/' + idAnno,
+        data: formData,
+        dataType: 'json',
+        success: function (data) {
+            if (data.status == 1) {
+                location.reload(true);
+            } else if (data.status == 2) {
+                $('#formPodSignResult').html('<div class="alert alert-danger">' + data.message + '</div>');
+            }
+        },
+        error: function () {
+            $('#formPodSignResult').html('<div class="alert alert-danger">Ошибка выполнения запроса, попробуйте позже</div>');
+            return;
+        }
+    });
+}
+
+function generate_pd(announce_id)
+{
+    $('#errorsPD').hide();
+    $('#btnGeneratePD').hide();
+    $('#proccessPD').show();
+    $.ajax({
+        type: "POST",
+        url: site_url() + 'ajax_generate_pd/' + announce_id,
+        dataType: 'json',
+        data: {generate:'Y'},
+        success: function (data) {
+            if (data.status == 1) {
+                location.reload(true);
+            }
+            else
+            {
+                $('#errors').html(data.message);
+                $('#errors').show();
+            }
+        },
+        error: function () {
+            $('#errors').html('Ошибка выполнения запроса, попробуйте позже');
+            $('#errors').show();
+        }
+    });
+    return false;
+}

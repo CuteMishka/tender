@@ -43,15 +43,14 @@ class ZakupPlatform(TenderPlatform):
             page = context.new_page()
             try:
                 page_index = 0
-                url = self._lots_url(0)
-                self._goto(page, url)
-                self._wait_lots_ready(page)
-                self._set_page_size(page)
                 while self.settings.zakup_lots_max_pages == 0 or page_index < self.settings.zakup_lots_max_pages:
                     if stop_all:
                         break
-                    page_index += 1
+                    url = self._lots_url(page_index)
+                    self._goto(page, url)
                     self._wait_lots_ready(page)
+                    if page_index == 0:
+                        self._set_page_size(page)
                     html = page.content()
                     page_lots = self._parse_html(html, page.url)
                     if not page_lots:
@@ -88,10 +87,7 @@ class ZakupPlatform(TenderPlatform):
                     if new_on_page == 0:
                         self.log.info("zakup_no_new_lots_on_page", requested_url=page.url, parsed_lots=len(page_lots))
                         break
-                    if self.settings.zakup_lots_max_pages > 0 and page_index >= self.settings.zakup_lots_max_pages:
-                        break
-                    if not self._go_next_page(page):
-                        break
+                    page_index += 1
             finally:
                 context.close()
                 browser.close()
@@ -142,8 +138,9 @@ class ZakupPlatform(TenderPlatform):
         params = {
             "limit": self.settings.zakup_lots_limit,
             "offset": page_index * self.settings.zakup_lots_limit,
-            "system_id__in": self.settings.zakup_lots_system_ids,
         }
+        if self.settings.zakup_lots_system_ids:
+            params["system_id__in"] = self.settings.zakup_lots_system_ids
         return f"{self.settings.zakup_lots_url}?{urlencode(params)}"
 
     def _chromium_args(self) -> list[str]:

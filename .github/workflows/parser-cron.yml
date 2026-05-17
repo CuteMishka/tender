@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       max_pages:
-        description: "Max zakup pages to scan. 0 means no explicit parser limit."
+        description: "Max goszakup pages to scan. 0 means no explicit parser limit."
         required: false
         default: "6"
       max_lots:
@@ -49,15 +49,15 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
 
-      - name: Check zakup.gov.kz connectivity
+      - name: Check goszakup.gov.kz connectivity
         run: |
           python - <<'PY'
           import socket
           import urllib.request
 
-          host = "zakup.gov.kz"
+          host = "goszakup.gov.kz"
           print("dns", host, socket.gethostbyname(host))
-          req = urllib.request.Request("https://zakup.gov.kz/home/lots", headers={"User-Agent": "Mozilla/5.0"})
+          req = urllib.request.Request("https://goszakup.gov.kz/ru/search/lots", headers={"User-Agent": "Mozilla/5.0"})
           with urllib.request.urlopen(req, timeout=30) as response:
               print("http_status", response.status)
               print(response.read(200).decode("utf-8", "ignore"))
@@ -81,15 +81,19 @@ jobs:
           STOP_AT_FIRST_SEEN_LOT: "false"
           PROCESS_EXISTING_LOTS: "true"
           MAX_LOTS_PER_CYCLE: ${{ github.event.inputs.max_lots || '600' }}
-          PLATFORMS: "zakup"
+          PLATFORMS: "goszakup"
           DEFAULT_KEYWORDS: ""
           OUR_BINS: ${{ secrets.OUR_BINS }}
           ZAKUP_PUBLIC_BASE_URL: "https://zakup.gov.kz"
           ZAKUP_LOTS_URL: "https://zakup.gov.kz/home/lots"
           ZAKUP_LOTS_LIMIT: "100"
           ZAKUP_LOTS_MAX_PAGES: ${{ github.event.inputs.max_pages || '6' }}
-          ZAKUP_LOTS_SYSTEM_IDS: "1__2__3"
+          ZAKUP_LOTS_SYSTEM_IDS: ""
           ZAKUP_HOST_RESOLVER_IP: ${{ secrets.ZAKUP_HOST_RESOLVER_IP }}
+          GOSZAKUP_BASE_URL: "https://goszakup.gov.kz"
+          GOSZAKUP_SEARCH_URL: "https://goszakup.gov.kz/ru/search/lots"
+          GOSZAKUP_LOTS_COUNT_RECORD: "50"
+          GOSZAKUP_LOTS_MAX_PAGES: ${{ github.event.inputs.max_pages || '6' }}
           GOSZAKUP_OWS_TOKEN: ""
           TELEGRAM_BOT_TOKEN: ""
           TELEGRAM_CHAT_ID: ""

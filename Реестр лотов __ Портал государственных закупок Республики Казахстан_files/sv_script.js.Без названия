@@ -1,0 +1,69 @@
+$(document).ready(function(){
+//sv_settings
+    var selector='#content, #content *, .navbar, .navbar *, .nav, .nav*, .container,  .container *, body';
+    //-------------
+    $('.fs-outer button').click(function(){
+        $(selector).css('font-size',$(this).css('font-size'));
+        Cookies.set('font-size',$(this).attr('id'));
+        $('.fs-outer button').removeClass('active');
+        $(this).addClass("active");
+
+    });
+
+    $('.cs-outer button').click(function(){
+        $(selector).css('color',$(this).css('color'));
+        $(selector).css('background',$(this).css('background'));
+        Cookies.set('cs',$(this).attr('id'));
+        $('.cs-outer button').removeClass('active');
+        $(this).addClass("active");
+
+    });
+
+    $('.img-outer button').click(function(){
+        if (Cookies.get('img')!='on'){
+            $('img').css('display','none');
+            Cookies.set('img','on');
+            $('#img-onoff-text').text(' Включить');
+            $(this).addClass("active");
+        } else
+        {
+            $('img').css('display','block');
+            Cookies.set('img','off');
+            $('#img-onoff-text').text(' Выключить');
+            $(this).removeClass("active");
+        }
+    });
+
+    if (Cookies.get('sv_on')=='true'){
+        $('#sv_on').addClass('active');
+        $('#sv_settings').css('display','block');
+        if (Cookies.get('font-size')!==null){
+            $('#'+Cookies.get('font-size')).click();
+        }
+        if (Cookies.get('cs')!==null){
+            $('#'+Cookies.get('cs')).click();
+        }
+
+    }
+
+
+    $('#sv_on').click(
+        function(){
+            if (Cookies.get('sv_on')!='true'){
+                Cookies.set('sv_on', 'true');
+                if (Cookies.get('font-size')=="null"){
+                    $('.fs-n').click();
+                }
+                if (Cookies.get('cs')=="null"){
+                    $('.cs-bw').click();
+                }
+            }
+            else
+            {
+                Cookies.set('sv_on', 'false');
+            }
+            location.reload();
+        }
+    );
+
+});

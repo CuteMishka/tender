@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     stop_at_first_seen_lot: bool = False
     process_existing_lots: bool = True
     max_lots_per_cycle: int = Field(default=0, ge=0)
-    platforms_csv: str = Field(default="zakup", validation_alias="PLATFORMS")
+    platforms_csv: str = Field(default="goszakup", validation_alias="PLATFORMS")
     default_keywords_csv: str = Field(
         default="",
         validation_alias="DEFAULT_KEYWORDS",
@@ -36,6 +36,8 @@ class Settings(BaseSettings):
 
     goszakup_base_url: str = "https://goszakup.gov.kz"
     goszakup_search_url: str = "https://goszakup.gov.kz/ru/search/lots"
+    goszakup_lots_count_record: int = Field(default=50, ge=10, le=50)
+    goszakup_lots_max_pages: int = Field(default=0, ge=0, le=1000)
     goszakup_ows_base_url: str = "https://ows.goszakup.gov.kz"
     goszakup_ows_graphql_url: str = "https://ows.goszakup.gov.kz/v3/graphql"
     goszakup_ows_token: str | None = None
@@ -44,7 +46,7 @@ class Settings(BaseSettings):
     zakup_host_resolver_ip: str | None = None
     zakup_lots_limit: int = Field(default=100, ge=1, le=100)
     zakup_lots_max_pages: int = Field(default=0, ge=0, le=1000)
-    zakup_lots_system_ids: str = "1__2__3"
+    zakup_lots_system_ids: str = ""
     zakup_ows_limit_per_page: int = Field(default=200, ge=1, le=200)
     zakup_ows_max_pages_per_keyword: int = Field(default=0, ge=0, le=1000)
     samruk_search_url: str = "https://zakupki.kz/result"
