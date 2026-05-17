@@ -137,9 +137,9 @@ function Settings() {
 
   useEffect(() => {
     loadParserStatus();
-    const timer = window.setInterval(loadParserStatus, 30_000);
+    const timer = window.setInterval(loadParserStatus, parserRequestActive ? 5_000 : 30_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [parserRequestActive]);
 
   useEffect(() => {
     const base = getLocalApiBase();
@@ -212,7 +212,7 @@ function Settings() {
       const res = await fetch(`${base}/api/v1/parser/run`, { method: "POST" });
       const body = await res.json().catch(() => null);
       if (!res.ok) throw new Error(body?.error || "Не удалось запустить парсер");
-      pushNotification("success", "Парсер поставлен в очередь", "Запуск начнётся в течение нескольких секунд.", "/settings");
+      pushNotification("success", "Парсер запускается", "GitHub Actions workflow запущен. Статус обновится автоматически.", "/settings");
       await loadParserStatus();
     } catch (error) {
       pushNotification("error", "Парсер не запущен", error instanceof Error ? error.message : "Проверьте backend и базу данных.", "/settings");
@@ -410,7 +410,7 @@ function Settings() {
                 style={{ background: "var(--gradient-primary)" }}
               >
                 {parserRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                {parserRequestActive ? "Запуск в очереди" : "Запустить сейчас"}
+                {parserRequestActive ? "Парсер запускается" : "Запустить сейчас"}
               </button>
               <span className={`rounded-full px-2 py-1 text-xs font-medium ${parserStatus?.configured ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>
                 {parserStatus?.configured ? "Подключён" : "Нет данных"}
