@@ -29,7 +29,7 @@ func InitDB() *gorm.DB {
 		log.Fatalf("Ошибка подключения к базе данных: %v", err)
 	}
 
-	if err := db.AutoMigrate(&domain.User{}, &domain.RegistrationRequest{}, &domain.DictionaryItem{}, &tenderplus.SavedLot{}, &analyticsModels.HistoricalLot{}, &analyticsModels.TrackedCustomer{}); err != nil {
+	if err := db.AutoMigrate(&domain.User{}, &domain.RegistrationRequest{}, &domain.DictionaryItem{}, &domain.ParserRunRequest{}, &tenderplus.SavedLot{}, &analyticsModels.HistoricalLot{}, &analyticsModels.TrackedCustomer{}); err != nil {
 		log.Fatalf("Ошибка AutoMigrate: %v", err)
 	}
 	ensureAdminUser(db)

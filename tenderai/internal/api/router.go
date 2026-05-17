@@ -33,6 +33,7 @@ func NewRouter(h *Handler, allowedOrigins []string) http.Handler {
 		s.Put("/dictionaries/{id}", h.UpdateDictionaryItem)
 		s.Delete("/dictionaries/{id}", h.DeleteDictionaryItem)
 		s.Get("/parser/status", h.GetParserStatus)
+		s.Post("/parser/run", h.RunParserNow)
 		if h.FetchDoc != nil {
 			s.Post("/fetch-document", h.FetchDocument)
 		}

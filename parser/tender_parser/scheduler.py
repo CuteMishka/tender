@@ -44,7 +44,23 @@ class ParserScheduler:
                 self.log.exception("parser_cycle_failed", error=str(exc))
             elapsed = time.monotonic() - started
             sleep_for = max(5, self.settings.poll_interval_seconds - elapsed)
-            time.sleep(sleep_for)
+            self._sleep_or_run_requested(sleep_for)
+
+    def _sleep_or_run_requested(self, sleep_for: float) -> None:
+        deadline = time.monotonic() + sleep_for
+        while time.monotonic() < deadline:
+            request_id = self.db.claim_run_request()
+            if request_id is not None:
+                self.log.info("manual_parser_run_requested", request_id=request_id)
+                try:
+                    self.run_once()
+                    self.db.finish_run_request(request_id, "completed")
+                    self.log.info("manual_parser_run_finished", request_id=request_id)
+                except Exception as exc:
+                    self.db.finish_run_request(request_id, "failed", str(exc))
+                    self.log.exception("manual_parser_run_failed", request_id=request_id, error=str(exc))
+                deadline = time.monotonic() + self.settings.poll_interval_seconds
+            time.sleep(min(5, max(0, deadline - time.monotonic())))
 
     def run_once(self) -> None:
         keywords = self.keywords.load_active()

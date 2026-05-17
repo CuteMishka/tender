@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/dauren/tender/internal/domain"
 )
 
 type ParserStatusDTO struct {
@@ -14,6 +17,7 @@ type ParserStatusDTO struct {
 	IntervalSeconds int              `json:"intervalSeconds"`
 	NextRunAt       string           `json:"nextRunAt,omitempty"`
 	LastRun         *ParserRunDTO    `json:"lastRun,omitempty"`
+	LastRequest     *ParserRequestDTO `json:"lastRequest,omitempty"`
 }
 
 type ParserRunDTO struct {
@@ -26,6 +30,16 @@ type ParserRunDTO struct {
 	LotsFound   int              `json:"lotsFound"`
 	LotsChanged int              `json:"lotsChanged"`
 	Errors      []map[string]any `json:"errors"`
+}
+
+type ParserRequestDTO struct {
+	ID          uint   `json:"id"`
+	RequestedAt string `json:"requestedAt"`
+	RequestedBy string `json:"requestedBy"`
+	Status      string `json:"status"`
+	StartedAt   string `json:"startedAt,omitempty"`
+	FinishedAt  string `json:"finishedAt,omitempty"`
+	Message     string `json:"message,omitempty"`
 }
 
 type parserRunRow struct {
@@ -66,7 +80,7 @@ func (h *Handler) GetParserStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if row.ID == 0 {
-		writeParserStatus(w, ParserStatusDTO{Configured: true, IntervalSeconds: interval})
+		writeParserStatus(w, ParserStatusDTO{Configured: true, IntervalSeconds: interval, LastRequest: h.lastParserRequest()})
 		return
 	}
 	dto := ParserRunDTO{
@@ -88,7 +102,63 @@ func (h *Handler) GetParserStatus(w http.ResponseWriter, r *http.Request) {
 		IntervalSeconds: interval,
 		NextRunAt:       next.Format(time.RFC3339),
 		LastRun:         &dto,
+		LastRequest:     h.lastParserRequest(),
 	})
+}
+
+func (h *Handler) RunParserNow(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "database is not configured")
+		return
+	}
+	requestedBy := strings.TrimSpace(r.Header.Get("X-User-Email"))
+	if requestedBy == "" {
+		requestedBy = "admin"
+	}
+	var existing domain.ParserRunRequest
+	if err := h.DB.Where("status IN ?", []string{"pending", "running"}).Order("requested_at DESC").First(&existing).Error; err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(parserRequestDTO(existing))
+		return
+	}
+	req := domain.ParserRunRequest{RequestedBy: requestedBy, Status: "pending"}
+	if err := h.DB.Create(&req).Error; err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "не удалось поставить парсер в очередь")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(parserRequestDTO(req))
+}
+
+func (h *Handler) lastParserRequest() *ParserRequestDTO {
+	if h.DB == nil {
+		return nil
+	}
+	var req domain.ParserRunRequest
+	if err := h.DB.Order("requested_at DESC").First(&req).Error; err != nil {
+		return nil
+	}
+	dto := parserRequestDTO(req)
+	return &dto
+}
+
+func parserRequestDTO(req domain.ParserRunRequest) ParserRequestDTO {
+	dto := ParserRequestDTO{
+		ID:          req.ID,
+		RequestedAt: req.RequestedAt.Format(time.RFC3339),
+		RequestedBy: req.RequestedBy,
+		Status:      req.Status,
+		Message:     req.Message,
+	}
+	if req.StartedAt != nil {
+		dto.StartedAt = req.StartedAt.Format(time.RFC3339)
+	}
+	if req.FinishedAt != nil {
+		dto.FinishedAt = req.FinishedAt.Format(time.RFC3339)
+	}
+	return dto
 }
 
 func parserIntervalSeconds() int {

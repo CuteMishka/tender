@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Bot, Check, Clock, Loader2, Monitor, Moon, Palette, Send, Sun } from "lucide-react";
+import { Bot, Check, Clock, Loader2, Monitor, Moon, Palette, Play, Send, Sun } from "lucide-react";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { pushNotification } from "@/hooks/use-notifications";
 import { useTheme, THEMES } from "@/hooks/use-theme";
@@ -22,6 +22,15 @@ type ParserStatus = {
   configured: boolean;
   intervalSeconds: number;
   nextRunAt?: string;
+  lastRequest?: {
+    id: number;
+    requestedAt: string;
+    requestedBy: string;
+    status: string;
+    startedAt?: string;
+    finishedAt?: string;
+    message?: string;
+  };
   lastRun?: {
     id: number;
     startedAt: string;
@@ -107,22 +116,28 @@ function Settings() {
   const [telegramLoading, setTelegramLoading] = useState(true);
   const [telegramSaving, setTelegramSaving] = useState(false);
   const [telegramTesting, setTelegramTesting] = useState(false);
+  const [parserRunning, setParserRunning] = useState(false);
   const { theme, setTheme, appearance, setAppearance } = useTheme();
+  const parserRequestActive = parserStatus?.lastRequest?.status === "pending" || parserStatus?.lastRequest?.status === "running";
 
   useEffect(() => {
     localStorage.setItem(settingsKey, JSON.stringify(settings));
   }, [settings]);
 
-  useEffect(() => {
+  const loadParserStatus = async () => {
     const base = getLocalApiBase();
-    const loadStatus = () => {
-      fetch(`${base}/api/v1/parser/status`)
-        .then((res) => res.ok ? res.json() : null)
-        .then((body) => setParserStatus(body && !body.error ? body as ParserStatus : null))
-        .catch(() => setParserStatus(null));
-    };
-    loadStatus();
-    const timer = window.setInterval(loadStatus, 30_000);
+    try {
+      const res = await fetch(`${base}/api/v1/parser/status`);
+      const body = res.ok ? await res.json() : null;
+      setParserStatus(body && !body.error ? body as ParserStatus : null);
+    } catch {
+      setParserStatus(null);
+    }
+  };
+
+  useEffect(() => {
+    loadParserStatus();
+    const timer = window.setInterval(loadParserStatus, 30_000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -187,6 +202,22 @@ function Settings() {
       pushNotification("error", "Telegram недоступен", error instanceof Error ? error.message : "Проверьте token и chat_id.", "/settings");
     } finally {
       setTelegramTesting(false);
+    }
+  };
+
+  const runParserNow = async () => {
+    setParserRunning(true);
+    try {
+      const base = getLocalApiBase();
+      const res = await fetch(`${base}/api/v1/parser/run`, { method: "POST" });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.error || "Не удалось запустить парсер");
+      pushNotification("success", "Парсер поставлен в очередь", "Запуск начнётся в течение нескольких секунд.", "/settings");
+      await loadParserStatus();
+    } catch (error) {
+      pushNotification("error", "Парсер не запущен", error instanceof Error ? error.message : "Проверьте backend и базу данных.", "/settings");
+    } finally {
+      setParserRunning(false);
     }
   };
 
@@ -371,9 +402,20 @@ function Settings() {
                 <p className="text-sm text-muted-foreground">Последний запуск: {formatSince(parserStatus?.lastRun?.startedAt)}</p>
               </div>
             </div>
-            <span className={`rounded-full px-2 py-1 text-xs font-medium ${parserStatus?.configured ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>
-              {parserStatus?.configured ? "Подключён" : "Нет данных"}
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={runParserNow}
+                disabled={parserRunning || parserRequestActive}
+                className="inline-flex h-9 items-center gap-2 rounded-lg px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+                style={{ background: "var(--gradient-primary)" }}
+              >
+                {parserRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                {parserRequestActive ? "Запуск в очереди" : "Запустить сейчас"}
+              </button>
+              <span className={`rounded-full px-2 py-1 text-xs font-medium ${parserStatus?.configured ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>
+                {parserStatus?.configured ? "Подключён" : "Нет данных"}
+              </span>
+            </div>
           </div>
           <div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
             <div className="rounded-lg bg-muted/40 p-3">
@@ -396,6 +438,14 @@ function Settings() {
               <p className="text-xs text-muted-foreground">Найдено / изменено</p>
               <p className="mt-1 font-medium">{parserStatus?.lastRun ? `${parserStatus.lastRun.lotsFound} / ${parserStatus.lastRun.lotsChanged}` : "—"}</p>
             </div>
+          </div>
+          <div className="mt-3 rounded-lg bg-muted/30 p-3 text-sm">
+            <p className="text-xs text-muted-foreground">Последний ручной запуск</p>
+            <p className="mt-1 font-medium">
+              {parserStatus?.lastRequest
+                ? `${parserStatus.lastRequest.status} · ${formatDateTime(parserStatus.lastRequest.requestedAt)}`
+                : "—"}
+            </p>
           </div>
         </div>
 

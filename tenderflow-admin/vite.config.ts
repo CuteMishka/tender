@@ -8,8 +8,8 @@ import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 import { nitro } from "nitro/vite";
 
 export default defineConfig({
-  tanstackStart: { target: "vercel" },
+  tanstackStart: { target: "node-server" },
   cloudflare: false,
-  // Деплой: Nitro + preset vercel (артефакт `.vercel/output`). Приложение в основном CSR (`defaultSsr: false`).
-  plugins: [nitro({ preset: "vercel" })],
+  // Деплой: Nitro + node-server preset. Приложение в основном CSR (`defaultSsr: false`).
+  plugins: [nitro({ preset: "node-server" })],
 });

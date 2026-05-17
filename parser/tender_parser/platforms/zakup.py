@@ -5,7 +5,7 @@ from urllib.parse import urlencode
 
 import structlog
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 from tender_parser.config import Settings
 from tender_parser.matching import SmartMatcher
@@ -27,20 +27,28 @@ class ZakupPlatform(TenderPlatform):
         stop_all = False
         seen_page_signatures: set[tuple[str, ...]] = set()
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=self.settings.headless)
-            context = browser.new_context(locale="ru-RU", user_agent="TenderMachineV2Parser/1.0", viewport={"width": 1440, "height": 1000})
+            browser = p.chromium.launch(
+                headless=self.settings.headless,
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
+            )
+            context = browser.new_context(
+                locale="ru-RU",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                viewport={"width": 1440, "height": 1000},
+                extra_http_headers={"Accept-Language": "ru-RU,ru;q=0.9,kk;q=0.8,en;q=0.7"},
+            )
             page = context.new_page()
             try:
                 page_index = 0
                 url = self._lots_url(0)
                 page.goto(url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
-                self._wait_quiet(page)
+                self._wait_lots_ready(page)
                 self._set_page_size(page)
                 while self.settings.zakup_lots_max_pages == 0 or page_index < self.settings.zakup_lots_max_pages:
                     if stop_all:
                         break
                     page_index += 1
-                    self._wait_quiet(page)
+                    self._wait_lots_ready(page)
                     html = page.content()
                     page_lots = self._parse_html(html, page.url)
                     if not page_lots:
@@ -144,12 +152,32 @@ class ZakupPlatform(TenderPlatform):
     def _parse_html(self, html: str, page_url: str) -> list[TenderLot]:
         soup = BeautifulSoup(html, "lxml")
         cards = [card for card in soup.select(".ant-card") if self._lot_id(self._field(card, "Номер лота"))]
+        if not cards:
+            cards = self._lot_cards_from_text(soup)
         lots: dict[str, TenderLot] = {}
         for card in cards:
             lot = self._card_to_lot(card, page_url)
             if lot:
                 lots[lot.stable_id] = lot
         return list(lots.values())
+
+    def _lot_cards_from_text(self, soup: BeautifulSoup) -> list:
+        cards = []
+        seen: set[int] = set()
+        for node in soup.find_all(string=re.compile(r"Номер\s+лота", re.IGNORECASE)):
+            parent = node.parent
+            for _ in range(10):
+                if parent is None or not getattr(parent, "name", None):
+                    break
+                text = clean_text(parent.get_text(" ", strip=True))
+                if len(text) > 100 and self._lot_id(self._extract_labeled_text(text, ["Номер лота"])):
+                    marker = id(parent)
+                    if marker not in seen:
+                        seen.add(marker)
+                        cards.append(parent)
+                    break
+                parent = parent.parent
+        return cards
 
     def _log_page_diagnostics(self, requested_url: str, final_url: str, html: str, page_lots: list[TenderLot]) -> None:
         soup = BeautifulSoup(html, "lxml")
@@ -390,6 +418,15 @@ class ZakupPlatform(TenderPlatform):
         except Exception:
             pass
         page.wait_for_timeout(1500)
+
+    def _wait_lots_ready(self, page) -> None:
+        self._wait_quiet(page)
+        timeout = min(self.settings.request_timeout_seconds * 1000, 45000)
+        try:
+            page.wait_for_selector("text=Номер лота", timeout=timeout)
+        except PlaywrightTimeoutError:
+            self.log.warning("zakup_lots_text_timeout", url=page.url, timeout_ms=timeout)
+        page.wait_for_timeout(1000)
 
     def _set_page_size(self, page) -> None:
         wanted = str(self.settings.zakup_lots_limit)

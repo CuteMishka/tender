@@ -101,6 +101,18 @@ class ParserRun(Base):
     errors: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
 
 
+class ParserRunRequest(Base):
+    __tablename__ = "parser_run_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    requested_by: Mapped[str] = mapped_column(String(255), default="admin", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    message: Mapped[str | None] = mapped_column(Text)
+
+
 class TelegramSettings(Base):
     __tablename__ = "telegram_settings"
 
@@ -158,6 +170,33 @@ class Database:
             run.lots_found = lots_found
             run.lots_changed = lots_changed
             run.errors = errors
+            session.commit()
+
+    def claim_run_request(self) -> int | None:
+        now = datetime.now(timezone.utc)
+        with self.session() as session:
+            request = session.scalar(
+                select(ParserRunRequest)
+                .where(ParserRunRequest.status == "pending")
+                .order_by(ParserRunRequest.requested_at.asc())
+                .with_for_update(skip_locked=True)
+                .limit(1)
+            )
+            if request is None:
+                return None
+            request.status = "running"
+            request.started_at = now
+            session.commit()
+            return request.id
+
+    def finish_run_request(self, request_id: int, status: str, message: str = "") -> None:
+        with self.session() as session:
+            request = session.get(ParserRunRequest, request_id)
+            if request is None:
+                return
+            request.status = status
+            request.finished_at = datetime.now(timezone.utc)
+            request.message = message
             session.commit()
 
     def lot_exists(self, stable_id: str) -> bool:
