@@ -158,7 +158,7 @@ class GoszakupPlatform(TenderPlatform):
     def _goto(self, page, url: str):
         response = page.goto(url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
         try:
-            page.wait_for_selector("#search-result, table, text=Документация, text=Общие сведения", timeout=min(self.settings.request_timeout_seconds * 1000, 30000))
+            page.wait_for_selector("#search-result, table", timeout=min(self.settings.request_timeout_seconds * 1000, 30000))
         except PlaywrightTimeoutError:
             self.log.warning("goszakup_page_ready_timeout", url=page.url)
         page.wait_for_timeout(700)
