@@ -8,11 +8,11 @@ on:
       max_pages:
         description: "Max zakup pages to scan. 0 means no explicit parser limit."
         required: false
-        default: "1"
+        default: "6"
       max_lots:
         description: "Max new lots to process. 0 means no limit."
         required: false
-        default: "100"
+        default: "600"
 
 concurrency:
   group: parser-cron
@@ -80,14 +80,14 @@ jobs:
           AI_LOT_FILTER_ENABLED: "false"
           STOP_AT_FIRST_SEEN_LOT: "false"
           PROCESS_EXISTING_LOTS: "true"
-          MAX_LOTS_PER_CYCLE: ${{ github.event.inputs.max_lots || '100' }}
+          MAX_LOTS_PER_CYCLE: ${{ github.event.inputs.max_lots || '600' }}
           PLATFORMS: "zakup"
           DEFAULT_KEYWORDS: ""
           OUR_BINS: ${{ secrets.OUR_BINS }}
           ZAKUP_PUBLIC_BASE_URL: "https://zakup.gov.kz"
           ZAKUP_LOTS_URL: "https://zakup.gov.kz/home/lots"
           ZAKUP_LOTS_LIMIT: "100"
-          ZAKUP_LOTS_MAX_PAGES: ${{ github.event.inputs.max_pages || '1' }}
+          ZAKUP_LOTS_MAX_PAGES: ${{ github.event.inputs.max_pages || '6' }}
           ZAKUP_LOTS_SYSTEM_IDS: "1__2__3"
           ZAKUP_HOST_RESOLVER_IP: ${{ secrets.ZAKUP_HOST_RESOLVER_IP }}
           GOSZAKUP_OWS_TOKEN: ""

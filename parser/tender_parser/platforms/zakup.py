@@ -1,7 +1,7 @@
 import re
 from collections.abc import Callable
 from datetime import datetime
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 
 import structlog
 from bs4 import BeautifulSoup
@@ -284,7 +284,7 @@ class ZakupPlatform(TenderPlatform):
         return TenderLot(
             source=self.name,
             external_id=external_id,
-            url=page_url,
+            url=self._lot_url(external_id),
             title=title or f"Лот {external_id}",
             description=plan.get("Дополнительная характеристика", ""),
             amount=amount,
@@ -318,6 +318,9 @@ class ZakupPlatform(TenderPlatform):
             if label_text == expected or expected in label_text:
                 return clean_text(value_node.get_text(" ", strip=True) if value_node else "")
         return self._extract_labeled_text(clean_text(card.get_text(" ", strip=True)), [label])
+
+    def _lot_url(self, lot_id: str) -> str:
+        return urljoin(self.settings.zakup_public_base_url, f"/?lotId={lot_id}")
 
     def _field_by_labels(self, card, labels: list[str]) -> str:
         expected = [self._normalize_label(label) for label in labels]

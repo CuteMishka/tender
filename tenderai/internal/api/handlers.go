@@ -144,6 +144,7 @@ func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
 	}
 	source := row.Source
 	label := sourceLabel(row.Source)
+	partnerLink := concreteLotURL(row)
 	return LotDTO{
 		ID:            row.ID,
 		Lot:           strPtr(row.ExternalID),
@@ -153,7 +154,7 @@ func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
 		Title:         strPtr(row.Title),
 		Description:   strPtr(row.Description),
 		Cost:          floatPtr(amount),
-		PartnerLink:   strPtr(row.URL),
+		PartnerLink:   strPtr(partnerLink),
 		Place:         row.Place,
 		BuyID:         intPtr(row.ID),
 		EndDate:       timePtrRFC3339(row.EndDate),
@@ -168,6 +169,13 @@ func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
 		MatchScore:     row.MatchScore,
 		Documents:     documents,
 	}
+}
+
+func concreteLotURL(row ParserLot) string {
+	if row.Source == "zakup" && row.ExternalID != "" && (row.URL == "" || strings.Contains(row.URL, "/home/lots")) {
+		return "https://zakup.gov.kz/?lotId=" + row.ExternalID
+	}
+	return row.URL
 }
 
 func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {

@@ -274,8 +274,8 @@ func dispatchGitHubParserWorkflow() error {
 	payload := map[string]interface{}{
 		"ref": githubParserRef(),
 		"inputs": map[string]string{
-			"max_pages": getEnvDefault("GITHUB_PARSER_MAX_PAGES", "1"),
-			"max_lots":  getEnvDefault("GITHUB_PARSER_MAX_LOTS", "100"),
+			"max_pages": getEnvDefault("GITHUB_PARSER_MAX_PAGES", "6"),
+			"max_lots":  getEnvDefault("GITHUB_PARSER_MAX_LOTS", "600"),
 		},
 	}
 	body, _ := json.Marshal(payload)
