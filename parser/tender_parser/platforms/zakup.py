@@ -26,10 +26,12 @@ class ZakupPlatform(TenderPlatform):
         matcher = self._build_matcher(keywords)
         stop_all = False
         seen_page_signatures: set[tuple[str, ...]] = set()
+        chromium_args = self._chromium_args()
+        self.log.info("zakup_chromium_configured", chromium_args=chromium_args)
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=self.settings.headless,
-                args=self._chromium_args(),
+                args=chromium_args,
             )
             context = browser.new_context(
                 locale="ru-RU",
@@ -142,12 +144,16 @@ class ZakupPlatform(TenderPlatform):
         return f"{self.settings.zakup_lots_url}?{urlencode(params)}"
 
     def _chromium_args(self) -> list[str]:
-        return [
+        args = [
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-blink-features=AutomationControlled",
             "--disable-features=AsyncDns",
         ]
+        resolver_ip = (self.settings.zakup_host_resolver_ip or "").strip()
+        if resolver_ip:
+            args.append(f"--host-resolver-rules=MAP zakup.gov.kz {resolver_ip},EXCLUDE localhost")
+        return args
 
     def _is_active_lot(self, lot: TenderLot) -> bool:
         if lot.end_date and lot.end_date < datetime.now():
