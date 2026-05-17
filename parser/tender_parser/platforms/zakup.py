@@ -39,11 +39,12 @@ class ZakupPlatform(TenderPlatform):
                 viewport={"width": 1440, "height": 1000},
                 extra_http_headers={"Accept-Language": "ru-RU,ru;q=0.9,kk;q=0.8,en;q=0.7"},
             )
+            self._block_heavy_resources(context)
             page = context.new_page()
             try:
                 page_index = 0
                 url = self._lots_url(0)
-                page.goto(url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
+                self._goto(page, url)
                 self._wait_lots_ready(page)
                 self._set_page_size(page)
                 while self.settings.zakup_lots_max_pages == 0 or page_index < self.settings.zakup_lots_max_pages:
@@ -100,9 +101,10 @@ class ZakupPlatform(TenderPlatform):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=self.settings.headless, args=self._chromium_args())
             context = browser.new_context(locale="ru-RU", user_agent="TenderMachineV2Parser/1.0", viewport={"width": 1440, "height": 1000})
+            self._block_heavy_resources(context)
             page = context.new_page()
             try:
-                page.goto(lot.url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
+                self._goto(page, lot.url)
                 self._wait_quiet(page)
                 body = html_text(page.content())
                 lot.documents = self._dedupe_documents([*lot.documents, *self._parse_documents(page, lot.url)])
@@ -119,9 +121,10 @@ class ZakupPlatform(TenderPlatform):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=self.settings.headless, args=self._chromium_args())
             context = browser.new_context(locale="ru-RU", user_agent="TenderMachineV2Parser/1.0", viewport={"width": 1440, "height": 1000})
+            self._block_heavy_resources(context)
             page = context.new_page()
             try:
-                page.goto(lot.url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
+                self._goto(page, lot.url)
                 self._wait_quiet(page)
                 text = html_text(page.content())
                 winner_bin = find_first_regex(text, r"(?:БИН|ИИН)\s*(?:победителя)?\s*[:№#-]?\s*(\d{12})")
@@ -154,6 +157,25 @@ class ZakupPlatform(TenderPlatform):
         if resolver_ip:
             args.append(f"--host-resolver-rules=MAP zakup.gov.kz {resolver_ip},EXCLUDE localhost")
         return args
+
+    def _block_heavy_resources(self, context) -> None:
+        def handle(route) -> None:
+            if route.request.resource_type in {"image", "font", "media"}:
+                route.abort()
+                return
+            route.continue_()
+
+        context.route("**/*", handle)
+
+    def _goto(self, page, url: str):
+        response = page.goto(url, wait_until="commit", timeout=self.settings.request_timeout_seconds * 1000)
+        self.log.info(
+            "zakup_navigation_committed",
+            requested_url=url,
+            final_url=page.url,
+            status=response.status if response else None,
+        )
+        return response
 
     def _is_active_lot(self, lot: TenderLot) -> bool:
         if lot.end_date and lot.end_date < datetime.now():
