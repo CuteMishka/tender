@@ -315,7 +315,7 @@ function Settings() {
                 <div>
                   <h3 className="font-semibold">Telegram-уведомления</h3>
                   <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-                    Привяжите Telegram-аккаунт, чтобы получать сообщения о новых подходящих тендерах сразу после запуска парсера.
+                    Напишите боту @freedom_tender_bot команду /start и привяжите Telegram-аккаунт, чтобы получать сообщения о новых подходящих тендерах сразу после запуска парсера.
                   </p>
                   <div className="mt-3 flex flex-wrap gap-2 text-xs">
                     <span className={`rounded-full px-2.5 py-1 font-medium ${telegram.configured ? "bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-300" : "bg-muted text-muted-foreground"}`}>
@@ -380,7 +380,7 @@ function Settings() {
               </div>
             </div>
             <p className="relative mt-4 text-xs text-muted-foreground">
-              Напишите боту `/start`, укажите свой `@username` и нажмите «Сохранить». Система сама найдёт `chat_id`. Если Telegram не нашёл пользователя, можно вручную вставить `chat_id`.
+              Откройте @freedom_tender_bot, отправьте `/start`, укажите свой `@username` и нажмите «Сохранить». Система сама найдёт `chat_id`. Если Telegram не нашёл пользователя, можно вручную вставить `chat_id`.
             </p>
           </div>
         </div>
