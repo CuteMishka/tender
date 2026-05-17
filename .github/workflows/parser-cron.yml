@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
+    inputs:
+      max_pages:
+        description: "Max zakup pages to scan. 0 means no explicit parser limit."
+        required: false
+        default: "1"
+      max_lots:
+        description: "Max new lots to process. 0 means no limit."
+        required: false
+        default: "100"
 
 concurrency:
   group: parser-cron
@@ -40,6 +49,20 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
 
+      - name: Check zakup.gov.kz connectivity
+        run: |
+          python - <<'PY'
+          import socket
+          import urllib.request
+
+          host = "zakup.gov.kz"
+          print("dns", host, socket.gethostbyname(host))
+          req = urllib.request.Request("https://zakup.gov.kz/home/lots", headers={"User-Agent": "Mozilla/5.0"})
+          with urllib.request.urlopen(req, timeout=30) as response:
+              print("http_status", response.status)
+              print(response.read(200).decode("utf-8", "ignore"))
+          PY
+
       - name: Run parser once
         env:
           DATABASE_URL: ${{ secrets.PARSER_DATABASE_URL }}
@@ -57,15 +80,16 @@ jobs:
           AI_LOT_FILTER_ENABLED: "false"
           STOP_AT_FIRST_SEEN_LOT: "false"
           PROCESS_EXISTING_LOTS: "true"
-          MAX_LOTS_PER_CYCLE: "0"
+          MAX_LOTS_PER_CYCLE: ${{ github.event.inputs.max_lots || '100' }}
           PLATFORMS: "zakup"
           DEFAULT_KEYWORDS: ""
           OUR_BINS: ${{ secrets.OUR_BINS }}
           ZAKUP_PUBLIC_BASE_URL: "https://zakup.gov.kz"
           ZAKUP_LOTS_URL: "https://zakup.gov.kz/home/lots"
           ZAKUP_LOTS_LIMIT: "100"
-          ZAKUP_LOTS_MAX_PAGES: "0"
+          ZAKUP_LOTS_MAX_PAGES: ${{ github.event.inputs.max_pages || '1' }}
           ZAKUP_LOTS_SYSTEM_IDS: "1__2__3"
+          ZAKUP_HOST_RESOLVER_IP: ${{ secrets.ZAKUP_HOST_RESOLVER_IP }}
           GOSZAKUP_OWS_TOKEN: ""
           TELEGRAM_BOT_TOKEN: ""
           TELEGRAM_CHAT_ID: ""

@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     goszakup_ows_token: str | None = None
     zakup_public_base_url: str = "https://zakup.gov.kz"
     zakup_lots_url: str = "https://zakup.gov.kz/home/lots"
-    zakup_host_resolver_ip: str | None = "89.218.65.133"
+    zakup_host_resolver_ip: str | None = None
     zakup_lots_limit: int = Field(default=100, ge=1, le=100)
     zakup_lots_max_pages: int = Field(default=0, ge=0, le=1000)
     zakup_lots_system_ids: str = "1__2__3"
