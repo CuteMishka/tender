@@ -29,7 +29,7 @@ class ZakupPlatform(TenderPlatform):
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=self.settings.headless,
-                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
+                args=self._chromium_args(),
             )
             context = browser.new_context(
                 locale="ru-RU",
@@ -96,7 +96,7 @@ class ZakupPlatform(TenderPlatform):
 
     def enrich(self, lot: TenderLot) -> TenderLot:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=self.settings.headless)
+            browser = p.chromium.launch(headless=self.settings.headless, args=self._chromium_args())
             context = browser.new_context(locale="ru-RU", user_agent="TenderMachineV2Parser/1.0", viewport={"width": 1440, "height": 1000})
             page = context.new_page()
             try:
@@ -115,7 +115,7 @@ class ZakupPlatform(TenderPlatform):
         if lot.status.lower() not in {"completed", "closed", "finished", "итоги", "завершено", "завершен"} and not lot.end_date:
             return lot
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=self.settings.headless)
+            browser = p.chromium.launch(headless=self.settings.headless, args=self._chromium_args())
             context = browser.new_context(locale="ru-RU", user_agent="TenderMachineV2Parser/1.0", viewport={"width": 1440, "height": 1000})
             page = context.new_page()
             try:
@@ -137,10 +137,17 @@ class ZakupPlatform(TenderPlatform):
         params = {
             "limit": self.settings.zakup_lots_limit,
             "offset": page_index * self.settings.zakup_lots_limit,
-            "ord": "undefined",
             "system_id__in": self.settings.zakup_lots_system_ids,
         }
         return f"{self.settings.zakup_lots_url}?{urlencode(params)}"
+
+    def _chromium_args(self) -> list[str]:
+        return [
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-features=AsyncDns",
+        ]
 
     def _is_active_lot(self, lot: TenderLot) -> bool:
         if lot.end_date and lot.end_date < datetime.now():
