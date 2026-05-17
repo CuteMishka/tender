@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     max_workers: int = Field(default=4, ge=1, le=32)
     headless: bool = True
     download_dir: Path = Path("downloads")
-    strict_keyword_filter: bool = True
+    strict_keyword_filter: bool = False
+    collect_all_active_lots: bool = True
     smart_match_enabled: bool = True
     smart_match_use_morphology: bool = True
     semantic_match_enabled: bool = False
@@ -23,8 +24,8 @@ class Settings(BaseSettings):
     ai_lot_filter_min_score: int = Field(default=60, ge=0, le=100)
     ai_company_profile: str | None = None
     dictionaries_api_url: str | None = None
-    stop_at_first_seen_lot: bool = True
-    process_existing_lots: bool = False
+    stop_at_first_seen_lot: bool = False
+    process_existing_lots: bool = True
     max_lots_per_cycle: int = Field(default=0, ge=0)
     platforms_csv: str = Field(default="zakup", validation_alias="PLATFORMS")
     default_keywords_csv: str = Field(
@@ -40,8 +41,8 @@ class Settings(BaseSettings):
     goszakup_ows_token: str | None = None
     zakup_public_base_url: str = "https://zakup.gov.kz"
     zakup_lots_url: str = "https://zakup.gov.kz/home/lots"
-    zakup_lots_limit: int = Field(default=10, ge=1, le=100)
-    zakup_lots_max_pages: int = Field(default=50, ge=1, le=1000)
+    zakup_lots_limit: int = Field(default=100, ge=1, le=100)
+    zakup_lots_max_pages: int = Field(default=0, ge=0, le=1000)
     zakup_lots_system_ids: str = "1__2__3"
     zakup_ows_limit_per_page: int = Field(default=200, ge=1, le=200)
     zakup_ows_max_pages_per_keyword: int = Field(default=0, ge=0, le=1000)

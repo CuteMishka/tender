@@ -53,11 +53,13 @@ class ParserScheduler:
         lots_found = 0
         lots_changed = 0
         errors: list[dict[str, Any]] = []
-        self.log.info("parser_cycle_started", run_id=run_id, keywords_count=len(keywords), keywords=keywords, platforms=platform_names)
-        if not keywords:
+        self.log.info("parser_cycle_started", run_id=run_id, keywords_count=len(keywords), keywords=keywords, platforms=platform_names, collect_all_active_lots=self.settings.collect_all_active_lots)
+        if not keywords and not self.settings.collect_all_active_lots:
             self.db.finish_run(run_id, "no_keywords", lots_found, lots_changed, errors)
             self.log.warning("parser_cycle_no_keywords", run_id=run_id)
             return
+        if not keywords:
+            self.log.info("parser_cycle_without_keywords", run_id=run_id, reason="collect_all_active_lots_enabled")
         try:
             with ThreadPoolExecutor(max_workers=min(self.settings.max_workers, max(1, len(self.platforms)))) as pool:
                 futures = {pool.submit(self._search_platform, platform, keywords): platform for platform in self.platforms}
@@ -111,30 +113,40 @@ class ParserScheduler:
             raise
 
     def _search_platform(self, platform: TenderPlatform, keywords: list[str]) -> list[TenderLot]:
-        self.log.info("platform_search_started", platform=platform.name, strict_keyword_filter=self.settings.strict_keyword_filter)
+        self.log.info("platform_search_started", platform=platform.name, strict_keyword_filter=self.settings.strict_keyword_filter, collect_all_active_lots=self.settings.collect_all_active_lots)
         lots = platform.search(keywords, self.db.lot_exists)
         matches_by_keyword: dict[str, int] = {}
         for lot in lots:
-            keyword = str(lot.raw.get("matched_keyword") or lot.raw.get("keyword") or "")
+            keyword = "__all_active__"
+            if self._is_suitable(lot):
+                keyword = str(lot.raw.get("matched_keyword") or lot.raw.get("keyword") or "__suitable__")
             matches_by_keyword[keyword] = matches_by_keyword.get(keyword, 0) + 1
         self.log.info("platform_search_finished", platform=platform.name, lots=len(lots), matches_by_keyword=matches_by_keyword)
         return lots
 
     def _process_lot(self, platform: TenderPlatform, lot: TenderLot) -> bool:
         self.log.info("lot_process_started", platform=platform.name, lot=lot.stable_id, matched_keyword=lot.raw.get("matched_keyword"))
-        enriched = platform.enrich(lot)
-        enriched = platform.load_final_protocol(enriched)
-        self._analyze_lot_with_ai(enriched)
+        suitable = self._is_suitable(lot)
+        enriched = lot
+        if suitable:
+            enriched = platform.enrich(lot)
+            enriched = platform.load_final_protocol(enriched)
+        if suitable:
+            self._analyze_lot_with_ai(enriched)
         is_new, changes = self.db.upsert_lot(enriched)
-        if is_new:
+        if suitable and is_new:
             self.notifications.lot_created(enriched)
-        elif changes:
+        elif suitable and changes:
             self.notifications.lot_changed(enriched, changes)
-        self._process_documents(enriched)
-        if enriched.winner_bin:
+        if suitable:
+            self._process_documents(enriched)
+        if suitable and enriched.winner_bin:
             self.notifications.winner_detected(enriched)
         self.log.info("lot_process_finished", platform=platform.name, lot=enriched.stable_id, is_new=is_new, changes=changes)
         return is_new or bool(changes)
+
+    def _is_suitable(self, lot: TenderLot) -> bool:
+        return lot.raw.get("is_suitable") is True
 
     def _analyze_lot_with_ai(self, lot: TenderLot) -> None:
         if not self.settings.ai_lot_filter_enabled:

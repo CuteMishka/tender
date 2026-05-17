@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Check, Clock, Palette } from "lucide-react";
+import { Bot, Check, Clock, Loader2, Monitor, Moon, Palette, Send, Sun } from "lucide-react";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { pushNotification } from "@/hooks/use-notifications";
 import { useTheme, THEMES } from "@/hooks/use-theme";
@@ -35,7 +35,20 @@ type ParserStatus = {
   };
 };
 
+type TelegramSettings = {
+  enabled: boolean;
+  configured: boolean;
+  chatId: string;
+  username?: string;
+  maskedToken?: string;
+};
+
 const notificationLabels = ["Новые тендеры", "Поступление заявок", "Регистрация компаний", "Системные оповещения"];
+const appearanceOptions = [
+  { key: "light", label: "Светлая", icon: Sun },
+  { key: "dark", label: "Тёмная", icon: Moon },
+  { key: "system", label: "Системная", icon: Monitor },
+] as const;
 
 const defaultSettings: SettingsState = {
   name: "Администратор",
@@ -87,7 +100,14 @@ function formatInterval(seconds?: number) {
 function Settings() {
   const [settings, setSettings] = useState<SettingsState>(loadSettings);
   const [parserStatus, setParserStatus] = useState<ParserStatus | null>(null);
-  const { theme, setTheme } = useTheme();
+  const [telegram, setTelegram] = useState<TelegramSettings>({ enabled: false, configured: false, chatId: "" });
+  const [telegramToken, setTelegramToken] = useState("");
+  const [telegramChatId, setTelegramChatId] = useState("");
+  const [telegramUsername, setTelegramUsername] = useState("");
+  const [telegramLoading, setTelegramLoading] = useState(true);
+  const [telegramSaving, setTelegramSaving] = useState(false);
+  const [telegramTesting, setTelegramTesting] = useState(false);
+  const { theme, setTheme, appearance, setAppearance } = useTheme();
 
   useEffect(() => {
     localStorage.setItem(settingsKey, JSON.stringify(settings));
@@ -106,9 +126,68 @@ function Settings() {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const base = getLocalApiBase();
+    fetch(`${base}/api/v1/settings/telegram`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((body) => {
+        if (!body) return;
+        const data = body as TelegramSettings;
+        setTelegram(data);
+        setTelegramChatId(data.chatId || "");
+        setTelegramUsername(data.username ? `@${data.username}` : "");
+      })
+      .catch(() => null)
+      .finally(() => setTelegramLoading(false));
+  }, []);
+
   const save = () => {
     localStorage.setItem(settingsKey, JSON.stringify(settings));
     pushNotification("success", "Настройки сохранены", "Параметры аккаунта и уведомлений обновлены.", "/settings");
+  };
+
+  const saveTelegram = async () => {
+    setTelegramSaving(true);
+    try {
+      const base = getLocalApiBase();
+      const res = await fetch(`${base}/api/v1/settings/telegram`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: telegram.enabled,
+          botToken: telegramToken.trim(),
+          chatId: telegramChatId.trim(),
+          username: telegramUsername.trim(),
+        }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.error || "Не удалось сохранить Telegram");
+      const data = body as TelegramSettings;
+      setTelegram(data);
+      setTelegramChatId(data.chatId || "");
+      setTelegramUsername(data.username ? `@${data.username}` : "");
+      setTelegramToken("");
+      pushNotification("success", "Telegram сохранён", "Привязка Telegram обновлена.", "/settings");
+    } catch (error) {
+      pushNotification("error", "Ошибка Telegram", error instanceof Error ? error.message : "Не удалось сохранить настройки.", "/settings");
+    } finally {
+      setTelegramSaving(false);
+    }
+  };
+
+  const testTelegram = async () => {
+    setTelegramTesting(true);
+    try {
+      const base = getLocalApiBase();
+      const res = await fetch(`${base}/api/v1/settings/telegram/test`, { method: "POST" });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.error || "Не удалось отправить тест");
+      pushNotification("success", "Тест отправлен", "Проверьте сообщение от Telegram-бота.", "/settings");
+    } catch (error) {
+      pushNotification("error", "Telegram недоступен", error instanceof Error ? error.message : "Проверьте token и chat_id.", "/settings");
+    } finally {
+      setTelegramTesting(false);
+    }
   };
 
   return (
@@ -167,6 +246,117 @@ function Settings() {
                 </button>
               );
             })}
+          </div>
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            {appearanceOptions.map((item) => {
+              const Icon = item.icon;
+              const active = appearance === item.key;
+              return (
+                <button
+                  key={item.key}
+                  onClick={() => setAppearance(item.key)}
+                  className={`flex items-center justify-between rounded-xl border px-4 py-3 text-left transition ${active ? "border-primary bg-primary/5 text-primary" : "border-border bg-background hover:bg-accent"}`}
+                >
+                  <span className="flex items-center gap-3">
+                    <Icon className="h-4 w-4" />
+                    <span className="text-sm font-medium">{item.label}</span>
+                  </span>
+                  {active && <Check className="h-4 w-4" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="overflow-hidden rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
+          <div className="relative p-6">
+            <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-r from-primary/10 via-muted/40 to-transparent" />
+            <div className="relative flex flex-wrap items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg">
+                  <Bot className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="font-semibold">Telegram-уведомления</h3>
+                  <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+                    Привяжите Telegram-аккаунт, чтобы получать сообщения о новых подходящих тендерах сразу после запуска парсера.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    <span className={`rounded-full px-2.5 py-1 font-medium ${telegram.configured ? "bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-300" : "bg-muted text-muted-foreground"}`}>
+                      {telegram.configured ? "Бот настроен" : "Бот не настроен"}
+                    </span>
+                    <span className={`rounded-full px-2.5 py-1 font-medium ${telegram.enabled ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                      {telegram.enabled ? "Уведомления включены" : "Уведомления выключены"}
+                    </span>
+                    {telegram.username && <span className="rounded-full bg-muted px-2.5 py-1 font-medium text-muted-foreground">@{telegram.username}</span>}
+                    {telegram.maskedToken && <span className="rounded-full bg-muted px-2.5 py-1 font-medium text-muted-foreground">{telegram.maskedToken}</span>}
+                  </div>
+                </div>
+              </div>
+              <label className="flex cursor-pointer items-center gap-3 rounded-full border border-border bg-background px-4 py-2 text-sm font-medium">
+                <span>{telegram.enabled ? "Включено" : "Выключено"}</span>
+                <input
+                  type="checkbox"
+                  checked={telegram.enabled}
+                  onChange={(e) => setTelegram((prev) => ({ ...prev, enabled: e.target.checked }))}
+                  className="h-4 w-4 accent-primary"
+                  disabled={telegramLoading}
+                />
+              </label>
+            </div>
+
+            <div className="relative mt-6 grid gap-4 lg:grid-cols-[1fr_1fr_1fr_auto]">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Bot token</label>
+                <input
+                  type="password"
+                  value={telegramToken}
+                  onChange={(e) => setTelegramToken(e.target.value)}
+                  placeholder={telegram.maskedToken ? "Оставьте пустым, чтобы не менять token" : "123456789:AA..."}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">@username</label>
+                <input
+                  value={telegramUsername}
+                  onChange={(e) => setTelegramUsername(e.target.value)}
+                  placeholder="@username"
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Chat ID</label>
+                <input
+                  value={telegramChatId}
+                  onChange={(e) => setTelegramChatId(e.target.value)}
+                  placeholder="заполнится автоматически"
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+              <div className="flex items-end gap-2">
+                <button
+                  onClick={saveTelegram}
+                  disabled={telegramSaving || telegramLoading}
+                  className="inline-flex h-10 items-center gap-2 rounded-lg px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+                  style={{ background: "var(--gradient-primary)" }}
+                >
+                  {telegramSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Сохранить
+                </button>
+                <button
+                  onClick={testTelegram}
+                  disabled={telegramTesting || !telegram.configured}
+                  className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-background px-4 text-sm font-semibold hover:bg-accent disabled:opacity-60"
+                >
+                  {telegramTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  Тест
+                </button>
+              </div>
+            </div>
+            <p className="relative mt-4 text-xs text-muted-foreground">
+              Упрощённый вариант: укажите `Bot token` и свой `@username`, предварительно написав боту `/start`. Система сама найдёт `chat_id`. Если Telegram не нашёл пользователя, можно вручную вставить `chat_id`.
+            </p>
           </div>
         </div>
 

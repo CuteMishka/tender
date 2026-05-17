@@ -1,7 +1,9 @@
 import re
 from collections.abc import Callable
+from datetime import datetime
 from urllib.parse import urlencode
 
+import structlog
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
@@ -17,40 +19,68 @@ class ZakupPlatform(TenderPlatform):
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.log = structlog.get_logger("tender_parser.zakup")
 
     def search(self, keywords: list[str], is_seen: Callable[[str], bool] | None = None) -> list[TenderLot]:
         lots: dict[str, TenderLot] = {}
         matcher = self._build_matcher(keywords)
         stop_all = False
+        seen_page_signatures: set[tuple[str, ...]] = set()
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=self.settings.headless)
             context = browser.new_context(locale="ru-RU", user_agent="TenderMachineV2Parser/1.0", viewport={"width": 1440, "height": 1000})
             page = context.new_page()
             try:
-                for page_index in range(self.settings.zakup_lots_max_pages):
+                page_index = 0
+                url = self._lots_url(0)
+                page.goto(url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
+                self._wait_quiet(page)
+                self._set_page_size(page)
+                while self.settings.zakup_lots_max_pages == 0 or page_index < self.settings.zakup_lots_max_pages:
                     if stop_all:
                         break
-                    url = self._lots_url(page_index)
-                    page.goto(url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
+                    page_index += 1
                     self._wait_quiet(page)
-                    page_lots = self._parse_html(page.content(), page.url)
+                    html = page.content()
+                    page_lots = self._parse_html(html, page.url)
                     if not page_lots:
+                        self._log_page_diagnostics(url, page.url, html, page_lots)
                         break
+                    page_signature = tuple(lot.stable_id for lot in page_lots)
+                    if page_signature in seen_page_signatures:
+                        self._log_page_diagnostics(url, page.url, html, page_lots)
+                        self.log.info("zakup_repeated_page_detected", requested_url=page.url, parsed_lots=len(page_lots))
+                        break
+                    seen_page_signatures.add(page_signature)
+                    new_on_page = 0
                     for lot in page_lots:
                         if is_seen and self.settings.stop_at_first_seen_lot and is_seen(lot.stable_id):
                             stop_all = True
                             break
+                        if not self._is_active_lot(lot):
+                            continue
                         match_text = str(lot.raw.get("match_text") or lot.title)
                         match = matcher.match(match_text)
-                        if self.settings.strict_keyword_filter and not match.matched:
+                        if self.settings.strict_keyword_filter and not self.settings.collect_all_active_lots and not match.matched:
                             continue
                         lot.raw.update({
-                            "matched_keyword": match.keyword,
+                            "matched_keyword": match.keyword if match.matched else None,
+                            "candidate_keyword": match.keyword,
                             "match_score": round(match.score, 4),
                             "match_method": match.method,
                             "match_reason": match.reason,
+                            "is_suitable": match.matched,
                         })
+                        if lot.stable_id not in lots:
+                            new_on_page += 1
                         lots[lot.stable_id] = lot
+                    if new_on_page == 0:
+                        self.log.info("zakup_no_new_lots_on_page", requested_url=page.url, parsed_lots=len(page_lots))
+                        break
+                    if self.settings.zakup_lots_max_pages > 0 and page_index >= self.settings.zakup_lots_max_pages:
+                        break
+                    if not self._go_next_page(page):
+                        break
             finally:
                 context.close()
                 browser.close()
@@ -104,15 +134,37 @@ class ZakupPlatform(TenderPlatform):
         }
         return f"{self.settings.zakup_lots_url}?{urlencode(params)}"
 
+    def _is_active_lot(self, lot: TenderLot) -> bool:
+        if lot.end_date and lot.end_date < datetime.now():
+            return False
+        status_text = f"{lot.status} {lot.raw.get('status_raw') or ''}".lower()
+        inactive_markers = ("заверш", "итог", "отмен", "cancel", "complete", "finish", "closed")
+        return not any(marker in status_text for marker in inactive_markers)
+
     def _parse_html(self, html: str, page_url: str) -> list[TenderLot]:
         soup = BeautifulSoup(html, "lxml")
-        cards = [card for card in soup.select(".ant-card") if self._field(card, "Номер лота")]
-        lots: list[TenderLot] = []
+        cards = [card for card in soup.select(".ant-card") if self._lot_id(self._field(card, "Номер лота"))]
+        lots: dict[str, TenderLot] = {}
         for card in cards:
             lot = self._card_to_lot(card, page_url)
             if lot:
-                lots.append(lot)
-        return lots
+                lots[lot.stable_id] = lot
+        return list(lots.values())
+
+    def _log_page_diagnostics(self, requested_url: str, final_url: str, html: str, page_lots: list[TenderLot]) -> None:
+        soup = BeautifulSoup(html, "lxml")
+        text = clean_text(soup.get_text(" ", strip=True))
+        self.log.info(
+            "zakup_page_diagnostics",
+            requested_url=requested_url,
+            final_url=final_url,
+            html_length=len(html),
+            ant_cards=len(soup.select(".ant-card")),
+            has_lot_number="Номер лота" in text,
+            parsed_lots=len(page_lots),
+            card_samples=[clean_text(card.get_text(" ", strip=True))[:300] for card in soup.select(".ant-card")[:2]],
+            text_sample=text[:500],
+        )
 
     def _card_to_lot(self, card, page_url: str) -> TenderLot | None:
         lot_number = self._field(card, "Номер лота")
@@ -123,10 +175,12 @@ class ZakupPlatform(TenderPlatform):
         tags = [clean_text(tag.get_text(" ", strip=True)) for tag in card.select(".ant-tag")]
         card_text = clean_text(card.get_text(" ", strip=True))
         title = plan.get("Наименование") or plan.get("Дополнительная характеристика") or self._title_from_text(card_text, external_id)
-        status = self._field(card, "Статус лота") or (tags[0] if tags else "active")
+        status = self._field(card, "Статус лота") or self._status_from_card_text(card_text) or (tags[0] if tags else "active")
         purchase_type = tags[1] if len(tags) > 1 else None
         place = self._empty_to_none(self._field(card, "Место поставки"))
+        customer_name = self._empty_to_none(self._field(card, "Заказчик"))
         amount = parse_amount(plan.get("Сумма за год") or plan.get("Плановая сумма") or self._first_amount(card_text))
+        application_start, application_end = self._application_dates_from_text(card_text)
         start_date = self._date_from_card(card, [
             "Дата начала приема заявок",
             "Дата начала приема ценовых предложений",
@@ -143,7 +197,7 @@ class ZakupPlatform(TenderPlatform):
             "Дата публикации",
             "Дата объявления",
             "Дата начала",
-        ])
+        ]) or application_start
         end_date = self._date_from_card(card, [
             "Дата окончания приема заявок",
             "Дата окончания приема ценовых предложений",
@@ -162,7 +216,7 @@ class ZakupPlatform(TenderPlatform):
             "Срок окончания приема ценовых предложений",
             "Дата окончания",
             "Срок подачи",
-        ])
+        ]) or application_end
         match_text = " ".join(part for part in [title, plan.get("Дополнительная характеристика"), card_text] if part)
         return TenderLot(
             source=self.name,
@@ -174,6 +228,8 @@ class ZakupPlatform(TenderPlatform):
             start_date=start_date,
             end_date=end_date,
             place=place,
+            customer_name=customer_name,
+            organizer_name=customer_name,
             purchase_type=purchase_type,
             status=status[:64] if status else "active",
             raw={
@@ -183,18 +239,22 @@ class ZakupPlatform(TenderPlatform):
                 "plan_point_id": plan.get("Номер пункта плана"),
                 "subject_type": tags[2] if len(tags) > 2 else None,
                 "status_raw": status,
+                "applications_start": application_start.isoformat() if application_start else None,
+                "applications_end": application_end.isoformat() if application_end else None,
                 "match_text": match_text[:4000],
                 "card_text": card_text[:2500],
             },
         )
 
     def _field(self, card, label: str) -> str:
+        expected = self._normalize_label(label)
         for item in card.select(".ant-descriptions-item"):
             label_node = item.select_one(".ant-descriptions-item-label")
             value_node = item.select_one(".ant-descriptions-item-content")
-            if clean_text(label_node.get_text(" ", strip=True) if label_node else "") == label:
+            label_text = self._normalize_label(label_node.get_text(" ", strip=True) if label_node else "")
+            if label_text == expected or expected in label_text:
                 return clean_text(value_node.get_text(" ", strip=True) if value_node else "")
-        return ""
+        return self._extract_labeled_text(clean_text(card.get_text(" ", strip=True)), [label])
 
     def _field_by_labels(self, card, labels: list[str]) -> str:
         expected = [self._normalize_label(label) for label in labels]
@@ -204,7 +264,7 @@ class ZakupPlatform(TenderPlatform):
             label_text = self._normalize_label(label_node.get_text(" ", strip=True) if label_node else "")
             if any(label_text == label or label in label_text for label in expected):
                 return clean_text(value_node.get_text(" ", strip=True) if value_node else "")
-        return ""
+        return self._extract_labeled_text(clean_text(card.get_text(" ", strip=True)), labels)
 
     def _date_from_card(self, card, labels: list[str]):
         return parse_datetime(self._extract_datetime(self._field_by_labels(card, labels)))
@@ -218,6 +278,19 @@ class ZakupPlatform(TenderPlatform):
                 return parsed
         return None
 
+    def _application_dates_from_text(self, text: str) -> tuple[datetime | None, datetime | None]:
+        pattern = rf"Заявки\s+принимаются\s*:?\s*({self._datetime_pattern()})\s*[-–—]\s*({self._datetime_pattern()})"
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            return None, None
+        return parse_datetime(match.group(1)), parse_datetime(match.group(2))
+
+    def _status_from_card_text(self, text: str) -> str:
+        for status in ("Опубликован", "Прием заявок", "Завершен", "Завершён", "Отменен", "Отменён"):
+            if re.search(rf"\b{re.escape(status)}\b", text, re.IGNORECASE):
+                return status
+        return ""
+
     def _extract_datetime(self, value: str) -> str:
         match = re.search(self._datetime_pattern(), value or "")
         return match.group(0) if match else value
@@ -228,12 +301,60 @@ class ZakupPlatform(TenderPlatform):
     def _normalize_label(self, value: str) -> str:
         return re.sub(r"\s+", " ", clean_text(value).lower().replace("ё", "е")).strip(" :")
 
+    def _extract_labeled_text(self, text: str, labels: list[str]) -> str:
+        if not text:
+            return ""
+        known_labels = [
+            "Номер лота",
+            "Статус лота",
+            "Место поставки",
+            "Заказчик",
+            "Заявки принимаются",
+            "Опубликован",
+            "Объявление",
+            "Номер пункта плана",
+            "Наименование",
+            "Дополнительная характеристика",
+            "Цена за ед.",
+            "Кол-во",
+            "Ед. изм.",
+            "Плановая сумма",
+            "Сумма за год",
+            "Дата начала приема заявок",
+            "Дата начала приема ценовых предложений",
+            "Начало приема заявок",
+            "Начало приема ценовых предложений",
+            "Дата публикации",
+            "Дата объявления",
+            "Дата начала",
+            "Дата окончания приема заявок",
+            "Дата окончания приема ценовых предложений",
+            "Окончание приема заявок",
+            "Окончание приема ценовых предложений",
+            "Срок окончания приема заявок",
+            "Срок окончания приема ценовых предложений",
+            "Дата окончания",
+            "Срок подачи",
+        ]
+        next_label = "|".join(re.escape(item) for item in known_labels)
+        for label in labels:
+            if self._normalize_label(label) == "номер лота":
+                lot_id = find_first_regex(text, r"Номер\s+лота\s*:?\s*(\d{4,})")
+                if lot_id:
+                    return lot_id
+            pattern = rf"{re.escape(label)}\s*:?\s*(.+?)(?=\s+(?:{next_label})\s*:?\s+|$)"
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return clean_text(match.group(1))
+        return ""
+
     def _plan_fields(self, card) -> dict[str, str]:
         rows = card.select("tr.ant-table-row")
-        if not rows:
-            return {}
-        cells = [clean_text(cell.get_text(" ", strip=True)) for cell in rows[0].select("td")]
         labels = ["Номер пункта плана", "Наименование", "Дополнительная характеристика", "Цена за ед.", "Кол-во", "Ед. изм.", "Плановая сумма", "Сумма за год"]
+        if not rows:
+            card_text = clean_text(card.get_text(" ", strip=True))
+            return {label: self._extract_labeled_text(card_text, [label]) for label in labels if self._extract_labeled_text(card_text, [label])}
+        cells = [clean_text(cell.get_text(" ", strip=True)) for cell in rows[0].select("td")]
         return {label: value for label, value in zip(labels, cells, strict=False) if value}
 
     def _parse_documents(self, page, lot_url: str) -> list[TenderDocument]:
@@ -269,6 +390,47 @@ class ZakupPlatform(TenderPlatform):
         except Exception:
             pass
         page.wait_for_timeout(1500)
+
+    def _set_page_size(self, page) -> None:
+        wanted = str(self.settings.zakup_lots_limit)
+        try:
+            selector = page.locator(".ant-pagination-options .ant-select-selector").last
+            if not selector.count():
+                return
+            current = clean_text(selector.inner_text(timeout=1000))
+            if wanted in current:
+                return
+            selector.click(timeout=3000)
+            option = page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option").filter(has_text=wanted).last
+            if not option.count():
+                return
+            option.click(timeout=3000)
+            self._wait_quiet(page)
+            self.log.info("zakup_page_size_selected", page_size=self.settings.zakup_lots_limit)
+        except Exception as exc:
+            self.log.warning("zakup_page_size_select_failed", page_size=self.settings.zakup_lots_limit, error=str(exc))
+
+    def _go_next_page(self, page) -> bool:
+        try:
+            item = page.locator("li.ant-pagination-next").first
+            if not item.count():
+                self.log.info("zakup_next_page_missing")
+                return False
+            class_name = item.get_attribute("class") or ""
+            if "ant-pagination-disabled" in class_name:
+                self.log.info("zakup_next_page_disabled")
+                return False
+            control = page.locator("li.ant-pagination-next:not(.ant-pagination-disabled) button, li.ant-pagination-next:not(.ant-pagination-disabled) a").first
+            if not control.count():
+                self.log.info("zakup_next_page_control_missing")
+                return False
+            control.click(timeout=5000)
+            self._wait_quiet(page)
+            self.log.info("zakup_next_page_clicked", url=page.url)
+            return True
+        except Exception as exc:
+            self.log.warning("zakup_next_page_failed", error=str(exc))
+            return False
 
     def _lot_id(self, value: str) -> str | None:
         match = re.search(r"(\d{4,})", value or "")

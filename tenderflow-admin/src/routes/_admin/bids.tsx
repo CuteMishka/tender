@@ -1,7 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { CheckCircle2, Clock, XCircle, Trash2, FileText, Search } from "lucide-react";
+import { CheckCircle2, Clock, XCircle, Trash2, FileText, Search, Send, BriefcaseBusiness } from "lucide-react";
+import { getCurrentUser } from "@/lib/auth";
 import { getLocalApiBase } from "@/lib/tenders-api";
 
 export const Route = createFileRoute("/_admin/bids")({
@@ -16,11 +17,17 @@ interface SavedLot {
   purchase_type: string;
   organizer_name: string;
   partner_link: string;
+  comment?: string;
+  assigned_to?: string;
+  reviewer?: string;
+  action_history?: string;
   created_at: string;
 }
 
 const statusMap: Record<string, { label: string; icon: any; cls: string }> = {
   participating: { label: "Участвуем", icon: CheckCircle2, cls: "bg-primary/15 text-primary" },
+  review: { label: "На ревью", icon: Send, cls: "bg-blue-100 text-blue-700" },
+  in_work: { label: "В работе", icon: BriefcaseBusiness, cls: "bg-purple-100 text-purple-700" },
   active: { label: "Открыт", icon: Clock, cls: "bg-success/15 text-success" },
   rejected: { label: "Отклонен", icon: XCircle, cls: "bg-destructive/15 text-destructive" },
 };
@@ -28,7 +35,7 @@ const statusMap: Record<string, { label: string; icon: any; cls: string }> = {
 function Bids() {
   const navigate = useNavigate();
   const [bids, setBids] = useState<SavedLot[]>([]);
-  const [activeTab, setActiveTab] = useState<"all" | "participating" | "rejected" | "active">("all");
+  const [activeTab, setActiveTab] = useState<"all" | "participating" | "review" | "in_work" | "rejected" | "active">("all");
   const [searchText, setSearchText] = useState("");
 
   useEffect(() => {
@@ -51,6 +58,28 @@ function Bids() {
     }
   };
 
+  const updateStatus = async (lot: SavedLot, status: SavedLot["status"]) => {
+    const comment = window.prompt(status === "in_work" ? "Комментарий при принятии в работу" : "Комментарий", lot.comment || "") ?? lot.comment ?? "";
+    try {
+      const res = await fetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...lot,
+          status,
+          comment,
+          assigned_to: getCurrentUser()?.name || getCurrentUser()?.email || lot.assigned_to || "",
+        }),
+      });
+      if (!res.ok) throw new Error("Ошибка обновления статуса");
+      const updated = await res.json() as SavedLot;
+      setBids((prev) => prev.map((b) => b.id === updated.id ? updated : b));
+    } catch (err) {
+      console.error(err);
+      alert("Не удалось обновить статус");
+    }
+  };
+
   const filteredBids = bids.filter((b) => {
     if (activeTab !== "all" && b.status !== activeTab) return false;
     const q = searchText.trim().toLowerCase();
@@ -60,13 +89,15 @@ function Bids() {
   const tabCounts = {
     all: bids.length,
     participating: bids.filter((b) => b.status === "participating").length,
+    review: bids.filter((b) => b.status === "review").length,
+    in_work: bids.filter((b) => b.status === "in_work").length,
     active: bids.filter((b) => b.status === "active").length,
     rejected: bids.filter((b) => b.status === "rejected").length,
   };
 
   return (
     <>
-      <PageHeader title="Заявки" description="Все заявки участников на тендеры" />
+      <PageHeader title="Заявки" description="Рабочий процесс: ревью, участвуем, принято в работу и отклонено" />
       <div className="p-8">
         <div className="mb-4 flex flex-wrap items-center gap-3">
           <div className="relative min-w-[260px] flex-1">
@@ -82,8 +113,9 @@ function Bids() {
         <div className="mb-4 flex flex-wrap gap-2">
           {[
             { key: "all", label: "Все" },
-            { key: "participating", label: "Наше участие" },
-            { key: "active", label: "Активные" },
+            { key: "participating", label: "Участвуем" },
+            { key: "review", label: "На ревью" },
+            { key: "in_work", label: "В работе" },
             { key: "rejected", label: "Не подходит" },
           ].map((tab) => (
             <button
@@ -124,7 +156,7 @@ function Bids() {
                       <p className="text-sm font-medium">
                         {searchText.trim()
                           ? "По названию, организатору или виду закупки заявки не найдены"
-                          : activeTab === "all" ? "Заявок пока нет" : `Нет заявок со статусом «${{ all: "", participating: "Наше участие", active: "Активные", rejected: "Не подходит" }[activeTab]}»`}
+                          : activeTab === "all" ? "Заявок пока нет" : `Нет заявок со статусом «${statusMap[activeTab]?.label || activeTab}»`}
                       </p>
                       {activeTab === "all" && !searchText.trim() && (
                         <p className="text-xs">Отметьте тендер кнопкой «Подходит» во вкладке Тендеры</p>
@@ -157,6 +189,16 @@ function Bids() {
                       </span>
                     </td>
                     <td className="px-6 py-4 text-right">
+                      {b.status === "participating" && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); void updateStatus(b, "in_work"); }}
+                          className="mr-2 inline-flex items-center gap-1 rounded-lg border border-purple-200 bg-purple-50 px-2.5 py-1.5 text-xs font-medium text-purple-700 transition-colors hover:bg-purple-100"
+                          title="Принять в работу"
+                        >
+                          <BriefcaseBusiness className="h-4 w-4" />
+                          В работу
+                        </button>
+                      )}
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDelete(b.id); }}
                         className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"

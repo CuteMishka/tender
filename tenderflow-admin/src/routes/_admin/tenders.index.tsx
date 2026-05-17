@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { ExternalLink, Filter, ThumbsUp, ThumbsDown, CheckCircle2 } from "lucide-react";
+import { ExternalLink, Filter, ThumbsUp, ThumbsDown, CheckCircle2, Send } from "lucide-react";
 import {
   fetchTendersList,
   formatTenderAmount,
@@ -18,6 +18,7 @@ import {
   type TenderViewInfo,
 } from "@/lib/tenders-api";
 import { pushNotification } from "@/hooks/use-notifications";
+import { getCurrentUser } from "@/lib/auth";
 
 type TendersSearch = { page: number };
 
@@ -54,16 +55,39 @@ function isGovernmentProcurementQuery(s: string): boolean {
 }
 
 const statusColorMap: Record<string, string> = {
-  green: "bg-green-100 text-green-700",
-  orange: "bg-orange-100 text-orange-700",
-  red: "bg-red-100 text-red-700",
+  green: "bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-300",
+  orange: "bg-orange-100 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300",
+  red: "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300",
   gray: "bg-muted/50 text-muted-foreground",
 };
+
+function lotStatusLabel(status?: string | null): string {
+  const value = sanitizeApiText(status || "");
+  if (!value || value.toLowerCase() === "active") return "Активен";
+  return value;
+}
+
+function lotStatusColor(status?: string | null, fallback: keyof typeof statusColorMap = "gray"): keyof typeof statusColorMap {
+  const value = sanitizeApiText(status || "").toLowerCase();
+  if (value.includes("отмен") || value.includes("не состоя")) return "red";
+  if (value.includes("заверш") || value.includes("итог")) return "gray";
+  if (value.includes("опублик") || value.includes("прием") || value.includes("приём") || value === "active") return "green";
+  return fallback;
+}
+
+function deadlineBadgeLabel(daysLeft: number | null): string {
+  if (daysLeft === null) return "—";
+  if (daysLeft < 0) return "истёк";
+  if (daysLeft === 0) return "сегодня";
+  return `${daysLeft} дн.`;
+}
 
 function sourceBadgeClass(source?: string | null): string {
   switch ((source || "").toLowerCase()) {
     case "samruk":
       return "border-sky-200 bg-sky-50 text-sky-700";
+    case "zakup":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
     case "goszakup":
       return "border-emerald-200 bg-emerald-50 text-emerald-700";
     default:
@@ -71,17 +95,24 @@ function sourceBadgeClass(source?: string | null): string {
   }
 }
 
-async function saveLot(tender: TenderItem, status: "participating" | "rejected") {
+type LotWorkflowStatus = "participating" | "rejected" | "review" | "in_work";
+
+async function saveLot(tender: TenderItem, status: LotWorkflowStatus, comment = "") {
   const deadline = tender.endDate
     ? new Date(tender.endDate).toISOString()
     : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
   const payload = {
     id: tender.id,
+    external_id: tender.lot_source_id || tender.lot || String(tender.id),
+    source: tender.source || "",
     title: tender.title || "Без названия",
     description: tender.description || "",
     amount: tender.cost || 0,
     status,
+    comment,
+    assigned_to: getCurrentUser()?.name || getCurrentUser()?.email || "",
+    reviewer: status === "review" ? "Второй специалист" : "",
     deadline,
     start_date: tender.startDate ? new Date(tender.startDate).toISOString() : new Date().toISOString(),
     end_date: deadline,
@@ -135,19 +166,19 @@ function TendersList() {
     setLoading(true);
     setError(null);
     const keywords = isGovernmentProcurementQuery(searchText) ? "" : searchText;
-    fetchTendersList({ page, limit: 10, keywords })
+    fetchTendersList({ page, limit: 10, keywords, suitable: activeTab === "Подходящие" })
       .then((d) => { if (!cancelled) setData(d); })
       .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [page, searchText]);
+  }, [page, searchText, activeTab]);
 
   const filteredItems = (data?.items ?? []).filter((t) => {
     const status = getTenderStatus(t.endDate);
     if (activeTab === "Активные" && status.color === "gray") return false;
     if (activeTab === "Истекающие" && status.color !== "red" && status.color !== "orange") return false;
     if (activeTab === "Завершённые" && status.color !== "gray") return false;
-    if (activeTab === "Наше участие" && !savedIds.has(t.id)) return false;
+    if (activeTab === "Участвуем" && !savedIds.has(t.id)) return false;
     const minA = parseFloat(filterMinAmount);
     const maxA = parseFloat(filterMaxAmount);
     if (!isNaN(minA) && t.cost < minA) return false;
@@ -155,13 +186,23 @@ function TendersList() {
     return true;
   });
 
-  const handleAction = async (e: React.MouseEvent, tender: TenderItem, status: "participating" | "rejected") => {
+  const handleAction = async (e: React.MouseEvent, tender: TenderItem, status: LotWorkflowStatus) => {
     e.stopPropagation();
+    const comment = window.prompt(
+      status === "review"
+        ? "Комментарий для второго специалиста"
+        : status === "participating"
+          ? "Комментарий к решению участвовать"
+          : "Почему лот не подходит?",
+      "",
+    ) ?? "";
     setActionLoading(tender.id);
     try {
-      await saveLot(tender, status);
+      await saveLot(tender, status, comment);
       if (status === "participating") {
         pushNotification("success", "Участвуем", `Тендер «${truncate(tender.title, 60)}» добавлен в заявки.`, "/bids");
+      } else if (status === "review") {
+        pushNotification("info", "На ревью", `Тендер «${truncate(tender.title, 60)}» отправлен второму специалисту.`, "/bids");
       } else {
         pushNotification("info", "Не подходит", `Тендер «${truncate(tender.title, 60)}» отклонён.`);
       }
@@ -224,14 +265,20 @@ function TendersList() {
         <div className="mb-4 flex flex-wrap gap-2">
           {[
             { key: "Все", count: data?.items?.length },
+            { key: "Подходящие" },
             { key: "Активные" },
             { key: "Истекающие" },
             { key: "Завершённые" },
-            { key: "Наше участие", count: savedIds.size, icon: CheckCircle2 },
+            { key: "Участвуем", count: savedIds.size, icon: CheckCircle2 },
           ].map(({ key: tab, count, icon: Icon }) => (
             <button
               key={tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => {
+                setActiveTab(tab);
+                if (page !== 1) {
+                  navigate({ to: "/tenders", search: { page: 1 } });
+                }
+              }}
               className={`inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === tab ? "bg-primary text-primary-foreground" : "border border-border bg-card text-foreground hover:bg-accent"}`}
             >
               {Icon && <Icon className="h-3.5 w-3.5" />}
@@ -271,6 +318,7 @@ function TendersList() {
                   <tbody>
                     {filteredItems.map((t) => {
                       const statusInfo = getTenderStatus(t.endDate);
+                      const lotStatusColorKey = lotStatusColor(t.status, statusInfo.color);
                       const isExpiring = statusInfo.color === "red";
                       const isLoading = actionLoading === t.id;
                       const companyName = tenderCompanyName(t);
@@ -281,7 +329,7 @@ function TendersList() {
                           key={t.id}
                           role="link"
                           tabIndex={0}
-                          className={`cursor-pointer border-t border-border transition hover:bg-muted/40 ${isExpiring ? "bg-red-50/60" : ""}`}
+                          className="cursor-pointer border-t border-border transition hover:bg-muted/40"
                           onClick={() =>
                             navigate({
                               to: "/tenders/$tenderId",
@@ -332,33 +380,38 @@ function TendersList() {
                             <div className="mt-1 max-w-sm text-xs font-medium text-foreground/80">
                               {companyName || "Компания не указана"}
                             </div>
+                            {t.isSuitable && t.matchedKeyword && (
+                              <div className="mt-1 inline-flex rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                                Подходит: {t.matchedKeyword}
+                              </div>
+                            )}
                             <div className="mt-1 max-w-sm text-xs text-muted-foreground">{truncate(t.description, 120)}</div>
                           </td>
                           <td className="px-4 py-4 text-right font-semibold tabular-nums">{formatTenderAmount(t.cost)}</td>
                           <td className="px-4 py-4 text-xs text-muted-foreground">
                             {t.endDate ? (
-                              <div>
-                                <div className={`font-medium ${isExpiring ? "text-red-600" : ""}`}>
-                                  {formatDate(t.endDate).split(",")[0]}
-                                </div>
-                                {statusInfo.daysLeft !== null && statusInfo.daysLeft >= 0 && (
-                                  <div className={`text-[10px] ${isExpiring ? "text-red-500 font-semibold" : "text-muted-foreground"}`}>
-                                    {statusInfo.daysLeft === 0 ? "сегодня" : `${statusInfo.daysLeft} дн.`}
-                                  </div>
-                                )}
-                              </div>
+                              <span
+                                className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                  statusInfo.daysLeft !== null && statusInfo.daysLeft < 0
+                                    ? "bg-muted text-muted-foreground"
+                                    : "bg-muted/70 text-foreground dark:bg-muted/60 dark:text-foreground"
+                                }`}
+                                title={formatDate(t.endDate)}
+                              >
+                                {deadlineBadgeLabel(statusInfo.daysLeft)}
+                              </span>
                             ) : (
                               <span className="text-muted-foreground/60">—</span>
                             )}
                           </td>
                           <td className="px-4 py-4">
-                            <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${statusColorMap[statusInfo.color]}`}>
+                            <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${statusColorMap[lotStatusColorKey]}`}>
                               <span className={`h-1.5 w-1.5 rounded-full ${
-                                statusInfo.color === "green" ? "bg-green-500" :
-                                statusInfo.color === "orange" ? "bg-orange-500" :
-                                statusInfo.color === "red" ? "bg-red-500" : "bg-muted-foreground"
+                                lotStatusColorKey === "green" ? "bg-green-500" :
+                                lotStatusColorKey === "orange" ? "bg-orange-500" :
+                                lotStatusColorKey === "red" ? "bg-red-500" : "bg-muted-foreground"
                               }`} />
-                              {statusInfo.label}
+                              {lotStatusLabel(t.status)}
                             </span>
                           </td>
                           <td className="px-4 py-4 text-center">
@@ -378,10 +431,18 @@ function TendersList() {
                               <button
                                 disabled={isLoading}
                                 onClick={(e) => handleAction(e, t, "participating")}
-                                title="Подходит — участвуем"
+                                title="Перенести в Участвуем"
                                 className="inline-flex rounded-lg border border-green-200 bg-green-50 px-2.5 py-1.5 text-xs font-medium text-green-700 transition hover:bg-green-100 disabled:opacity-50"
                               >
                                 <ThumbsUp className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                disabled={isLoading}
+                                onClick={(e) => handleAction(e, t, "review")}
+                                title="Отправить на ревью второму специалисту"
+                                className="inline-flex rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700 transition hover:bg-blue-100 disabled:opacity-50"
+                              >
+                                <Send className="h-3.5 w-3.5" />
                               </button>
                               <button
                                 disabled={isLoading}

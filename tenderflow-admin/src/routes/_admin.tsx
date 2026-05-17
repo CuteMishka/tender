@@ -4,6 +4,7 @@ import { Sidebar } from "@/components/admin/Sidebar";
 import { isAuthenticated } from "@/lib/auth";
 import { Bell, CheckCheck, Trash2, X } from "lucide-react";
 import { useNotifications, type AppNotification } from "@/hooks/use-notifications";
+import { useTheme } from "@/hooks/use-theme";
 
 export const Route = createFileRoute("/_admin")({
   component: AdminLayout,
@@ -146,6 +147,7 @@ function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [ready, setReady] = useState(false);
+  useTheme();
 
   useEffect(() => {
     if (!isAuthenticated()) {

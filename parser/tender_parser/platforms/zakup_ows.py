@@ -105,6 +105,42 @@ class ZakupOwsPlatform(TenderPlatform):
         matcher = self._build_matcher(keywords)
         lots: dict[str, TenderLot] = {}
         with httpx.Client(timeout=self.settings.request_timeout_seconds, follow_redirects=True) as client:
+            if self.settings.collect_all_active_lots:
+                after: int | None = None
+                page = 0
+                while self.settings.zakup_ows_max_pages_per_keyword == 0 or page < self.settings.zakup_ows_max_pages_per_keyword:
+                    page += 1
+                    payload = self._fetch_lots(client, token, None, after)
+                    page_lots = payload.get("lots") or []
+                    if not page_lots:
+                        break
+                    stop_all = False
+                    for item in page_lots:
+                        lot = self._lot_from_payload(item, None)
+                        if lot is None:
+                            continue
+                        if is_seen and self.settings.stop_at_first_seen_lot and is_seen(lot.stable_id):
+                            stop_all = True
+                            break
+                        if not self._is_active_lot(lot):
+                            continue
+                        match_text = str(lot.raw.get("match_text") or "")
+                        match = matcher.match(match_text)
+                        lot.raw.update({
+                            "matched_keyword": match.keyword if match.matched else None,
+                            "candidate_keyword": match.keyword,
+                            "match_score": round(match.score, 4),
+                            "match_method": match.method,
+                            "match_reason": match.reason,
+                            "is_suitable": match.matched,
+                        })
+                        lots[lot.stable_id] = lot
+                    if stop_all:
+                        break
+                    after = self._next_after(payload, page_lots)
+                    if not after:
+                        break
+                return list(lots.values())
             for keyword in keywords:
                 after: int | None = None
                 page = 0
@@ -122,15 +158,19 @@ class ZakupOwsPlatform(TenderPlatform):
                         if is_seen and self.settings.stop_at_first_seen_lot and is_seen(lot.stable_id):
                             stop_keyword = True
                             break
+                        if not self._is_active_lot(lot):
+                            continue
                         match_text = str(lot.raw.get("match_text") or "")
                         match = matcher.match(match_text, keyword)
                         if self.settings.strict_keyword_filter and not match.matched:
                             continue
                         lot.raw.update({
-                            "matched_keyword": match.keyword or keyword,
+                            "matched_keyword": (match.keyword or keyword) if match.matched else None,
+                            "candidate_keyword": match.keyword or keyword,
                             "match_score": round(match.score, 4),
                             "match_method": match.method,
                             "match_reason": match.reason,
+                            "is_suitable": match.matched,
                         })
                         lots[lot.stable_id] = lot
                     if stop_keyword:
@@ -146,20 +186,22 @@ class ZakupOwsPlatform(TenderPlatform):
     def load_final_protocol(self, lot: TenderLot) -> TenderLot:
         return lot
 
-    def _fetch_lots(self, client: httpx.Client, token: str, keyword: str, after: int | None) -> dict[str, Any]:
+    def _fetch_lots(self, client: httpx.Client, token: str, keyword: str | None, after: int | None) -> dict[str, Any]:
         headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
+        variables: dict[str, Any] = {
+            "limit": self.settings.zakup_ows_limit_per_page,
+            "after": after,
+        }
+        if keyword:
+            variables["filter"] = {"nameDescriptionRu": keyword}
         body = {
             "operationName": None,
             "query": self._LOTS_QUERY,
-            "variables": {
-                "limit": self.settings.zakup_ows_limit_per_page,
-                "after": after,
-                "filter": {"nameDescriptionRu": keyword},
-            },
+            "variables": variables,
         }
         try:
             response = client.post(self.settings.goszakup_ows_graphql_url, headers=headers, json=body)
@@ -174,7 +216,7 @@ class ZakupOwsPlatform(TenderPlatform):
             "extensions": payload.get("extensions") or {},
         }
 
-    def _lot_from_payload(self, item: dict[str, Any], keyword: str) -> TenderLot | None:
+    def _lot_from_payload(self, item: dict[str, Any], keyword: str | None) -> TenderLot | None:
         lot_id = self._str_field(item, "id")
         if not lot_id:
             return None
@@ -215,8 +257,8 @@ class ZakupOwsPlatform(TenderPlatform):
             raw={
                 "platform": self.name,
                 "ows_schema": "v3",
-                "keyword": keyword,
-                "matched_keyword": keyword,
+                "keyword": keyword or "",
+                "matched_keyword": keyword or "",
                 "match_text": match_text[:4000],
                 "customer_bin": customer_bin,
                 "organizer_bin": organizer_bin,
@@ -259,6 +301,13 @@ class ZakupOwsPlatform(TenderPlatform):
             seen_urls.add(url)
             docs.append(TenderDocument(name=name, url=url, kind="document"))
         return docs
+
+    def _is_active_lot(self, lot: TenderLot) -> bool:
+        if lot.end_date and lot.end_date < datetime.now():
+            return False
+        status_text = f"{lot.status} {lot.raw.get('status_name') or ''}".lower()
+        inactive_markers = ("заверш", "итог", "отмен", "cancel", "complete", "finish", "closed")
+        return not any(marker in status_text for marker in inactive_markers)
 
     def _build_matcher(self, keywords: list[str]) -> SmartMatcher:
         return SmartMatcher(

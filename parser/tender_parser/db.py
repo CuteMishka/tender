@@ -101,6 +101,17 @@ class ParserRun(Base):
     errors: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
 
 
+class TelegramSettings(Base):
+    __tablename__ = "telegram_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    bot_token: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    chat_id: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
 class Database:
     def __init__(self, url: str) -> None:
         self.engine = create_engine(url, pool_pre_ping=True)
@@ -243,6 +254,13 @@ class Database:
         with self.session() as session:
             session.add(ParserNotification(lot_stable_id=lot_stable_id, type=type_, category=category, title=title, message=message, payload=payload))
             session.commit()
+
+    def load_telegram_settings(self) -> tuple[str, str]:
+        with self.session() as session:
+            settings = session.get(TelegramSettings, 1)
+            if not settings or not settings.enabled:
+                return "", ""
+            return (settings.bot_token or "").strip(), (settings.chat_id or "").strip()
 
     def _lot_fingerprint(self, lot: TenderLot) -> str:
         return stable_json_hash({

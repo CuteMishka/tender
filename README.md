@@ -46,11 +46,26 @@ GEMINI_API_KEY=...
 docker compose -f docker-compose.prod.yml --env-file .env up --build -d
 ```
 
-Production compose поднимает frontend, backend, parser, tender-rag и две PostgreSQL БД. Parser работает через публичную страницу `zakup.gov.kz/home/lots` в Playwright-режиме и автоматически читает ключевые слова из backend справочника:
+Production compose поднимает frontend, backend, parser, tender-rag и две PostgreSQL БД. Parser работает через публичную страницу `zakup.gov.kz/home/lots` в Playwright-режиме, сохраняет все активные лоты без вышедшего дедлайна и автоматически читает ключевые слова из backend справочника:
 
 ```env
 DICTIONARIES_API_URL=http://backend:8082/api/v1/dictionaries?kind=keywords
 ```
+
+Подходящие лоты не отделяются отдельной таблицей: parser записывает признак совпадения в `parser_lots.raw` (`is_suitable`, `matched_keyword`, `match_score`). Backend `/api/v1/tenders?suitable=true` отдаёт только такие лоты, а frontend показывает их во вкладке `Подходящие`.
+
+Для полного сбора активной выдачи используются значения:
+
+```env
+STRICT_KEYWORD_FILTER=false
+COLLECT_ALL_ACTIVE_LOTS=true
+STOP_AT_FIRST_SEEN_LOT=false
+PROCESS_EXISTING_LOTS=true
+ZAKUP_LOTS_LIMIT=100
+ZAKUP_LOTS_MAX_PAGES=0
+```
+
+Telegram-уведомления отправляются только для новых подходящих лотов. Bot token и chat id храните в `.env`/секретах, не записывайте их в README и не отправляйте в чат.
 
 Проверки:
 
@@ -71,6 +86,55 @@ curl http://localhost:8083/health
 - **Frontend**: страница `/dictionaries` работает через API и сохраняет локальный fallback при недоступном backend.
 - **Parser**: каждый цикл перечитывает активные `keywords` из backend API и автоматически использует новые слова.
 - **Группы**: `keywords`, `advantages`, `blockers`, `tru`, `companies`.
+
+---
+
+## Роли, регистрация и workflow лотов
+
+В системе используются роли:
+
+- **Админ**: полный доступ.
+- **Директор**: почти полный доступ, включая просмотр заявок на регистрацию, назначение ролей, изменение ролей и удаление пользователей.
+- **Специалист по тендерам**: работает с лотами, справочниками ключевых слов, RAG-базой знаний, преимуществами/блокерами, критериями AI-анализа, ревью и комментариями по лотам.
+
+Страница входа больше не показывает демо-доступ. Пользователь может подать заявку на регистрацию прямо с `/login`: ФИО, email, пароль, компания, должность и комментарий. Заявка сохраняется в backend таблицу `registration_requests` со статусом `pending`.
+
+Директор или админ открывает `/users`, видит входящие заявки и может:
+
+- **принять заявку** с назначением роли `admin`, `director` или `tender_specialist`;
+- **отклонить заявку**;
+- **изменить роль существующего пользователя**;
+- **удалить пользователя**.
+
+Backend endpoints:
+
+```text
+POST /api/v1/auth/login
+POST /api/v1/auth/register-request
+GET /api/v1/users
+PATCH /api/v1/users/{id}/role
+DELETE /api/v1/users/{id}
+GET /api/v1/registration-requests?status=pending
+POST /api/v1/registration-requests/{id}/approve
+POST /api/v1/registration-requests/{id}/reject
+```
+
+При первом запуске backend создаёт admin-пользователя, если в базе ещё нет ни одного пользователя с ролью `admin`. Значения можно переопределить через:
+
+```env
+ADMIN_EMAIL=admin@tender.local
+ADMIN_PASSWORD=admin
+```
+
+Лоты поддерживают рабочий процесс:
+
+- **Подходящие**: лоты с признаком `is_suitable`/ключевым словом от parser/AI.
+- **На ревью**: специалист отправил лот второму специалисту с комментарием.
+- **Участвуем**: принято решение участвовать.
+- **В работе**: лот принят из `Участвуем` в работу.
+- **Не подходит**: специалист отклонил лот с причиной.
+
+Для saved lots добавлены поля `status`, `comment`, `assigned_to`, `reviewer`, `action_history`, `external_id`, `source`. `action_history` хранит хронологию действий по лоту в JSON-строке, чтобы комментарии и изменения статусов не терялись.
 
 Для локального parser `.env`:
 

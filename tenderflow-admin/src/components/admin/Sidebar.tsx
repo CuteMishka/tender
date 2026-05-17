@@ -2,9 +2,9 @@ import { Link, useNavigate, useLocation } from "@tanstack/react-router";
 import {
   LayoutDashboard, FileText, Gavel, Settings, LogOut, Cloud,
   BarChart2, History, Building2, Trophy, TrendingDown, ChevronDown, ChevronRight,
-  Bell, BookOpen,
+  Bell, BookOpen, Users,
 } from "lucide-react";
-import { logout } from "@/lib/auth";
+import { canManageUsers, getCurrentUser, logout, roleLabels } from "@/lib/auth";
 import { useState } from "react";
 import { useNotifications } from "@/hooks/use-notifications";
 
@@ -14,6 +14,7 @@ const mainNav = [
   { to: "/bids", label: "Заявки", icon: FileText },
   { to: "/dictionaries", label: "Справочники", icon: BookOpen },
   { to: "/notifications", label: "Уведомления", icon: Bell },
+  { to: "/users", label: "Пользователи", icon: Users, manageUsers: true },
 ] as const;
 
 const analyticsNav = [
@@ -33,6 +34,7 @@ export function Sidebar() {
   const isAnalytics = location.pathname.startsWith("/analytics");
   const [analyticsOpen, setAnalyticsOpen] = useState(isAnalytics);
   const { unreadCount } = useNotifications();
+  const user = getCurrentUser();
 
   const handleLogout = () => {
     logout();
@@ -56,7 +58,7 @@ export function Sidebar() {
 
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
         {/* Основная навигация */}
-        {mainNav.map((item) => {
+        {mainNav.filter((item) => !("manageUsers" in item) || canManageUsers(user)).map((item) => {
           const Icon = item.icon;
           const active = isActive(item.to);
           const isNotifications = item.to === "/notifications";
@@ -150,8 +152,8 @@ export function Sidebar() {
             A
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">Администратор</p>
-            <p className="truncate text-xs text-sidebar-foreground/60">admin@tender.ru</p>
+            <p className="truncate text-sm font-medium">{user?.name || user?.email || "Пользователь"}</p>
+            <p className="truncate text-xs text-sidebar-foreground/60">{user ? roleLabels[user.role] : "Гость"}</p>
           </div>
         </div>
         <button

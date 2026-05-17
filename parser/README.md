@@ -6,7 +6,8 @@
 
 - многопоточный цикл мониторинга публичной страницы `zakup.gov.kz/home/lots` через Playwright каждые 30 минут;
 - Playwright для динамических страниц;
-- умная фильтрация по ключам: exact match, лемматизация `pymorphy3`, опциональные embeddings и LLM-фильтр;
+- сбор всех активных лотов без вышедшего дедлайна и отдельная маркировка подходящих по ключам;
+- умное определение подходящих лотов: exact match, лемматизация `pymorphy3`, опциональные embeddings и LLM-фильтр;
 - PostgreSQL-хранилище с защитой от дублей по `source + external_id`;
 - таблицы для ключевых слов, документов, запусков и уведомлений;
 - скачивание PDF/DOC/DOCX технических спецификаций;
@@ -72,20 +73,21 @@ RAG_API_BASE=http://localhost:8083
 DICTIONARIES_API_URL=http://localhost:8082/api/v1/dictionaries?kind=keywords
 POLL_INTERVAL_SECONDS=1800
 MAX_WORKERS=4
-STRICT_KEYWORD_FILTER=true
+STRICT_KEYWORD_FILTER=false
+COLLECT_ALL_ACTIVE_LOTS=true
 SMART_MATCH_ENABLED=true
 SMART_MATCH_USE_MORPHOLOGY=true
 SEMANTIC_MATCH_ENABLED=false
 AI_LOT_FILTER_ENABLED=false
-STOP_AT_FIRST_SEEN_LOT=true
-PROCESS_EXISTING_LOTS=false
+STOP_AT_FIRST_SEEN_LOT=false
+PROCESS_EXISTING_LOTS=true
 MAX_LOTS_PER_CYCLE=0
 PLATFORMS=zakup
 DEFAULT_KEYWORDS=
 ZAKUP_PUBLIC_BASE_URL=https://zakup.gov.kz
 ZAKUP_LOTS_URL=https://zakup.gov.kz/home/lots
-ZAKUP_LOTS_LIMIT=10
-ZAKUP_LOTS_MAX_PAGES=50
+ZAKUP_LOTS_LIMIT=100
+ZAKUP_LOTS_MAX_PAGES=0
 ZAKUP_LOTS_SYSTEM_IDS=1__2__3
 OUR_BINS=123456789012
 TELEGRAM_BOT_TOKEN=
@@ -121,7 +123,9 @@ python main.py --once
 
 Парсер каждый цикл пытается загрузить активные ключи из `DICTIONARIES_API_URL`. Если пользователь добавит слово в справочник `/dictionaries`, следующий 30-минутный цикл автоматически возьмёт обновлённый список. Если backend справочника недоступен или вернул пустой список, parser использует таблицу `parser_keywords`, а затем fallback `DEFAULT_KEYWORDS`.
 
-`STRICT_KEYWORD_FILTER=true` дополнительно проверяет, что найденная строка результата действительно содержит ключевое слово. В `raw` лота сохраняется `matched_keyword`.
+`COLLECT_ALL_ACTIVE_LOTS=true` включает новый основной режим: parser сохраняет все активные лоты, у которых дедлайн ещё не вышел, проходя по страницам закупок через `limit + offset`. Лоты не отбрасываются по ключевым словам.
+
+`STRICT_KEYWORD_FILTER=false` нужен для режима всех активных лотов. Совпадения по ключевым словам сохраняются отдельно в `raw.matched_keyword`, `raw.match_score`, `raw.match_method`, `raw.match_reason`, `raw.is_suitable`. Именно эти поля использует вкладка `Подходящие` во фронтенде.
 
 `SMART_MATCH_USE_MORPHOLOGY=true` включает лемматизацию русского языка через `pymorphy3`: формы вроде `серверов`, `серверное`, `сервер` считаются совпадением по одной базовой форме.
 
@@ -129,7 +133,9 @@ python main.py --once
 
 `AI_LOT_FILTER_ENABLED=false` по умолчанию выключен. Если включить, parser будет отправлять текст лота в `tender-rag` endpoint `/v1/lot/analyze` и сохранять результат в `raw.ai_filter`, `raw.ai_score`, `raw.ai_passed`.
 
-`STOP_AT_FIRST_SEEN_LOT=true`, `PROCESS_EXISTING_LOTS=false` и `MAX_LOTS_PER_CYCLE=0` заставляют parser идти по выдаче `/home/lots` до первого уже известного лота и обрабатывать все новые подходящие тендеры.
+`STOP_AT_FIRST_SEEN_LOT=false`, `PROCESS_EXISTING_LOTS=true` и `MAX_LOTS_PER_CYCLE=0` нужны для полного обновления активной выдачи: parser не останавливается на первом уже известном лоте, проходит все страницы до пустой страницы или до лимита `ZAKUP_LOTS_MAX_PAGES`.
+
+`ZAKUP_LOTS_LIMIT=100` берёт максимум лотов за страницу, `ZAKUP_LOTS_MAX_PAGES=0` означает без фиксированного лимита страниц. Если площадка начнёт отдавать слишком много данных или запуск в GitHub Actions не успевает, временно задайте, например, `ZAKUP_LOTS_MAX_PAGES=20`.
 
 ## Telegram-уведомления
 
@@ -143,7 +149,7 @@ TELEGRAM_BOT_TOKEN=123456:telegram-token
 TELEGRAM_CHAT_ID=123456789
 ```
 
-Telegram-сообщение отправляется только для нового релевантного лота после успешного `upsert_lot`. Если переменные пустые, parser продолжает работать без Telegram.
+Telegram-сообщение отправляется только для нового подходящего лота после успешного `upsert_lot`. Неподходящие активные лоты сохраняются в базу, но не отправляются в Telegram, не скачивают документы и не отправляются в RAG. Если переменные пустые, parser продолжает работать без Telegram.
 
 ```sql
 INSERT INTO parser_keywords(value, active)
@@ -170,4 +176,4 @@ SELECT * FROM parser_runs ORDER BY started_at DESC;
 
 ## Важное ограничение
 
-Основной адаптер `zakup` работает без OWS-токена через Playwright и публичный route `/home/lots?limit=10&offset=0&ord=undefined&system_id__in=1__2__3`. Если позже появится OWS-токен, отдельный режим `PLATFORMS=zakup_ows` оставлен в проекте.
+Основной адаптер `zakup` работает без OWS-токена через Playwright и публичный route `/home/lots?limit=100&offset=0&ord=undefined&system_id__in=1__2__3`. Если позже появится OWS-токен, отдельный режим `PLATFORMS=zakup_ows` оставлен в проекте; он тоже поддерживает режим `COLLECT_ALL_ACTIVE_LOTS=true`.

@@ -8,6 +8,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-tender}
     volumes:
       - tender_postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tender} -d ${POSTGRES_DB:-tender}"]
       interval: 10s
@@ -24,6 +26,8 @@ services:
     volumes:
       - rag_postgres_data:/var/lib/postgresql/data
       - ./tender-rag/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "${RAG_POSTGRES_PORT:-5434}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${RAG_POSTGRES_USER:-rag} -d ${RAG_POSTGRES_DB:-rag}"]
       interval: 10s
@@ -33,6 +37,9 @@ services:
   backend:
     build:
       context: ./tenderai
+      args:
+        GOPROXY: ${GOPROXY:-https://goproxy.io,https://proxy.golang.org,direct}
+        GOSUMDB: ${GOSUMDB:-sum.golang.org}
     restart: unless-stopped
     environment:
       PORT: 8082
@@ -93,11 +100,15 @@ services:
       MAX_WORKERS: ${MAX_WORKERS:-4}
       HEADLESS: "true"
       DOWNLOAD_DIR: /app/downloads
-      STRICT_KEYWORD_FILTER: "true"
+      STRICT_KEYWORD_FILTER: ${STRICT_KEYWORD_FILTER:-false}
+      COLLECT_ALL_ACTIVE_LOTS: ${COLLECT_ALL_ACTIVE_LOTS:-true}
       SMART_MATCH_ENABLED: "true"
       SMART_MATCH_USE_MORPHOLOGY: "true"
       SEMANTIC_MATCH_ENABLED: ${SEMANTIC_MATCH_ENABLED:-false}
       AI_LOT_FILTER_ENABLED: ${AI_LOT_FILTER_ENABLED:-false}
+      STOP_AT_FIRST_SEEN_LOT: ${STOP_AT_FIRST_SEEN_LOT:-false}
+      PROCESS_EXISTING_LOTS: ${PROCESS_EXISTING_LOTS:-true}
+      MAX_LOTS_PER_CYCLE: ${MAX_LOTS_PER_CYCLE:-0}
       PLATFORMS: ${PLATFORMS:-zakup}
       DEFAULT_KEYWORDS: ${DEFAULT_KEYWORDS:-}
       GOSZAKUP_OWS_TOKEN: ${GOSZAKUP_OWS_TOKEN:-}
@@ -105,8 +116,8 @@ services:
       GOSZAKUP_OWS_GRAPHQL_URL: ${GOSZAKUP_OWS_GRAPHQL_URL:-https://ows.goszakup.gov.kz/v3/graphql}
       ZAKUP_PUBLIC_BASE_URL: ${ZAKUP_PUBLIC_BASE_URL:-https://zakup.gov.kz}
       ZAKUP_LOTS_URL: ${ZAKUP_LOTS_URL:-https://zakup.gov.kz/home/lots}
-      ZAKUP_LOTS_LIMIT: ${ZAKUP_LOTS_LIMIT:-10}
-      ZAKUP_LOTS_MAX_PAGES: ${ZAKUP_LOTS_MAX_PAGES:-50}
+      ZAKUP_LOTS_LIMIT: ${ZAKUP_LOTS_LIMIT:-100}
+      ZAKUP_LOTS_MAX_PAGES: ${ZAKUP_LOTS_MAX_PAGES:-0}
       ZAKUP_LOTS_SYSTEM_IDS: ${ZAKUP_LOTS_SYSTEM_IDS:-1__2__3}
       ZAKUP_OWS_LIMIT_PER_PAGE: ${ZAKUP_OWS_LIMIT_PER_PAGE:-200}
       ZAKUP_OWS_MAX_PAGES_PER_KEYWORD: ${ZAKUP_OWS_MAX_PAGES_PER_KEYWORD:-0}

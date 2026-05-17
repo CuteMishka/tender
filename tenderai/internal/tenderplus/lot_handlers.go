@@ -3,6 +3,7 @@ package tenderplus
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
@@ -17,10 +18,23 @@ func ParticipateLotHandler(db *gorm.DB) http.HandlerFunc {
 			return
 		}
 
-		// Принимаем статус из запроса; если не задан — по умолчанию "participating"
-		if input.Status != "participating" && input.Status != "rejected" && input.Status != "active" {
+		if input.Status != "participating" && input.Status != "rejected" && input.Status != "active" && input.Status != "review" && input.Status != "in_work" {
 			input.Status = "participating"
 		}
+		entry := map[string]string{
+			"status":     input.Status,
+			"comment":    input.Comment,
+			"assignedTo": input.AssignedTo,
+			"reviewer":   input.Reviewer,
+			"at":         time.Now().Format(time.RFC3339),
+		}
+		historyEntries := []map[string]string{}
+		if input.ActionHistory != "" {
+			_ = json.Unmarshal([]byte(input.ActionHistory), &historyEntries)
+		}
+		historyEntries = append(historyEntries, entry)
+		history, _ := json.Marshal(historyEntries)
+		input.ActionHistory = string(history)
 
 		if err := db.Save(&input).Error; err != nil {
 			http.Error(w, `{"error":"Ошибка сохранения лота"}`, http.StatusInternalServerError)
@@ -36,7 +50,11 @@ func ParticipateLotHandler(db *gorm.DB) http.HandlerFunc {
 func GetSavedLotsHandler(db *gorm.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var lots []SavedLot
-		if err := db.Order("created_at desc").Find(&lots).Error; err != nil {
+		q := db.Order("created_at desc")
+		if status := r.URL.Query().Get("status"); status != "" {
+			q = q.Where("status = ?", status)
+		}
+		if err := q.Find(&lots).Error; err != nil {
 			http.Error(w, `{"error":"Ошибка получения лотов"}`, http.StatusInternalServerError)
 			return
 		}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	_ "time/tzdata"
 
 	"github.com/dauren/tender/internal/analytics"
 	"github.com/dauren/tender/internal/api"

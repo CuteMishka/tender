@@ -52,6 +52,9 @@ type LotDTO struct {
 	CustomerName  *string          `json:"customer_name,omitempty"`
 	Status        *string          `json:"status,omitempty"`
 	PurchaseType  *string          `json:"purchaseType,omitempty"`
+	IsSuitable     *bool            `json:"isSuitable,omitempty"`
+	MatchedKeyword *string          `json:"matchedKeyword,omitempty"`
+	MatchScore     *float64         `json:"matchScore,omitempty"`
 	Documents     []LotDocumentDTO `json:"documents"`
 }
 
@@ -77,6 +80,9 @@ type ParserLot struct {
 	PurchaseType  *string    `gorm:"column:purchase_type"`
 	Status        string     `gorm:"column:status"`
 	UpdatedAt     time.Time  `gorm:"column:updated_at"`
+	IsSuitable     *bool      `gorm:"column:is_suitable"`
+	MatchedKeyword *string    `gorm:"column:matched_keyword"`
+	MatchScore     *float64   `gorm:"column:match_score"`
 }
 
 func (ParserLot) TableName() string {
@@ -110,6 +116,8 @@ func timePtrRFC3339(value *time.Time) *string {
 
 func sourceLabel(source string) string {
 	switch source {
+	case "zakup":
+		return "Госзакупки"
 	case "goszakup":
 		return "Госзакупки"
 	case "samruk":
@@ -117,6 +125,10 @@ func sourceLabel(source string) string {
 	default:
 		return source
 	}
+}
+
+func parserLotSelectExpr() string {
+	return "parser_lots.*, CASE WHEN raw @> '{\"is_suitable\": true}'::jsonb OR (raw->'is_suitable' IS NULL AND NULLIF(raw->>'matched_keyword', '') IS NOT NULL) THEN true ELSE false END AS is_suitable, NULLIF(raw->>'matched_keyword', '') AS matched_keyword, NULLIF(raw->>'match_score', '')::double precision AS match_score"
 }
 
 func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
@@ -151,6 +163,9 @@ func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
 		CustomerName:  row.CustomerName,
 		Status:        strPtr(row.Status),
 		PurchaseType:  row.PurchaseType,
+		IsSuitable:     row.IsSuitable,
+		MatchedKeyword: row.MatchedKeyword,
+		MatchScore:     row.MatchScore,
 		Documents:     documents,
 	}
 }
@@ -173,10 +188,13 @@ func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	query := h.DB.Model(&ParserLot{}).Where("source IN ?", []string{"goszakup", "samruk"})
+	query := h.DB.Model(&ParserLot{}).Where("source IN ?", []string{"zakup", "goszakup", "samruk"})
 	keywords := splitKeywords(r.URL.Query().Get("keywords"))
 	if len(keywords) > 0 {
 		query = applyKeywordFilter(query, keywords)
+	}
+	if parseBoolQuery(r.URL.Query().Get("suitable")) {
+		query = query.Where("(raw @> ?::jsonb OR (raw->'is_suitable' IS NULL AND NULLIF(raw->>'matched_keyword', '') IS NOT NULL))", `{"is_suitable": true}`)
 	}
 
 	var total int64
@@ -186,7 +204,7 @@ func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var rows []ParserLot
-	if err := query.Order("updated_at desc, id desc").Limit(limit).Offset((page - 1) * limit).Find(&rows).Error; err != nil {
+	if err := query.Select(parserLotSelectExpr()).Order("updated_at desc, id desc").Limit(limit).Offset((page - 1)*limit).Find(&rows).Error; err != nil {
 		http.Error(w, `{"error":"ошибка получения тендеров"}`, http.StatusInternalServerError)
 		return
 	}
@@ -224,7 +242,7 @@ func (h *Handler) GetTender(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var row ParserLot
-	err = h.DB.Where("id = ? AND source IN ?", id, []string{"goszakup", "samruk"}).First(&row).Error
+	err = h.DB.Select(parserLotSelectExpr()).Where("id = ? AND source IN ?", id, []string{"zakup", "goszakup", "samruk"}).First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		http.Error(w, `{"error":"тендер не найден"}`, http.StatusNotFound)
 		return
@@ -251,6 +269,15 @@ func splitKeywords(raw string) []string {
 		}
 	}
 	return keywords
+}
+
+func parseBoolQuery(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func applyKeywordFilter(query *gorm.DB, keywords []string) *gorm.DB {

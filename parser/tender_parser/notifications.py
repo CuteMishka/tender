@@ -45,6 +45,7 @@ class NotificationService:
             f"{lot.title}: {message}. Площадка: {lot.source}.",
             {"url": lot.url, "changes": changes, "source": lot.source, "external_id": lot.external_id, "matched_keyword": lot.raw.get("matched_keyword")},
         )
+        self._send_telegram(self._format_lot_changed_message(lot, message))
 
     def rag_indexed(self, lot: TenderLot, document_name: str, text_chars: int | None) -> None:
         self.db.notify(
@@ -55,6 +56,7 @@ class NotificationService:
             f"{document_name}: индексировано {text_chars or 0} символов. Площадка: {lot.source}.",
             {"url": lot.url, "source": lot.source, "external_id": lot.external_id},
         )
+        self._send_telegram(self._format_rag_indexed_message(lot, document_name, text_chars))
 
     def winner_detected(self, lot: TenderLot) -> None:
         if not lot.winner_bin:
@@ -68,15 +70,20 @@ class NotificationService:
             f"{lot.title}: победитель {lot.winner_name or 'не указан'}, БИН {lot.winner_bin}. Площадка: {lot.source}.",
             {"url": lot.url, "source": lot.source, "winner_bin": lot.winner_bin, "winner_name": lot.winner_name, "won": won},
         )
+        self._send_telegram(self._format_winner_message(lot, won))
 
     def _send_telegram(self, text: str) -> None:
-        if not self.telegram_bot_token or not self.telegram_chat_id:
+        bot_token, chat_id = self.db.load_telegram_settings()
+        if not bot_token or not chat_id:
+            bot_token = self.telegram_bot_token
+            chat_id = self.telegram_chat_id
+        if not bot_token or not chat_id:
             return
         try:
             response = httpx.post(
-                f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage",
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
                 json={
-                    "chat_id": self.telegram_chat_id,
+                    "chat_id": chat_id,
                     "text": text[:4096],
                     "disable_web_page_preview": True,
                 },
@@ -109,3 +116,40 @@ class NotificationService:
 
     def _format_amount(self, amount: Decimal) -> str:
         return f"{amount:,.2f} ₸".replace(",", " ").replace(".00", "")
+
+    def _format_lot_changed_message(self, lot: TenderLot, message: str) -> str:
+        lines = [
+            "Изменение по тендеру",
+            f"Площадка: {lot.source}",
+            f"Лот: {lot.external_id}",
+            f"Название: {lot.title}",
+            f"Изменения: {message}",
+        ]
+        if lot.url:
+            lines.append(f"Ссылка: {lot.url}")
+        return "\n".join(lines)
+
+    def _format_rag_indexed_message(self, lot: TenderLot, document_name: str, text_chars: int | None) -> str:
+        lines = [
+            "Документ индексирован в RAG",
+            f"Площадка: {lot.source}",
+            f"Лот: {lot.external_id}",
+            f"Документ: {document_name}",
+            f"Символов: {text_chars or 0}",
+        ]
+        if lot.url:
+            lines.append(f"Ссылка: {lot.url}")
+        return "\n".join(lines)
+
+    def _format_winner_message(self, lot: TenderLot, won: bool) -> str:
+        lines = [
+            "Мы выиграли тендер" if won else "Определён победитель тендера",
+            f"Площадка: {lot.source}",
+            f"Лот: {lot.external_id}",
+            f"Название: {lot.title}",
+            f"Победитель: {lot.winner_name or 'не указан'}",
+            f"БИН: {lot.winner_bin or 'не указан'}",
+        ]
+        if lot.url:
+            lines.append(f"Ссылка: {lot.url}")
+        return "\n".join(lines)

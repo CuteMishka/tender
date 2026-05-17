@@ -183,6 +183,9 @@ export type TenderItem = {
   customerName?: string | null;
   status?: string | null;
   purchaseType?: string | null;
+  isSuitable?: boolean | null;
+  matchedKeyword?: string | null;
+  matchScore?: number | null;
   documents?: TenderDocument[];
   technical_specification?: string;
   ai_analysis?: string;
@@ -220,6 +223,8 @@ export function tenderCompanyName(tender: TenderItem): string {
 export function tenderSourceLabel(tender: TenderItem): string {
   if (tender.sourceLabel?.trim()) return tender.sourceLabel.trim();
   switch ((tender.source || "").trim().toLowerCase()) {
+    case "zakup":
+      return "Госзакупки";
     case "goszakup":
       return "Госзакупки";
     case "samruk":
@@ -340,6 +345,9 @@ function normalizeTenderPayload(body: unknown): TenderItem | null {
       customer_name: typeof o.customer_name === "string" ? o.customer_name : null,
       customerName: typeof o.customerName === "string" ? o.customerName : null,
       status: typeof o.status === "string" ? o.status : null,
+      isSuitable: typeof o.isSuitable === "boolean" ? o.isSuitable : null,
+      matchedKeyword: typeof o.matchedKeyword === "string" ? o.matchedKeyword : null,
+      matchScore: typeof o.matchScore === "number" ? o.matchScore : null,
       ...(technical_specification !== undefined ? { technical_specification } : {}),
       ...(ai_analysis !== undefined ? { ai_analysis } : {}),
     };
@@ -429,6 +437,7 @@ export async function fetchTendersList(input: {
   page: number;
   limit?: number;
   keywords?: string;
+  suitable?: boolean;
 }): Promise<TendersListResponse> {
   const { page, limit } = normalizeInput(input);
   const base = getTenderApiBase();
@@ -436,6 +445,7 @@ export async function fetchTendersList(input: {
   params.set("limit", String(limit));
   params.set("page", String(page));
   if (input.keywords?.trim()) params.set("keywords", input.keywords.trim());
+  if (input.suitable) params.set("suitable", "true");
 
   const url = `${base}/api/v1/tenders?${params.toString()}`;
   const res = await fetch(url);

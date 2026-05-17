@@ -37,7 +37,14 @@ func NewRouter(h *Handler, allowedOrigins []string) http.Handler {
 			s.Post("/fetch-document", h.FetchDocument)
 		}
 		if h.Users != nil {
+			s.Post("/auth/login", h.Login)
+			s.Post("/auth/register-request", h.CreateRegistrationRequest)
 			s.Get("/users", h.ListUsers)
+			s.Patch("/users/{id}/role", h.UpdateUserRole)
+			s.Delete("/users/{id}", h.DeleteUser)
+			s.Get("/registration-requests", h.ListRegistrationRequests)
+			s.Post("/registration-requests/{id}/approve", h.ApproveRegistrationRequest)
+			s.Post("/registration-requests/{id}/reject", h.RejectRegistrationRequest)
 		}
 	})
 
