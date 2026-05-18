@@ -1,0 +1,57 @@
+.sv_settings{
+    display: none;
+    padding: 10px;
+    min-height: 40px;
+    font-size:22px;
+    color:#333;
+    background: white;
+}
+.sv_settings *{
+    font-weight:bold;
+}
+
+.fs-outer button{
+    display:inline-block;
+    background:white !important;
+    color:black !important;
+    height:35px;
+    width:35px;
+    padding: 0;
+}
+.fs-n{
+    font-size:14px;
+}
+.fs-m{
+    font-size:18px;
+}
+.fs-l{
+    font-size:22px;
+}
+
+.cs-outer button{
+    display:inline-block;
+    height:35px;
+    width:35px;
+    padding: 0;
+}
+
+.cs-bw, .cs-bw:focus, .cs-bw:hover{
+    color:black !important;
+    background:white !important;
+}
+.cs-wb, .cs-wb:focus, .cs-wb:hover{
+    color:white !important;
+    background:black !important;
+}
+.cs-bb, .cs-bb:focus, .cs-bb:hover{
+    color: #063462 !important;
+    background: #9dd1ff !important;
+}
+.cs-gb, .cs-gb:focus, .cs-gb:hover{
+    color: #4d4b43 !important;
+    background: #f7f3d6 !important;
+}
+.cs-yg, .cs-yg:focus, .cs-yg:hover{
+    color: #a9e44d !important;
+    background: #3b2717 !important;
+}

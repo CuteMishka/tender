@@ -236,6 +236,8 @@ class GoszakupPlatform(TenderPlatform):
             status = clean_text(cells[6].get_text(" ", strip=True)) or "active"
             announce_id = self._extract_announce_id(announce_url)
             lot_internal_id = self._extract_subprice_lot_id(subpriceoffer_url)
+            row_text = clean_text(row.get_text(" ", strip=True))
+            row_dates = self._extract_datetimes(row_text)
             match_text = " ".join(part for part in [lot_number_text, announce_title, lot_title, customer_name or "", description, purchase_type or "", status] if part)
             lots.append(TenderLot(
                 source=self.name,
@@ -244,6 +246,8 @@ class GoszakupPlatform(TenderPlatform):
                 title=lot_title or announce_title or f"Лот {external_id}",
                 description=description,
                 amount=amount,
+                start_date=row_dates[0] if len(row_dates) > 1 else None,
+                end_date=row_dates[-1] if row_dates else None,
                 customer_name=customer_name,
                 organizer_name=customer_name,
                 purchase_type=purchase_type,
@@ -261,7 +265,8 @@ class GoszakupPlatform(TenderPlatform):
                     "subprice_lot_id": lot_internal_id,
                     "quantity": quantity,
                     "match_text": match_text[:4000],
-                    "row_text": clean_text(row.get_text(" ", strip=True))[:2500],
+                    "row_text": row_text[:2500],
+                    "row_dates": [value.isoformat(sep=" ") for value in row_dates],
                 },
             ))
         return lots
@@ -278,8 +283,8 @@ class GoszakupPlatform(TenderPlatform):
         lot.customer_name = lot.customer_name or lot.organizer_name
         lot.amount = parse_amount(self._first_field(fields, ["Сумма закупки", "Запланированная сумма", "Общая сумма"])) or lot.amount
         lot.status = (self._first_field(fields, ["Статус объявления", "Статус лота"]) or lot.status)[:64]
-        lot.start_date = parse_datetime(self._first_field(fields, ["Дата начала приема заявок", "Начало приема заявок", "Дата начала представления заявок", "Срок начала приема заявок"])) or lot.start_date
-        lot.end_date = parse_datetime(self._first_field(fields, ["Дата окончания приема заявок", "Окончание приема заявок", "Срок окончания приема заявок", "Окончание с", "end_date"])) or lot.end_date
+        lot.start_date = parse_datetime(self._first_field(fields, ["Дата начала приема заявок", "Начало приема заявок", "Дата начала представления заявок", "Срок начала приема заявок"])) or self._extract_labeled_datetime(body, ["Срок начала приема заявок", "Дата начала приема заявок"]) or lot.start_date
+        lot.end_date = parse_datetime(self._first_field(fields, ["Дата окончания приема заявок", "Окончание приема заявок", "Срок окончания приема заявок", "Окончание с", "end_date"])) or self._extract_labeled_datetime(body, ["Срок окончания приема заявок", "Дата окончания приема заявок"]) or lot.end_date
         lot.place = self._first_field(fields, ["Место поставки", "Место выполнения", "Адрес поставки", "Юр. адрес организатора"]) or lot.place
         lot.raw = {
             **lot.raw,
@@ -292,8 +297,9 @@ class GoszakupPlatform(TenderPlatform):
         lot.description = self._first_field(fields, ["Дополнительная характеристика", "Краткая характеристика", "Наименование и описание лота", "Описание", "Наименование ТРУ"]) or lot.description
         lot.place = self._first_field(fields, ["Место поставки товара, КАТО", "Место поставки", "Адрес поставки"]) or lot.place
         lot.amount = parse_amount(self._first_field(fields, ["Запланированная сумма", "Сумма 1 год", "Сумма, тг."])) or lot.amount
-        lot.start_date = parse_datetime(self._first_field(fields, ["Дата начала приема заявок", "Начало приема заявок", "Срок начала приема заявок"])) or lot.start_date
-        lot.end_date = parse_datetime(self._first_field(fields, ["Дата окончания приема заявок", "Окончание приема заявок", "Срок окончания приема заявок", "end_date"])) or lot.end_date
+        body = html_text(html)
+        lot.start_date = parse_datetime(self._first_field(fields, ["Дата начала приема заявок", "Начало приема заявок", "Срок начала приема заявок"])) or self._extract_labeled_datetime(body, ["Срок начала приема заявок", "Дата начала приема заявок"]) or lot.start_date
+        lot.end_date = parse_datetime(self._first_field(fields, ["Дата окончания приема заявок", "Окончание приема заявок", "Срок окончания приема заявок", "end_date"])) or self._extract_labeled_datetime(body, ["Срок окончания приема заявок", "Дата окончания приема заявок"]) or lot.end_date
         status = self._first_field(fields, ["Статус лота", "Статус"])
         if status:
             lot.status = status[:64]
@@ -306,6 +312,8 @@ class GoszakupPlatform(TenderPlatform):
             row_text = clean_text(row.get_text(" ", strip=True))
             if not row_text or "Наименование документа" in row_text:
                 continue
+            cells = row.find_all("td", recursive=False)
+            document_name = clean_text(cells[0].get_text(" ", strip=True)) if cells else row_text
             for link in row.select("a[href]"):
                 href = link.get("href") or ""
                 text = clean_text(link.get_text(" ", strip=True))
@@ -313,11 +321,11 @@ class GoszakupPlatform(TenderPlatform):
                 if href.lower().startswith("javascript:") or "подпись" in lowered or "signature" in lowered:
                     continue
                 if any(marker in lowered for marker in ("download", "uploads", "files", ".pdf", ".doc", ".docx", "тех", "специф", "тз", "проект договора", "протокол", "итог", "обеспечение заявки")):
-                    docs.append(TenderDocument(name=text or row_text or href.rsplit("/", 1)[-1] or "Документ", url=absolute_url(announce_url, href)))
+                    docs.append(TenderDocument(name=text or document_name or href.rsplit("/", 1)[-1] or "Документ", url=absolute_url(announce_url, href)))
             for button in row.select("[onclick]"):
                 onclick = button.get("onclick") or ""
                 if "actionModalShowFiles" in onclick:
-                    docs.extend(self._load_modal_documents(page, onclick, row_text, announce_url))
+                    docs.extend(self._load_modal_documents(page, onclick, document_name, announce_url))
         return self._dedupe_documents(docs)
 
     def _load_modal_documents(self, page, onclick: str, document_name: str, announce_url: str) -> list[TenderDocument]:
@@ -326,7 +334,15 @@ class GoszakupPlatform(TenderPlatform):
             return []
         endpoint = absolute_url(self.settings.goszakup_base_url, f"/ru/announce/actionAjaxModalShowFiles/{match.group(1)}/{match.group(2)}")
         try:
-            response = page.request.get(endpoint, timeout=self.settings.request_timeout_seconds * 1000)
+            response = page.request.get(
+                endpoint,
+                timeout=self.settings.request_timeout_seconds * 1000,
+                headers={
+                    "Accept": "text/html, */*; q=0.01",
+                    "Referer": self._tab_url(announce_url, "documents"),
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            )
             if not response.ok:
                 self.log.warning("goszakup_document_modal_failed", url=endpoint, status=response.status)
                 return []
@@ -414,6 +430,24 @@ class GoszakupPlatform(TenderPlatform):
         for match in re.finditer(r"(?:https://goszakup\.gov\.kz)?/ru/announce/index/(\d+)", value or ""):
             urls.append(absolute_url(self.settings.goszakup_base_url, f"/ru/announce/index/{match.group(1)}"))
         return urls
+
+    def _extract_datetimes(self, value: str) -> list:
+        result = []
+        for match in re.finditer(r"\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?|\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}(?::\d{2})?|\d{2}\.\d{2}\.\d{4}", value or ""):
+            parsed = parse_datetime(match.group(0))
+            if parsed:
+                result.append(parsed)
+        return result
+
+    def _extract_labeled_datetime(self, body: str, labels: list[str]):
+        for label in labels:
+            pattern = rf"{re.escape(label)}\s+(\d{{4}}-\d{{2}}-\d{{2}}\s+\d{{2}}:\d{{2}}(?::\d{{2}})?|\d{{2}}\.\d{{2}}\.\d{{4}}\s+\d{{2}}:\d{{2}}(?::\d{{2}})?|\d{{2}}\.\d{{2}}\.\d{{4}})"
+            match = re.search(pattern, body or "", flags=re.IGNORECASE)
+            if match:
+                parsed = parse_datetime(match.group(1))
+                if parsed:
+                    return parsed
+        return None
 
     def _extract_customer(self, value: str) -> str | None:
         match = re.search(r"Заказчик:\s*(.+?)(?:\s{2,}|$)", clean_text(value))
