@@ -183,6 +183,11 @@ class Database:
             row.updated_at = now
             session.commit()
 
+    def load_lot_raw(self, stable_id: str) -> dict[str, Any]:
+        with self.session() as session:
+            raw = session.scalar(select(ParserLot.raw).where(ParserLot.stable_id == stable_id).limit(1))
+        return raw if isinstance(raw, dict) else {}
+
     def start_run(self, platforms: list[str], keywords: list[str]) -> int:
         with self.session() as session:
             run = ParserRun(platforms=platforms, keywords=keywords)

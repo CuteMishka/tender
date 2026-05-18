@@ -1,8 +1,8 @@
 import { createFileRoute, Link, useLocation, useNavigate } from "@tanstack/react-router";
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
 import {
-  ArrowLeft, ExternalLink, FileText, Sparkles, Upload,
+  ArrowLeft, ExternalLink, FileText, Sparkles,
   ThumbsUp, ThumbsDown, Calendar, Building2, MapPin,
   Hash, DollarSign, Clock, Download, History,
 } from "lucide-react";
@@ -15,12 +15,9 @@ import {
   fetchTenderById,
   formatDate,
   formatTenderAmount,
-  getFetchDocumentProxyUrl,
   getLocalApiBase,
   getTenderSpecCache,
   getTenderStatus,
-  indexLotDocument,
-  indexLotText,
   markTenderViewed,
   markTenderDecision,
   getTenderViewInfo,
@@ -30,7 +27,6 @@ import {
   sanitizeApiTextMultiline,
   tenderCompanyName,
   tenderSourceLabel,
-  tenderDocumentBlobToFile,
   type LotAnalyzeResult,
   type LotSpecService,
   type LotSpecSummary,
@@ -62,11 +58,6 @@ function sourceBadgeClass(source?: string | null): string {
 function specText(s: string | undefined) {
   if (!s) return "";
   return sanitizeApiTextMultiline(s);
-}
-
-function isRagUploadableFile(file: File): boolean {
-  const n = file.name.toLowerCase();
-  return n.endsWith(".pdf") || n.endsWith(".docx") || n.endsWith(".doc");
 }
 
 function downloadTextFile(filename: string, text: string) {
@@ -288,11 +279,6 @@ function TenderDetail() {
   const [lotAnalysisLoading, setLotAnalysisLoading] = useState(false);
   const [lotAnalysisError, setLotAnalysisError] = useState<string | null>(null);
 
-  const [ragFile, setRagFile] = useState<File | null>(null);
-  const [ragExtractSpecPoints, setRagExtractSpecPoints] = useState(false);
-  const [ragIncludeExtractedText, setRagIncludeExtractedText] = useState(true);
-  const [ragPanelOpen, setRagPanelOpen] = useState(false);
-  const [ragUploadLoading, setRagUploadLoading] = useState(false);
   const [ragUploadError, setRagUploadError] = useState<string | null>(null);
   const [ragUploadOk, setRagUploadOk] = useState<string | null>(null);
   const [ragExtractedOverride, setRagExtractedOverride] = useState<string | null>(null);
@@ -305,9 +291,6 @@ function TenderDetail() {
   const [similarLots, setSimilarLots] = useState<HistoricalLot[]>([]);
   const [similarLotsLoading, setSimilarLotsLoading] = useState(false);
   const [similarLotsError, setSimilarLotsError] = useState<string | null>(null);
-
-  const ragAutoViaProxyKeyRef = useRef<string | null>(null);
-  const fetchDocumentProxyUrl = getFetchDocumentProxyUrl();
 
   const returnPage =
     typeof location.state === "object" &&
@@ -334,10 +317,6 @@ function TenderDetail() {
   }, [id]);
 
   useEffect(() => {
-    ragAutoViaProxyKeyRef.current = null;
-    setRagFile(null);
-    setRagExtractSpecPoints(false);
-    setRagIncludeExtractedText(true);
     setRagUploadError(null);
     setRagUploadOk(null);
     setSpecDownloadLoading(false);
@@ -351,73 +330,28 @@ function TenderDetail() {
     );
   }, [id]);
 
-  const submitSpecToRag = useCallback(
-    async (file: File, opts: { extractSpecPoints: boolean; includeExtractedText: boolean; sourceHintSuffix?: string }) => {
-      if (!tender) throw new Error("Нет данных тендера");
-      setRagUploadLoading(true);
-      setRagUploadError(null);
-      setRagUploadOk(null);
-      try {
-        const result = await indexLotDocument(String(tender.id), file, {
-          sourceHint: opts.sourceHintSuffix ? `tender-${tender.id};${opts.sourceHintSuffix}` : `tender-${tender.id}`,
-          extractSpecPoints: opts.extractSpecPoints,
-          includeExtractedText: opts.includeExtractedText,
-        });
-        const nextExtracted = result.extracted_text !== undefined && opts.includeExtractedText
-          ? result.extracted_text
-          : ragExtractedOverride ?? undefined;
-        if (result.extracted_text !== undefined && opts.includeExtractedText) {
-          setRagExtractedOverride(result.extracted_text);
-        }
-        let nextSummary: LotSpecSummary | undefined;
-        if (result.spec_summary && Object.keys(result.spec_summary).length > 0) {
-          setRagSpecSummary(result.spec_summary);
-          nextSummary = result.spec_summary;
-        } else if (opts.extractSpecPoints) {
-          const saved = await fetchLotSpecSummary(String(tender.id)).catch(() => null);
-          if (saved && Object.keys(saved).length > 0) {
-            setRagSpecSummary(saved);
-            nextSummary = saved;
-          }
-        }
-        const parts: string[] = [];
-        if (result.indexed) parts.push("документ проиндексирован");
-        if (typeof result.text_chars === "number") parts.push(`${result.text_chars} символов текста`);
-        const status = parts.length ? parts.join(" · ") : "Готово.";
-        setRagUploadOk(status);
-        saveTenderSpecCache(tender.id, {
-          extractedText: nextExtracted,
-          specSummary: nextSummary ?? ragSpecSummary ?? undefined,
-          uploadStatus: status,
-        });
-      } finally {
-        setRagUploadLoading(false);
-      }
-    },
-    [ragExtractedOverride, ragSpecSummary, tender],
-  );
-
   useEffect(() => {
-    if (!fetchDocumentProxyUrl || !tender) return;
-    const picked = pickTenderDocumentForRag(tender.documents);
-    if (!picked) return;
-    const key = `${tender.id}${picked.downloadLink}`;
-    if (ragAutoViaProxyKeyRef.current === key) return;
-    ragAutoViaProxyKeyRef.current = key;
+    if (!tender?.lot_source_id) return;
+    const ragLotId = tender.lot_source_id;
     let cancelled = false;
     (async () => {
       try {
-        const blob = await fetchDocumentBlobViaBackendProxy(picked.downloadLink);
+        const saved = await fetchLotSpecSummary(ragLotId);
         if (cancelled) return;
-        const file = tenderDocumentBlobToFile(picked, blob);
-        await submitSpecToRag(file, { extractSpecPoints: false, includeExtractedText: true, sourceHintSuffix: `proxy;${picked.name}` });
+        if (saved && Object.keys(saved).length > 0) {
+          setRagSpecSummary(saved);
+          saveTenderSpecCache(tender.id, {
+            extractedText: ragExtractedOverride ?? undefined,
+            specSummary: saved,
+            uploadStatus: "AI-услуги из ТС получены автоматически парсером",
+          });
+        }
       } catch (e: unknown) {
-        ragAutoViaProxyKeyRef.current = null;
         if (!cancelled) setRagUploadError(e instanceof Error ? e.message : String(e));
       }
     })();
     return () => { cancelled = true; };
-  }, [tender, fetchDocumentProxyUrl, submitSpecToRag]);
+  }, [ragExtractedOverride, tender]);
 
   const displayTechnicalSpec =
     specText(ragExtractedOverride ?? undefined) || specText(tender?.technical_specification);
@@ -468,20 +402,6 @@ function TenderDetail() {
     }
   }, [displayTechnicalSpec, ragSpecSummary, tender, lotAnalysisLoading]);
 
-  async function handleRagUpload(e: FormEvent) {
-    e.preventDefault();
-    if (!tender || !ragFile) return;
-    if (!isRagUploadableFile(ragFile)) {
-      setRagUploadError("Допустимы только файлы .pdf, .docx или .doc.");
-      return;
-    }
-    try {
-      await submitSpecToRag(ragFile, { extractSpecPoints: ragExtractSpecPoints, includeExtractedText: ragIncludeExtractedText });
-    } catch (err: unknown) {
-      setRagUploadError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
   async function handleDownloadOriginalSpec() {
     if (!tender || specDownloadLoading) return;
     const picked = pickTenderDocumentForRag(tender.documents);
@@ -499,45 +419,6 @@ function TenderDetail() {
       setRagUploadError(err instanceof Error ? err.message : String(err));
     } finally {
       setSpecDownloadLoading(false);
-    }
-  }
-
-  async function handleExtractSpecServices() {
-    if (!tender || ragUploadLoading || specDownloadLoading) return;
-    const picked = pickTenderDocumentForRag(tender.documents);
-    setRagUploadError(null);
-    setRagUploadOk(null);
-    try {
-      if (picked) {
-        setSpecDownloadLoading(true);
-        const blob = await fetchDocumentBlobViaBackendProxy(picked.downloadLink);
-        const file = tenderDocumentBlobToFile(picked, blob);
-        await submitSpecToRag(file, { extractSpecPoints: true, includeExtractedText: true, sourceHintSuffix: `services;${picked.name}` });
-        return;
-      }
-      if (displayTechnicalSpec) {
-        setRagUploadLoading(true);
-        const result = await indexLotText(String(tender.id), displayTechnicalSpec, {
-          sourceHint: `tender-${tender.id};services;text`,
-          extractSpecPoints: true,
-        });
-        if (result.spec_summary) {
-          setRagSpecSummary(result.spec_summary);
-          saveTenderSpecCache(tender.id, {
-            extractedText: ragExtractedOverride ?? displayTechnicalSpec,
-            specSummary: result.spec_summary,
-            uploadStatus: "услуги из ТС извлечены",
-          });
-        }
-        setRagUploadOk("Услуги из ТС извлечены.");
-        return;
-      }
-      setRagUploadError("Сначала нужен файл ТС или извлечённый текст спецификации.");
-    } catch (err: unknown) {
-      setRagUploadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSpecDownloadLoading(false);
-      setRagUploadLoading(false);
     }
   }
 
@@ -827,15 +708,10 @@ function TenderDetail() {
               </div>
               <div className="space-y-4 px-6 py-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-                  <button
-                    type="button"
-                    onClick={handleExtractSpecServices}
-                    disabled={ragUploadLoading || specDownloadLoading || (!pickedSpecDocument && !displayTechnicalSpec)}
-                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-                  >
+                  <span className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-muted/30 px-4 py-2 text-sm font-medium text-muted-foreground">
                     <Sparkles className="h-4 w-4" />
-                    {ragUploadLoading || specDownloadLoading ? "Разбираю ТС…" : specServices.length ? "Обновить услуги AI" : "Разобрать услуги AI"}
-                  </button>
+                    Автоматически из parser/RAG
+                  </span>
                   <input
                     type="search"
                     value={serviceSearch}
@@ -880,7 +756,7 @@ function TenderDetail() {
                   <p className="text-sm text-muted-foreground">По этому запросу услуги не найдены.</p>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    Услуги ещё не извлечены. Нажмите “Разобрать услуги AI” после того, как у лота найден или загружен файл ТС.
+                    Услуги ещё не извлечены parser-ом. Они появятся автоматически после следующего запуска парсера, если у лота есть поддерживаемый файл ТС.
                   </p>
                 )}
               </div>
@@ -1016,19 +892,11 @@ function TenderDetail() {
               <div className="border-b border-border px-6 py-4">
                 <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Техническая спецификация</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Загрузите ТЗ для индексации в RAG (PDF, DOCX) или скачайте техническую спецификацию из документов тендера.
+                  Parser автоматически индексирует ТС в RAG и сохраняет AI-выжимку услуг; здесь можно скачать исходный файл или посмотреть готовый результат.
                 </p>
               </div>
               <div className="px-6 py-4 space-y-4">
                 <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setRagPanelOpen((v) => !v)}
-                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-                  >
-                    <Upload className="h-4 w-4" />
-                    {ragPanelOpen ? "Скрыть загрузку" : "Загрузить ТЗ в RAG"}
-                  </button>
                   <button
                     type="button"
                     onClick={handleDownloadOriginalSpec}
@@ -1053,49 +921,8 @@ function TenderDetail() {
                     Найден файл ТС: <span className="font-medium text-foreground">{blockText(pickedSpecDocument.name)}</span>
                   </p>
                 )}
-                {ragPanelOpen && (
-                <form onSubmit={handleRagUpload} className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
-                  <div className="flex flex-wrap items-end gap-3">
-                    <div className="min-w-[200px] flex-1">
-                      <input
-                        id="rag-spec-file"
-                        type="file"
-                        accept=".pdf,.doc,.docx"
-                        className="block w-full text-sm text-foreground file:mr-3 file:rounded-md file:border file:border-border file:bg-background file:px-3 file:py-1.5 file:text-sm file:font-medium"
-                        disabled={ragUploadLoading}
-                        onChange={(ev) => {
-                          const f = ev.target.files?.[0];
-                          setRagFile(f ?? null);
-                          setRagUploadError(null);
-                          setRagUploadOk(null);
-                        }}
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={ragUploadLoading || !ragFile}
-                      className="inline-flex items-center gap-2 rounded-lg border border-border bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-                    >
-                      <Upload className="h-4 w-4" />
-                      {ragUploadLoading ? "Отправка…" : "Отправить в RAG"}
-                    </button>
-                  </div>
-                  <div className="flex flex-wrap gap-4 text-sm">
-                    <label className="inline-flex cursor-pointer items-center gap-2 text-muted-foreground">
-                      <input type="checkbox" className="rounded" checked={ragExtractSpecPoints} disabled={ragUploadLoading}
-                        onChange={(e) => setRagExtractSpecPoints(e.target.checked)} />
-                      Выжимка услуг через AI
-                    </label>
-                    <label className="inline-flex cursor-pointer items-center gap-2 text-muted-foreground">
-                      <input type="checkbox" className="rounded" checked={ragIncludeExtractedText} disabled={ragUploadLoading}
-                        onChange={(e) => setRagIncludeExtractedText(e.target.checked)} />
-                      Включить текст в ответе
-                    </label>
-                  </div>
-                  {ragUploadError && <p className="text-sm text-destructive">{ragUploadError}</p>}
-                  {ragUploadOk && <p className="text-sm text-muted-foreground">{ragUploadOk}</p>}
-                </form>
-                )}
+                {ragUploadError && <p className="text-sm text-destructive">{ragUploadError}</p>}
+                {ragUploadOk && <p className="text-sm text-muted-foreground">{ragUploadOk}</p>}
 
                 {ragSpecSummary && Object.keys(ragSpecSummary).length > 0 && (
                   <div>
@@ -1118,7 +945,9 @@ function TenderDetail() {
                     </div>
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">Нет текста — загрузите файл выше.</p>
+                  <p className="text-sm text-muted-foreground">
+                    Текст ТС не хранится в браузере. Parser автоматически индексирует ТС в RAG и сохраняет структурированную выжимку услуг.
+                  </p>
                 )}
               </div>
             </div>

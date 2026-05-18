@@ -67,6 +67,8 @@ class GroqSuitabilityClient:
             "Компания занимается хостингом, облачными серверами, виртуальными серверами, VPS/VDS, "
             "выделенными серверами, IaaS/PaaS/SaaS, дата-центрами, хранением данных, backup, "
             "виртуализацией, Kubernetes, Linux, сетевой инфраструктурой и информационной безопасностью. "
+            "Если переданы услуги или фрагмент технической спецификации, оценивай пригодность в первую очередь по ним, "
+            "а не только по названию карточки лота. "
             "Смысловая близость важнее точного совпадения слов. Например, закупки серверных мощностей, "
             "аренды вычислительных ресурсов, облачной инфраструктуры, размещения оборудования, backup, "
             "сетевой безопасности или администрирования серверов должны считаться подходящими. "
@@ -75,7 +77,7 @@ class GroqSuitabilityClient:
             f"Профиль компании: {self.company_profile}. "
             f"Контекстные слова: {keywords}. "
             "Ответь только JSON объектом: "
-            "{\"is_suitable\": boolean, \"score\": 0-100, \"matched_theme\": string, \"reason\": string, \"keywords\": [string]}."
+            "{\"is_suitable\": boolean, \"score\": 0-100, \"matched_theme\": string, \"reason\": string, \"keywords\": [string], \"spec_context_used\": boolean}."
         )
 
     def _user_prompt(self, lot: TenderLot) -> str:
@@ -85,6 +87,20 @@ class GroqSuitabilityClient:
             str(lot.raw.get("row_text") or ""),
             str(lot.raw.get("detail_text_sample") or ""),
         ]
+        spec_summary = lot.raw.get("spec_summary")
+        spec_services = lot.raw.get("spec_services")
+        spec_text_sample = str(lot.raw.get("spec_text_sample") or "")
+        spec_parts: list[str] = []
+        if spec_services:
+            spec_parts.append("Извлечённые AI услуги из технической спецификации:")
+            spec_parts.append(json.dumps(spec_services, ensure_ascii=False)[:8000])
+        if isinstance(spec_summary, dict):
+            spec_parts.append("Структурированная выжимка технической спецификации:")
+            spec_parts.append(json.dumps(spec_summary, ensure_ascii=False)[:8000])
+        if spec_text_sample:
+            spec_parts.append("Фрагмент текста технической спецификации:")
+            spec_parts.append(spec_text_sample[:10000])
+
         text = "\n".join(
             part for part in [
                 f"Источник: {lot.source}",
@@ -97,9 +113,10 @@ class GroqSuitabilityClient:
                 f"Сумма: {lot.amount or ''}",
                 "Дополнительный текст:",
                 "\n".join(raw_parts),
+                "\n".join(spec_parts),
             ] if part
         )
-        return text[:12000]
+        return text[:24000]
 
     def _parse_json(self, content: str) -> dict[str, Any]:
         try:

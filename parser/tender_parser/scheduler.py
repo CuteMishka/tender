@@ -1,5 +1,6 @@
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -176,11 +177,21 @@ class ParserScheduler:
 
     def _process_lot(self, platform: TenderPlatform, lot: TenderLot) -> bool:
         self.log.info("lot_process_started", platform=platform.name, lot=lot.stable_id, matched_keyword=lot.raw.get("matched_keyword"))
+        existing_raw = self.db.load_lot_raw(lot.stable_id)
+        if existing_raw:
+            lot.raw = {**existing_raw, **lot.raw}
         enriched = lot
+        try:
+            enriched = platform.enrich(lot)
+        except Exception as exc:
+            self.log.warning("lot_enrich_failed", platform=platform.name, lot=lot.stable_id, error=str(exc))
+        try:
+            self._process_spec_documents(enriched)
+        except Exception as exc:
+            self.log.warning("lot_spec_processing_failed", lot=enriched.stable_id, error=str(exc))
         self._analyze_lot_with_ai(enriched)
         suitable = self._is_suitable(enriched)
         if suitable:
-            enriched = platform.enrich(lot)
             enriched = platform.load_final_protocol(enriched)
             self._analyze_lot_with_ai(enriched)
             suitable = self._is_suitable(enriched)
@@ -190,7 +201,7 @@ class ParserScheduler:
         elif suitable and changes:
             self.notifications.lot_changed(enriched, changes)
         if suitable:
-            self._process_documents(enriched)
+            self._process_protocol_documents(enriched)
         if suitable and enriched.winner_bin:
             self.notifications.winner_detected(enriched)
         self.log.info("lot_process_finished", platform=platform.name, lot=enriched.stable_id, is_new=is_new, changes=changes)
@@ -213,10 +224,9 @@ class ParserScheduler:
         score = int(result.get("score") or 0)
         passed = bool(result.get("passed"))
         previous_suitable = lot.raw.get("is_suitable") is True
-        is_suitable = previous_suitable or passed
-        matched_keyword = lot.raw.get("matched_keyword")
-        if not matched_keyword and is_suitable:
-            matched_keyword = str(result.get("matched_theme") or "AI semantic match")
+        is_suitable = passed
+        matched_keyword = str(result.get("matched_theme") or "AI semantic match") if is_suitable else lot.raw.get("matched_keyword")
+        has_spec_context = bool(lot.raw.get("spec_services") or lot.raw.get("spec_summary") or lot.raw.get("spec_text_sample"))
         lot.raw = {
             **lot.raw,
             "ai_filter": result,
@@ -226,15 +236,23 @@ class ParserScheduler:
             "is_suitable": is_suitable,
             "matched_keyword": matched_keyword,
             "match_score": max(float(lot.raw.get("match_score") or 0), score / 100),
-            "match_method": "ai_semantic" if passed and not previous_suitable else lot.raw.get("match_method"),
+            "match_method": "ai_spec_services" if passed and has_spec_context else ("ai_semantic" if passed and not previous_suitable else lot.raw.get("match_method")),
             "match_reason": result.get("reason") or lot.raw.get("match_reason"),
         }
 
-    def _process_documents(self, lot: TenderLot) -> None:
+    def _process_spec_documents(self, lot: TenderLot) -> None:
         docs = self.documents.pick_spec_documents(lot)
+        if not docs:
+            lot.raw = {
+                **lot.raw,
+                "spec_processing_status": "no_supported_documents",
+                "spec_processed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            return
         for doc in docs:
             text_chars: int | None = None
             rag_indexed = False
+            spec_summary: dict[str, Any] | None = None
             try:
                 data, downloaded = self.documents.download(lot, doc)
             except Exception as exc:
@@ -243,18 +261,51 @@ class ParserScheduler:
             try:
                 extracted = self.documents.extract_text(downloaded, data)
                 text_chars = len(extracted)
+                if extracted.strip():
+                    lot.raw = {
+                        **lot.raw,
+                        "spec_text_sample": extracted.strip()[:12000],
+                        "spec_text_chars": text_chars,
+                        "spec_document_name": downloaded.name,
+                        "spec_document_sha256": downloaded.sha256,
+                    }
             except Exception as exc:
                 self.log.warning("document_text_extract_failed", lot=lot.stable_id, document=doc.name, error=str(exc))
             if downloaded.local_path:
                 try:
-                    result = self.rag.index_document(lot.stable_id, downloaded.local_path, f"{lot.source};{downloaded.name}")
+                    if (
+                        downloaded.sha256
+                        and lot.raw.get("spec_summary_sha256") == downloaded.sha256
+                        and isinstance(lot.raw.get("spec_summary"), dict)
+                    ):
+                        result = {"indexed": True, "spec_summary": lot.raw.get("spec_summary")}
+                    else:
+                        result = self.rag.index_document(lot.stable_id, downloaded.local_path, f"{lot.source};auto_spec;{downloaded.name}")
                     rag_indexed = bool(result.get("indexed"))
                     text_chars = int(result.get("text_chars") or text_chars or 0)
+                    payload = result.get("spec_summary")
+                    if isinstance(payload, dict):
+                        spec_summary = payload
+                        services = payload.get("services")
+                        lot.raw = {
+                            **lot.raw,
+                            "spec_summary": payload,
+                            "spec_services": services if isinstance(services, list) else [],
+                            "spec_summary_sha256": downloaded.sha256,
+                            "spec_summary_provider": payload.get("provider"),
+                            "spec_processing_status": "ok",
+                            "spec_processed_at": datetime.now(timezone.utc).isoformat(),
+                        }
                     if rag_indexed:
                         self.notifications.rag_indexed(lot, downloaded.name, text_chars)
                 except Exception as exc:
                     self.log.warning("rag_index_failed", lot=lot.stable_id, document=doc.name, error=str(exc))
             self.db.upsert_document(lot, downloaded, text_chars=text_chars, rag_indexed=rag_indexed)
+            if spec_summary is not None:
+                break
+
+    def _process_documents(self, lot: TenderLot) -> None:
+        self._process_spec_documents(lot)
         self._process_protocol_documents(lot)
 
     def _process_protocol_documents(self, lot: TenderLot) -> None:
