@@ -4,6 +4,7 @@ from typing import Any
 
 import structlog
 
+from tender_parser.ai_suitability import GroqSuitabilityClient
 from tender_parser.config import Settings
 from tender_parser.db import Database
 from tender_parser.documents import DocumentService
@@ -30,6 +31,15 @@ class ParserScheduler:
             settings.request_timeout_seconds,
             settings.rag_extract_spec_points,
             settings.rag_include_extracted_text,
+        )
+        self.ai_suitability = GroqSuitabilityClient(
+            settings.groq_api_key,
+            settings.groq_api_base,
+            settings.groq_model,
+            settings.request_timeout_seconds,
+            settings.ai_lot_filter_min_score,
+            settings.ai_company_profile,
+            settings.ai_context_keywords,
         )
         self.notifications = NotificationService(db, settings.our_bins, settings.telegram_bot_token, settings.telegram_chat_id, settings.request_timeout_seconds)
         self.platforms = build_platforms(settings)
@@ -128,6 +138,30 @@ class ParserScheduler:
             self.db.finish_run(run_id, "failed", lots_found, lots_changed, errors)
             raise
 
+    def reanalyze_existing_lots(self, limit: int = 0) -> None:
+        run_id = self.db.start_run(["ai_reanalyze_existing"], [])
+        lots = self.db.load_existing_lots_for_ai(limit)
+        changed = 0
+        errors: list[dict[str, Any]] = []
+        self.log.info("ai_reanalysis_started", run_id=run_id, lots=len(lots), limit=limit)
+        try:
+            for lot in lots:
+                before = dict(lot.raw)
+                try:
+                    self._analyze_lot_with_ai(lot)
+                    if lot.raw != before:
+                        self.db.update_lot_raw(lot)
+                        changed += 1
+                    self.log.info("ai_reanalysis_lot_finished", lot=lot.stable_id, is_suitable=lot.raw.get("is_suitable"), ai_score=lot.raw.get("ai_score"))
+                except Exception as exc:
+                    errors.append({"lot": lot.stable_id, "stage": "ai_reanalysis", "error": str(exc)})
+                    self.log.warning("ai_reanalysis_lot_failed", lot=lot.stable_id, error=str(exc))
+            self.db.finish_run(run_id, "ok" if not errors else "partial", len(lots), changed, errors)
+            self.log.info("ai_reanalysis_finished", run_id=run_id, lots=len(lots), changed=changed, errors=len(errors))
+        except Exception:
+            self.db.finish_run(run_id, "failed", len(lots), changed, errors)
+            raise
+
     def _search_platform(self, platform: TenderPlatform, keywords: list[str]) -> list[TenderLot]:
         self.log.info("platform_search_started", platform=platform.name, strict_keyword_filter=self.settings.strict_keyword_filter, collect_all_active_lots=self.settings.collect_all_active_lots)
         lots = platform.search(keywords, self.db.lot_exists)
@@ -142,13 +176,14 @@ class ParserScheduler:
 
     def _process_lot(self, platform: TenderPlatform, lot: TenderLot) -> bool:
         self.log.info("lot_process_started", platform=platform.name, lot=lot.stable_id, matched_keyword=lot.raw.get("matched_keyword"))
-        suitable = self._is_suitable(lot)
         enriched = lot
+        self._analyze_lot_with_ai(enriched)
+        suitable = self._is_suitable(enriched)
         if suitable:
             enriched = platform.enrich(lot)
             enriched = platform.load_final_protocol(enriched)
-        if suitable:
             self._analyze_lot_with_ai(enriched)
+            suitable = self._is_suitable(enriched)
         is_new, changes = self.db.upsert_lot(enriched)
         if suitable and is_new:
             self.notifications.lot_created(enriched)
@@ -167,29 +202,32 @@ class ParserScheduler:
     def _analyze_lot_with_ai(self, lot: TenderLot) -> None:
         if not self.settings.ai_lot_filter_enabled:
             return
-        lot_text = "\n".join(
-            part for part in [
-                lot.title,
-                lot.description,
-                lot.customer_name or "",
-                lot.organizer_name or "",
-                lot.purchase_type or "",
-                lot.place or "",
-                str(lot.amount or ""),
-                str(lot.raw.get("match_text") or ""),
-            ] if part
-        )
+        if not self.ai_suitability.enabled:
+            self.log.warning("ai_lot_filter_not_configured", lot=lot.stable_id, provider="groq")
+            return
         try:
-            result = self.rag.analyze_lot(lot_text[:18000], self.settings.ai_company_profile)
+            result = self.ai_suitability.analyze(lot)
         except Exception as exc:
             self.log.warning("ai_lot_filter_failed", lot=lot.stable_id, error=str(exc))
             return
         score = int(result.get("score") or 0)
+        passed = bool(result.get("passed"))
+        previous_suitable = lot.raw.get("is_suitable") is True
+        is_suitable = previous_suitable or passed
+        matched_keyword = lot.raw.get("matched_keyword")
+        if not matched_keyword and is_suitable:
+            matched_keyword = str(result.get("matched_theme") or "AI semantic match")
         lot.raw = {
             **lot.raw,
             "ai_filter": result,
             "ai_score": score,
-            "ai_passed": score >= self.settings.ai_lot_filter_min_score,
+            "ai_passed": passed,
+            "ai_provider": "groq",
+            "is_suitable": is_suitable,
+            "matched_keyword": matched_keyword,
+            "match_score": max(float(lot.raw.get("match_score") or 0), score / 100),
+            "match_method": "ai_semantic" if passed and not previous_suitable else lot.raw.get("match_method"),
+            "match_reason": result.get("reason") or lot.raw.get("match_reason"),
         }
 
     def _process_documents(self, lot: TenderLot) -> None:

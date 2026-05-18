@@ -31,31 +31,31 @@ type LotDocumentDTO struct {
 }
 
 type LotDTO struct {
-	ID            int              `json:"id"`
-	Lot           *string          `json:"lot"`
-	LotSourceID   *string          `json:"lot_source_id"`
-	Source        *string          `json:"source"`
-	SourceLabel   *string          `json:"sourceLabel"`
-	Title         *string          `json:"title"`
-	Description   *string          `json:"description"`
-	Cost          *float64         `json:"cost"`
-	OneCost       *float64         `json:"one_cost,omitempty"`
-	Counts        *int             `json:"counts,omitempty"`
-	PartnerLink   *string          `json:"partnerLink"`
-	Place         *string          `json:"place"`
-	BuyID         *int             `json:"buy_id"`
-	EndDate       *string          `json:"endDate,omitempty"`
-	StartDate     *string          `json:"startDate,omitempty"`
-	Region        *string          `json:"region,omitempty"`
-	Partner       *string          `json:"partner,omitempty"`
-	OrganizerName *string          `json:"organizer_name,omitempty"`
-	CustomerName  *string          `json:"customer_name,omitempty"`
-	Status        *string          `json:"status,omitempty"`
-	PurchaseType  *string          `json:"purchaseType,omitempty"`
+	ID             int              `json:"id"`
+	Lot            *string          `json:"lot"`
+	LotSourceID    *string          `json:"lot_source_id"`
+	Source         *string          `json:"source"`
+	SourceLabel    *string          `json:"sourceLabel"`
+	Title          *string          `json:"title"`
+	Description    *string          `json:"description"`
+	Cost           *float64         `json:"cost"`
+	OneCost        *float64         `json:"one_cost,omitempty"`
+	Counts         *int             `json:"counts,omitempty"`
+	PartnerLink    *string          `json:"partnerLink"`
+	Place          *string          `json:"place"`
+	BuyID          *int             `json:"buy_id"`
+	EndDate        *string          `json:"endDate,omitempty"`
+	StartDate      *string          `json:"startDate,omitempty"`
+	Region         *string          `json:"region,omitempty"`
+	Partner        *string          `json:"partner,omitempty"`
+	OrganizerName  *string          `json:"organizer_name,omitempty"`
+	CustomerName   *string          `json:"customer_name,omitempty"`
+	Status         *string          `json:"status,omitempty"`
+	PurchaseType   *string          `json:"purchaseType,omitempty"`
 	IsSuitable     *bool            `json:"isSuitable,omitempty"`
 	MatchedKeyword *string          `json:"matchedKeyword,omitempty"`
 	MatchScore     *float64         `json:"matchScore,omitempty"`
-	Documents     []LotDocumentDTO `json:"documents"`
+	Documents      []LotDocumentDTO `json:"documents"`
 }
 
 type TendersListResponse struct {
@@ -64,25 +64,26 @@ type TendersListResponse struct {
 }
 
 type ParserLot struct {
-	ID            int        `gorm:"column:id"`
-	StableID      string     `gorm:"column:stable_id"`
-	Source        string     `gorm:"column:source"`
-	ExternalID    string     `gorm:"column:external_id"`
-	URL           string     `gorm:"column:url"`
-	Title         string     `gorm:"column:title"`
-	Description   string     `gorm:"column:description"`
-	Amount        *float64   `gorm:"column:amount"`
-	StartDate     *time.Time `gorm:"column:start_date"`
-	EndDate       *time.Time `gorm:"column:end_date"`
-	Place         *string    `gorm:"column:place"`
-	CustomerName  *string    `gorm:"column:customer_name"`
-	OrganizerName *string    `gorm:"column:organizer_name"`
-	PurchaseType  *string    `gorm:"column:purchase_type"`
-	Status        string     `gorm:"column:status"`
-	UpdatedAt     time.Time  `gorm:"column:updated_at"`
+	ID             int        `gorm:"column:id"`
+	StableID       string     `gorm:"column:stable_id"`
+	Source         string     `gorm:"column:source"`
+	ExternalID     string     `gorm:"column:external_id"`
+	URL            string     `gorm:"column:url"`
+	Title          string     `gorm:"column:title"`
+	Description    string     `gorm:"column:description"`
+	Amount         *float64   `gorm:"column:amount"`
+	StartDate      *time.Time `gorm:"column:start_date"`
+	EndDate        *time.Time `gorm:"column:end_date"`
+	Place          *string    `gorm:"column:place"`
+	CustomerName   *string    `gorm:"column:customer_name"`
+	OrganizerName  *string    `gorm:"column:organizer_name"`
+	PurchaseType   *string    `gorm:"column:purchase_type"`
+	Status         string     `gorm:"column:status"`
+	UpdatedAt      time.Time  `gorm:"column:updated_at"`
 	IsSuitable     *bool      `gorm:"column:is_suitable"`
 	MatchedKeyword *string    `gorm:"column:matched_keyword"`
 	MatchScore     *float64   `gorm:"column:match_score"`
+	Raw            []byte     `gorm:"column:raw"`
 }
 
 func (ParserLot) TableName() string {
@@ -146,28 +147,28 @@ func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
 	label := sourceLabel(row.Source)
 	partnerLink := concreteLotURL(row)
 	return LotDTO{
-		ID:            row.ID,
-		Lot:           strPtr(row.ExternalID),
-		LotSourceID:   strPtr(row.StableID),
-		Source:        &source,
-		SourceLabel:   &label,
-		Title:         strPtr(row.Title),
-		Description:   strPtr(row.Description),
-		Cost:          floatPtr(amount),
-		PartnerLink:   strPtr(partnerLink),
-		Place:         row.Place,
-		BuyID:         intPtr(row.ID),
-		EndDate:       timePtrRFC3339(row.EndDate),
-		StartDate:     timePtrRFC3339(row.StartDate),
-		Partner:       &label,
-		OrganizerName: row.OrganizerName,
-		CustomerName:  row.CustomerName,
-		Status:        strPtr(row.Status),
-		PurchaseType:  row.PurchaseType,
+		ID:             row.ID,
+		Lot:            strPtr(row.ExternalID),
+		LotSourceID:    strPtr(row.StableID),
+		Source:         &source,
+		SourceLabel:    &label,
+		Title:          strPtr(row.Title),
+		Description:    strPtr(row.Description),
+		Cost:           floatPtr(amount),
+		PartnerLink:    strPtr(partnerLink),
+		Place:          row.Place,
+		BuyID:          intPtr(row.ID),
+		EndDate:        timePtrRFC3339(row.EndDate),
+		StartDate:      timePtrRFC3339(row.StartDate),
+		Partner:        &label,
+		OrganizerName:  row.OrganizerName,
+		CustomerName:   row.CustomerName,
+		Status:         strPtr(row.Status),
+		PurchaseType:   row.PurchaseType,
 		IsSuitable:     row.IsSuitable,
 		MatchedKeyword: row.MatchedKeyword,
 		MatchScore:     row.MatchScore,
-		Documents:     documents,
+		Documents:      documents,
 	}
 }
 
@@ -175,7 +176,27 @@ func concreteLotURL(row ParserLot) string {
 	if row.Source == "zakup" && row.ExternalID != "" && (row.URL == "" || strings.Contains(row.URL, "/home/lots")) {
 		return "https://zakup.gov.kz/?lotId=" + row.ExternalID
 	}
+	if row.Source == "goszakup" && strings.Contains(row.URL, "/subpriceoffer/") {
+		if announceURL := rawStringValue(row.Raw, "announce_url"); announceURL != "" {
+			return announceURL
+		}
+	}
 	return row.URL
+}
+
+func rawStringValue(raw []byte, key string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	value, ok := payload[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }
 
 func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {
@@ -212,7 +233,7 @@ func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var rows []ParserLot
-	if err := query.Select(parserLotSelectExpr()).Order("updated_at desc, id desc").Limit(limit).Offset((page - 1)*limit).Find(&rows).Error; err != nil {
+	if err := query.Select(parserLotSelectExpr()).Order("updated_at desc, id desc").Limit(limit).Offset((page - 1) * limit).Find(&rows).Error; err != nil {
 		http.Error(w, `{"error":"ошибка получения тендеров"}`, http.StatusInternalServerError)
 		return
 	}

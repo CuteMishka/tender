@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Bot, Check, Clock, Loader2, Monitor, Moon, Palette, Play, Send, Sun } from "lucide-react";
+import { Bot, Check, Clock, Loader2, Monitor, Moon, Palette, Play, RefreshCw, Send, Sun } from "lucide-react";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { pushNotification } from "@/hooks/use-notifications";
 import { useTheme, THEMES } from "@/hooks/use-theme";
@@ -117,6 +117,7 @@ function Settings() {
   const [telegramSaving, setTelegramSaving] = useState(false);
   const [telegramTesting, setTelegramTesting] = useState(false);
   const [parserRunning, setParserRunning] = useState(false);
+  const [aiReanalyzing, setAiReanalyzing] = useState(false);
   const { theme, setTheme, appearance, setAppearance } = useTheme();
   const parserRequestActive = parserStatus?.lastRequest?.status === "pending" || parserStatus?.lastRequest?.status === "running";
   const currentUser = getCurrentUser();
@@ -223,6 +224,22 @@ function Settings() {
       pushNotification("error", "Парсер не запущен", error instanceof Error ? error.message : "Проверьте backend и базу данных.", "/settings");
     } finally {
       setParserRunning(false);
+    }
+  };
+
+  const reanalyzeExistingTenders = async () => {
+    setAiReanalyzing(true);
+    try {
+      const base = getLocalApiBase();
+      const res = await fetch(`${base}/api/v1/parser/reanalyze-existing`, { method: "POST" });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.error || "Не удалось запустить AI-переоценку");
+      pushNotification("success", "AI-переоценка запускается", "GitHub Actions проверит существующие тендеры по смыслу и обновит таб «Подходящие».", "/settings");
+      await loadParserStatus();
+    } catch (error) {
+      pushNotification("error", "AI-переоценка не запущена", error instanceof Error ? error.message : "Проверьте backend, GitHub Actions и GROQ_API_KEY.", "/settings");
+    } finally {
+      setAiReanalyzing(false);
     }
   };
 
@@ -405,6 +422,15 @@ function Settings() {
               >
                 {parserRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                 {parserRequestActive ? "Парсер запускается" : "Запустить сейчас"}
+              </button>
+              <button
+                onClick={reanalyzeExistingTenders}
+                disabled={aiReanalyzing || parserRequestActive}
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-4 text-sm font-semibold transition hover:bg-accent disabled:opacity-60"
+                title="Запустить Groq AI-переоценку уже сохранённых тендеров"
+              >
+                {aiReanalyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Проверить существующие AI
               </button>
               <span className={`rounded-full px-2 py-1 text-xs font-medium ${parserStatus?.configured ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>
                 {parserStatus?.configured ? "Подключён" : "Нет данных"}

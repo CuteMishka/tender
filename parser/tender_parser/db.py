@@ -165,6 +165,24 @@ class Database:
         self.seed_keywords(fallback)
         return fallback
 
+    def load_existing_lots_for_ai(self, limit: int = 0) -> list[TenderLot]:
+        stmt = select(ParserLot).order_by(ParserLot.updated_at.desc(), ParserLot.id.desc())
+        if limit > 0:
+            stmt = stmt.limit(limit)
+        with self.session() as session:
+            rows = list(session.scalars(stmt))
+        return [self._row_to_lot(row) for row in rows]
+
+    def update_lot_raw(self, lot: TenderLot) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session() as session:
+            row = session.scalar(select(ParserLot).where(ParserLot.stable_id == lot.stable_id).limit(1))
+            if row is None:
+                return
+            row.raw = lot.raw
+            row.updated_at = now
+            session.commit()
+
     def start_run(self, platforms: list[str], keywords: list[str]) -> int:
         with self.session() as session:
             run = ParserRun(platforms=platforms, keywords=keywords)
@@ -366,3 +384,24 @@ class Database:
             "last_seen_at": now,
             "updated_at": now,
         }
+
+    def _row_to_lot(self, row: ParserLot) -> TenderLot:
+        return TenderLot(
+            source=row.source,
+            external_id=row.external_id,
+            url=row.url,
+            title=row.title,
+            description=row.description or "",
+            amount=row.amount,
+            start_date=row.start_date,
+            end_date=row.end_date,
+            place=row.place,
+            customer_name=row.customer_name,
+            organizer_name=row.organizer_name,
+            purchase_type=row.purchase_type,
+            status=row.status,
+            complaints_count=row.complaints_count,
+            winner_bin=row.winner_bin,
+            winner_name=row.winner_name,
+            raw=dict(row.raw or {}),
+        )

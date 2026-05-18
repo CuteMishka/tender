@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { ExternalLink, Filter, ThumbsUp, ThumbsDown, CheckCircle2, Send } from "lucide-react";
+import { ExternalLink, Filter, CheckCircle2 } from "lucide-react";
 import {
   fetchTendersList,
   formatTenderAmount,
@@ -17,8 +17,6 @@ import {
   type TenderItem,
   type TenderViewInfo,
 } from "@/lib/tenders-api";
-import { pushNotification } from "@/hooks/use-notifications";
-import { getCurrentUser } from "@/lib/auth";
 
 type TendersSearch = { page: number };
 
@@ -95,40 +93,6 @@ function sourceBadgeClass(source?: string | null): string {
   }
 }
 
-type LotWorkflowStatus = "participating" | "rejected" | "review" | "in_work";
-
-async function saveLot(tender: TenderItem, status: LotWorkflowStatus, comment = "") {
-  const deadline = tender.endDate
-    ? new Date(tender.endDate).toISOString()
-    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-
-  const payload = {
-    id: tender.id,
-    external_id: tender.lot_source_id || tender.lot || String(tender.id),
-    source: tender.source || "",
-    title: tender.title || "Без названия",
-    description: tender.description || "",
-    amount: tender.cost || 0,
-    status,
-    comment,
-    assigned_to: getCurrentUser()?.name || getCurrentUser()?.email || "",
-    reviewer: status === "review" ? "Второй специалист" : "",
-    deadline,
-    start_date: tender.startDate ? new Date(tender.startDate).toISOString() : new Date().toISOString(),
-    end_date: deadline,
-    purchase_type: tender.purchaseType || "—",
-    organizer_name: tenderCompanyName(tender),
-    partner_link: tender.partnerLink || "",
-  };
-
-  const res = await fetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error("Ошибка при сохранении");
-}
-
 function TendersList() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -136,7 +100,6 @@ function TendersList() {
   const [data, setData] = useState<TendersListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState<number | null>(null);
 
   const [viewedIds, setViewedIds] = useState<Set<number>>(() => getViewedTenders());
   const [viewInfoMap, setViewInfoMap] = useState<Record<string, TenderViewInfo>>(() => getAllViewInfo());
@@ -185,33 +148,6 @@ function TendersList() {
     if (!isNaN(maxA) && t.cost > maxA) return false;
     return true;
   });
-
-  const handleAction = async (e: React.MouseEvent, tender: TenderItem, status: LotWorkflowStatus) => {
-    e.stopPropagation();
-    const comment = window.prompt(
-      status === "review"
-        ? "Комментарий для второго специалиста"
-        : status === "participating"
-          ? "Комментарий к решению участвовать"
-          : "Почему лот не подходит?",
-      "",
-    ) ?? "";
-    setActionLoading(tender.id);
-    try {
-      await saveLot(tender, status, comment);
-      if (status === "participating") {
-        pushNotification("success", "Участвуем", `Тендер «${truncate(tender.title, 60)}» добавлен в заявки.`, "/bids");
-      } else if (status === "review") {
-        pushNotification("info", "На ревью", `Тендер «${truncate(tender.title, 60)}» отправлен второму специалисту.`, "/bids");
-      } else {
-        pushNotification("info", "Не подходит", `Тендер «${truncate(tender.title, 60)}» отклонён.`);
-      }
-    } catch {
-      pushNotification("error", "Ошибка", "Не удалось обновить статус тендера.");
-    } finally {
-      setActionLoading(null);
-    }
-  };
 
   return (
     <>
@@ -302,7 +238,7 @@ function TendersList() {
           ) : data ? (
             <>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1100px] text-sm">
+                <table className="w-full min-w-[1000px] text-sm">
                   <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
                     <tr>
                       <th className="px-4 py-3 text-left font-medium">ID / закупка</th>
@@ -312,15 +248,12 @@ function TendersList() {
                       <th className="px-4 py-3 text-left font-medium">Дедлайн</th>
                       <th className="px-4 py-3 text-left font-medium">Статус</th>
                       <th className="px-4 py-3 text-center font-medium">Ссылка</th>
-                      <th className="px-4 py-3 text-center font-medium">Действия</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredItems.map((t) => {
                       const statusInfo = getTenderStatus(t.endDate);
                       const lotStatusColorKey = lotStatusColor(t.status, statusInfo.color);
-                      const isExpiring = statusInfo.color === "red";
-                      const isLoading = actionLoading === t.id;
                       const companyName = tenderCompanyName(t);
                       const sourceLabel = tenderSourceLabel(t);
 
@@ -426,40 +359,12 @@ function TendersList() {
                               <ExternalLink className="h-4 w-4" />
                             </a>
                           </td>
-                          <td className="px-4 py-4">
-                            <div className="flex items-center justify-center gap-1" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                disabled={isLoading}
-                                onClick={(e) => handleAction(e, t, "participating")}
-                                title="Перенести в Участвуем"
-                                className="inline-flex rounded-lg border border-green-200 bg-green-50 px-2.5 py-1.5 text-xs font-medium text-green-700 transition hover:bg-green-100 disabled:opacity-50"
-                              >
-                                <ThumbsUp className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                disabled={isLoading}
-                                onClick={(e) => handleAction(e, t, "review")}
-                                title="Отправить на ревью второму специалисту"
-                                className="inline-flex rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700 transition hover:bg-blue-100 disabled:opacity-50"
-                              >
-                                <Send className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                disabled={isLoading}
-                                onClick={(e) => handleAction(e, t, "rejected")}
-                                title="Не подходит"
-                                className="inline-flex rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-100 disabled:opacity-50"
-                              >
-                                <ThumbsDown className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </td>
                         </tr>
                       );
                     })}
                     {filteredItems.length === 0 && !loading && (
                       <tr>
-                        <td colSpan={8} className="px-6 py-16 text-center text-sm text-muted-foreground">
+                        <td colSpan={7} className="px-6 py-16 text-center text-sm text-muted-foreground">
                           {searchText.trim()
                             ? "По названию, заказчику или виду закупки тендеры не найдены. Попробуйте другое слово или сбросьте фильтр."
                             : "Тендеры не найдены"}

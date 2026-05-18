@@ -1,4 +1,5 @@
 import re
+import time
 from collections.abc import Callable
 from urllib.parse import urlencode
 
@@ -42,7 +43,10 @@ class GoszakupPlatform(TenderPlatform):
                         if stop_all:
                             break
                         url = self._search_url(page_number, keyword)
-                        self._goto(page, url)
+                        if not self._goto(page, url):
+                            self.log.warning("goszakup_search_page_unavailable", requested_url=url, page=page_number)
+                            page_number += 1
+                            continue
                         html = page.content()
                         page_lots = self._parse_search_html(html, keyword)
                         if not page_lots:
@@ -95,38 +99,38 @@ class GoszakupPlatform(TenderPlatform):
             page = context.new_page()
             try:
                 announce_url = str(lot.raw.get("announce_url") or lot.url)
-                lot_url = str(lot.raw.get("lot_url") or lot.url)
+                subpriceoffer_url = str(lot.raw.get("subpriceoffer_url") or "")
                 lot_html = ""
-                announce_candidates: list[str] = []
-                if lot_url:
-                    self._goto(page, lot_url)
-                    lot_html = page.content()
-                    self._apply_lot_detail(lot, lot_html)
-                    announce_candidates.extend(self._extract_announce_urls(lot_html))
-                    announce_candidates.extend(self._extract_announce_urls(page.url))
-                announce_candidates.append(announce_url)
+                announce_candidates: list[str] = [announce_url]
+                if subpriceoffer_url:
+                    if self._goto(page, subpriceoffer_url):
+                        lot_html = page.content()
+                        self._apply_lot_detail(lot, lot_html)
+                        announce_candidates.extend(self._extract_announce_urls(lot_html))
+                        announce_candidates.extend(self._extract_announce_urls(page.url))
                 announce_candidates = self._dedupe_urls(announce_candidates)
                 used_announce_url = announce_candidates[0] if announce_candidates else announce_url
                 documents_url = self._tab_url(used_announce_url, "documents")
                 detail_text_parts = [lot_html]
                 documents_found = False
                 for candidate_url in announce_candidates:
-                    self._goto(page, candidate_url)
+                    if not self._goto(page, candidate_url):
+                        continue
                     announce_html = page.content()
                     detail_text_parts.append(announce_html)
                     self._apply_announce_detail(lot, announce_html)
                     before_count = len(lot.documents)
                     lot.documents = self._dedupe_documents([*lot.documents, *self._parse_documents_html(announce_html, candidate_url, page)])
                     candidate_documents_url = self._tab_url(candidate_url, "documents")
-                    self._goto(page, candidate_documents_url)
-                    documents_html = page.content()
-                    detail_text_parts.append(documents_html)
-                    lot.documents = self._dedupe_documents([*lot.documents, *self._parse_documents_html(documents_html, candidate_url, page)])
+                    if self._goto(page, candidate_documents_url):
+                        documents_html = page.content()
+                        detail_text_parts.append(documents_html)
+                        lot.documents = self._dedupe_documents([*lot.documents, *self._parse_documents_html(documents_html, candidate_url, page)])
                     protocols_url = self._tab_url(candidate_url, "protocols")
-                    self._goto(page, protocols_url)
-                    protocols_html = page.content()
-                    detail_text_parts.append(protocols_html)
-                    lot.documents = self._dedupe_documents([*lot.documents, *self._parse_documents_html(protocols_html, candidate_url, page)])
+                    if self._goto(page, protocols_url):
+                        protocols_html = page.content()
+                        detail_text_parts.append(protocols_html)
+                        lot.documents = self._dedupe_documents([*lot.documents, *self._parse_documents_html(protocols_html, candidate_url, page)])
                     if len(lot.documents) > before_count:
                         documents_found = True
                         used_announce_url = candidate_url
@@ -156,7 +160,8 @@ class GoszakupPlatform(TenderPlatform):
             page = context.new_page()
             try:
                 announce_url = str(lot.raw.get("announce_url") or lot.url)
-                self._goto(page, self._tab_url(announce_url, "protocols"))
+                if not self._goto(page, self._tab_url(announce_url, "protocols")):
+                    return lot
                 text = html_text(page.content())
                 winner_bin = find_first_regex(text, r"(?:БИН|ИИН)\s*(?:победителя)?\s*[:№#-]?\s*(\d{12})")
                 if winner_bin:
@@ -184,14 +189,24 @@ class GoszakupPlatform(TenderPlatform):
         return f"{self.settings.goszakup_search_url}?{urlencode(params)}"
 
     def _goto(self, page, url: str):
-        response = page.goto(url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
-        try:
-            page.wait_for_selector("#search-result, table", timeout=min(self.settings.request_timeout_seconds * 1000, 30000))
-        except PlaywrightTimeoutError:
-            self.log.warning("goszakup_page_ready_timeout", url=page.url)
-        page.wait_for_timeout(700)
-        self.log.info("goszakup_navigation_finished", requested_url=url, final_url=page.url, status=response.status if response else None)
-        return response
+        last_error = None
+        for attempt in range(1, self.settings.retry_attempts + 1):
+            try:
+                response = page.goto(url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
+                try:
+                    page.wait_for_selector("#search-result, table", timeout=min(self.settings.request_timeout_seconds * 1000, 30000))
+                except PlaywrightTimeoutError:
+                    self.log.warning("goszakup_page_ready_timeout", url=page.url, attempt=attempt)
+                page.wait_for_timeout(700)
+                self.log.info("goszakup_navigation_finished", requested_url=url, final_url=page.url, status=response.status if response else None, attempt=attempt)
+                return response
+            except Exception as exc:
+                last_error = exc
+                self.log.warning("goszakup_navigation_failed", requested_url=url, attempt=attempt, error=str(exc))
+                if attempt < self.settings.retry_attempts:
+                    time.sleep(self.settings.retry_backoff_seconds * attempt)
+        self.log.error("goszakup_navigation_gave_up", requested_url=url, error=str(last_error))
+        return None
 
     def _parse_search_html(self, html: str, keyword: str | None) -> list[TenderLot]:
         soup = BeautifulSoup(html, "lxml")
@@ -210,7 +225,7 @@ class GoszakupPlatform(TenderPlatform):
             announce_href = announce_link.get("href") or ""
             lot_href = lot_link.get("href") if lot_link else ""
             announce_url = absolute_url(self.settings.goszakup_base_url, announce_href)
-            lot_url = absolute_url(self.settings.goszakup_base_url, lot_href) if lot_href else announce_url
+            subpriceoffer_url = absolute_url(self.settings.goszakup_base_url, lot_href) if lot_href else ""
             announce_title = clean_text(announce_link.get_text(" ", strip=True))
             lot_title = clean_text(lot_link.get_text(" ", strip=True)) if lot_link else ""
             customer_name = self._extract_customer(cells[1].get_text(" ", strip=True))
@@ -220,12 +235,12 @@ class GoszakupPlatform(TenderPlatform):
             purchase_type = clean_text(cells[5].get_text(" ", strip=True)) or None
             status = clean_text(cells[6].get_text(" ", strip=True)) or "active"
             announce_id = self._extract_announce_id(announce_url)
-            lot_internal_id = self._extract_subprice_lot_id(lot_url)
+            lot_internal_id = self._extract_subprice_lot_id(subpriceoffer_url)
             match_text = " ".join(part for part in [lot_number_text, announce_title, lot_title, customer_name or "", description, purchase_type or "", status] if part)
             lots.append(TenderLot(
                 source=self.name,
                 external_id=external_id,
-                url=lot_url,
+                url=announce_url,
                 title=lot_title or announce_title or f"Лот {external_id}",
                 description=description,
                 amount=amount,
@@ -241,7 +256,8 @@ class GoszakupPlatform(TenderPlatform):
                     "announce_id": announce_id,
                     "announce_url": announce_url,
                     "announce_title": announce_title,
-                    "lot_url": lot_url,
+                    "lot_url": announce_url,
+                    "subpriceoffer_url": subpriceoffer_url,
                     "subprice_lot_id": lot_internal_id,
                     "quantity": quantity,
                     "match_text": match_text[:4000],
@@ -298,9 +314,10 @@ class GoszakupPlatform(TenderPlatform):
                     continue
                 if any(marker in lowered for marker in ("download", "uploads", "files", ".pdf", ".doc", ".docx", "тех", "специф", "тз", "проект договора", "протокол", "итог", "обеспечение заявки")):
                     docs.append(TenderDocument(name=text or row_text or href.rsplit("/", 1)[-1] or "Документ", url=absolute_url(announce_url, href)))
-            for button in row.select("[onclick*='actionModalShowFiles']"):
+            for button in row.select("[onclick]"):
                 onclick = button.get("onclick") or ""
-                docs.extend(self._load_modal_documents(page, onclick, row_text, announce_url))
+                if "actionModalShowFiles" in onclick:
+                    docs.extend(self._load_modal_documents(page, onclick, row_text, announce_url))
         return self._dedupe_documents(docs)
 
     def _load_modal_documents(self, page, onclick: str, document_name: str, announce_url: str) -> list[TenderDocument]:

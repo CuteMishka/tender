@@ -22,7 +22,18 @@ class Settings(BaseSettings):
     min_keyword_score: float = Field(default=0.55, ge=0.0, le=1.0)
     ai_lot_filter_enabled: bool = False
     ai_lot_filter_min_score: int = Field(default=60, ge=0, le=100)
-    ai_company_profile: str | None = None
+    ai_company_profile: str | None = (
+        "Freedom Cloud — компания в сфере хостинга, облачной инфраструктуры, виртуальных серверов, VPS/VDS, "
+        "выделенных серверов, дата-центров, IaaS, хранения данных, резервного копирования, сетевой инфраструктуры, "
+        "администрирования серверов, Kubernetes, контейнеризации, информационной безопасности и сопутствующих IT-услуг."
+    )
+    ai_context_keywords_csv: str = Field(
+        default="хостинг, облачный сервер, облачная инфраструктура, виртуальный сервер, VPS, VDS, выделенный сервер, дата-центр, ЦОД, IaaS, PaaS, SaaS, серверное оборудование, аренда сервера, размещение сервера, colocation, резервное копирование, хранение данных, Kubernetes, контейнеризация, виртуализация, Linux, администрирование серверов, информационная безопасность, сетевое оборудование, маршрутизатор, firewall, web hosting, cloud hosting",
+        validation_alias="AI_CONTEXT_KEYWORDS",
+    )
+    groq_api_key: str | None = None
+    groq_api_base: str = "https://api.groq.com/openai/v1"
+    groq_model: str = "llama-3.1-8b-instant"
     dictionaries_api_url: str | None = None
     stop_at_first_seen_lot: bool = False
     process_existing_lots: bool = True
@@ -69,6 +80,7 @@ class Settings(BaseSettings):
         "zakup_lots_url",
         "samruk_search_url",
         "dictionaries_api_url",
+        "groq_api_base",
     )
     @classmethod
     def strip_url(cls, value: str | None) -> str | None:
@@ -81,6 +93,10 @@ class Settings(BaseSettings):
     @property
     def default_keywords(self) -> list[str]:
         return self._split_csv(self.default_keywords_csv)
+
+    @property
+    def ai_context_keywords(self) -> list[str]:
+        return self._split_csv(self.ai_context_keywords_csv)
 
     @property
     def our_bins(self) -> list[str]:

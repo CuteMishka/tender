@@ -12,6 +12,11 @@ ENV VITE_BACK_API=$VITE_BACK_API \
     VITE_FETCH_DOCUMENT_PROXY_URL=$VITE_FETCH_DOCUMENT_PROXY_URL
 
 COPY package*.json ./
+RUN npm config set registry https://registry.npmjs.org/ \
+    && npm config set fetch-retries 5 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && npm config set fetch-timeout 300000
 RUN npm ci
 COPY . .
 RUN npm run build

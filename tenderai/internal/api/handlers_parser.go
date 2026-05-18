@@ -17,10 +17,10 @@ import (
 )
 
 type ParserStatusDTO struct {
-	Configured       bool             `json:"configured"`
-	IntervalSeconds int              `json:"intervalSeconds"`
-	NextRunAt       string           `json:"nextRunAt,omitempty"`
-	LastRun         *ParserRunDTO    `json:"lastRun,omitempty"`
+	Configured      bool              `json:"configured"`
+	IntervalSeconds int               `json:"intervalSeconds"`
+	NextRunAt       string            `json:"nextRunAt,omitempty"`
+	LastRun         *ParserRunDTO     `json:"lastRun,omitempty"`
 	LastRequest     *ParserRequestDTO `json:"lastRequest,omitempty"`
 }
 
@@ -103,7 +103,7 @@ func (h *Handler) GetParserStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	next := row.StartedAt.Add(time.Duration(interval) * time.Second)
 	writeParserStatus(w, ParserStatusDTO{
-		Configured:       true,
+		Configured:      true,
 		IntervalSeconds: interval,
 		NextRunAt:       next.Format(time.RFC3339),
 		LastRun:         &dto,
@@ -127,12 +127,12 @@ func (h *Handler) RunParserNow(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(active)
 			return
 		}
-		req := domain.ParserRunRequest{RequestedBy: requestedBy, Status: "pending", Message: "GitHub Actions workflow dispatch requested"}
+		req := domain.ParserRunRequest{RequestedBy: requestedBy, Status: "pending", Message: "GitHub Actions parser run requested"}
 		if err := h.DB.Create(&req).Error; err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "не удалось создать запрос запуска парсера")
 			return
 		}
-		if err := dispatchGitHubParserWorkflow(); err != nil {
+		if err := dispatchGitHubParserWorkflow(map[string]string{"run_mode": "parse"}); err != nil {
 			now := time.Now()
 			h.DB.Model(&req).Updates(map[string]interface{}{"status": "failed", "finished_at": now, "message": err.Error()})
 			writeJSONError(w, http.StatusBadGateway, err.Error())
@@ -153,6 +153,45 @@ func (h *Handler) RunParserNow(w http.ResponseWriter, r *http.Request) {
 	req := domain.ParserRunRequest{RequestedBy: requestedBy, Status: "pending"}
 	if err := h.DB.Create(&req).Error; err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "не удалось поставить парсер в очередь")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(parserRequestDTO(req))
+}
+
+func (h *Handler) ReanalyzeExistingTenders(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "database is not configured")
+		return
+	}
+	if !githubParserConfigured() {
+		writeJSONError(w, http.StatusServiceUnavailable, "GitHub Actions не настроен для переоценки существующих тендеров")
+		return
+	}
+	if active := h.currentParserRequest(); active != nil && isActiveParserStatus(active.Status) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(active)
+		return
+	}
+	requestedBy := strings.TrimSpace(r.Header.Get("X-User-Email"))
+	if requestedBy == "" {
+		requestedBy = "admin"
+	}
+	req := domain.ParserRunRequest{RequestedBy: requestedBy, Status: "pending", Message: "GitHub Actions AI reanalysis requested"}
+	if err := h.DB.Create(&req).Error; err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "не удалось создать запрос AI-переоценки")
+		return
+	}
+	inputs := map[string]string{
+		"run_mode":        "reanalyze_existing",
+		"reanalyze_limit": getEnvDefault("GITHUB_PARSER_REANALYZE_LIMIT", "0"),
+	}
+	if err := dispatchGitHubParserWorkflow(inputs); err != nil {
+		now := time.Now()
+		h.DB.Model(&req).Updates(map[string]interface{}{"status": "failed", "finished_at": now, "message": err.Error()})
+		writeJSONError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -220,14 +259,14 @@ type githubWorkflowRunsResponse struct {
 }
 
 type githubWorkflowRun struct {
-	ID          uint      `json:"id"`
-	Name        string    `json:"name"`
-	HTMLURL     string    `json:"html_url"`
-	Event       string    `json:"event"`
-	Status      string    `json:"status"`
-	Conclusion  string    `json:"conclusion"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID           uint      `json:"id"`
+	Name         string    `json:"name"`
+	HTMLURL      string    `json:"html_url"`
+	Event        string    `json:"event"`
+	Status       string    `json:"status"`
+	Conclusion   string    `json:"conclusion"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 	RunStartedAt time.Time `json:"run_started_at"`
 }
 
@@ -265,18 +304,22 @@ func githubParserRef() string {
 	return value
 }
 
-func dispatchGitHubParserWorkflow() error {
+func dispatchGitHubParserWorkflow(inputs map[string]string) error {
 	token := githubActionsToken()
 	repo := githubRepository()
 	if token == "" || repo == "" {
 		return fmt.Errorf("GitHub Actions не настроен: задайте GITHUB_ACTIONS_TOKEN и GITHUB_REPOSITORY")
 	}
+	workflowInputs := map[string]string{
+		"max_pages": getEnvDefault("GITHUB_PARSER_MAX_PAGES", "6"),
+		"max_lots":  getEnvDefault("GITHUB_PARSER_MAX_LOTS", "600"),
+	}
+	for key, value := range inputs {
+		workflowInputs[key] = value
+	}
 	payload := map[string]interface{}{
-		"ref": githubParserRef(),
-		"inputs": map[string]string{
-			"max_pages": getEnvDefault("GITHUB_PARSER_MAX_PAGES", "6"),
-			"max_lots":  getEnvDefault("GITHUB_PARSER_MAX_LOTS", "600"),
-		},
+		"ref":    githubParserRef(),
+		"inputs": workflowInputs,
 	}
 	body, _ := json.Marshal(payload)
 	endpoint := fmt.Sprintf(

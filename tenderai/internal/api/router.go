@@ -34,6 +34,7 @@ func NewRouter(h *Handler, allowedOrigins []string) http.Handler {
 		s.Delete("/dictionaries/{id}", h.DeleteDictionaryItem)
 		s.Get("/parser/status", h.GetParserStatus)
 		s.Post("/parser/run", h.RunParserNow)
+		s.Post("/parser/reanalyze-existing", h.ReanalyzeExistingTenders)
 		s.Get("/settings/telegram", h.GetTelegramSettings)
 		s.Put("/settings/telegram", h.UpdateTelegramSettings)
 		s.Post("/settings/telegram/test", h.TestTelegramSettings)
