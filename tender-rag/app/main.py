@@ -72,7 +72,9 @@ app.add_middleware(
 class SpecSummaryOut(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
+    provider: str = ""
     overview: str = ""
+    services: list[dict[str, Any]] = Field(default_factory=list)
     key_requirements: list[str] = Field(default_factory=list)
     deliverables: list[str] = Field(default_factory=list)
     terms_and_deadlines: list[str] = Field(default_factory=list)

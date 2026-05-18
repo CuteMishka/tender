@@ -20,6 +20,7 @@ import {
   getTenderSpecCache,
   getTenderStatus,
   indexLotDocument,
+  indexLotText,
   markTenderViewed,
   markTenderDecision,
   getTenderViewInfo,
@@ -31,6 +32,7 @@ import {
   tenderSourceLabel,
   tenderDocumentBlobToFile,
   type LotAnalyzeResult,
+  type LotSpecService,
   type LotSpecSummary,
   type TenderItem,
   type TenderViewInfo,
@@ -129,6 +131,60 @@ function buildLotTextWithSpec(tender: TenderItem, spec: string, summary: LotSpec
     parts.push("", "Извлечённый текст технической спецификации:", truncateForAi(spec, 12000));
   }
   return parts.join("\n");
+}
+
+function stringsFromUnknown(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((x) => sanitizeApiText(String(x))).filter(Boolean);
+  }
+  if (typeof value === "string" && value.trim()) {
+    return [sanitizeApiText(value)];
+  }
+  return [];
+}
+
+function normalizeSpecService(item: unknown): LotSpecService | null {
+  if (typeof item === "string") {
+    const name = sanitizeApiText(item);
+    return name ? { name } : null;
+  }
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  const o = item as Record<string, unknown>;
+  const name = sanitizeApiText(String(o.name ?? o.title ?? o.service ?? ""));
+  if (!name) return null;
+  return {
+    name,
+    category: sanitizeApiText(String(o.category ?? "")),
+    quantity: sanitizeApiText(String(o.quantity ?? "")),
+    requirements: stringsFromUnknown(o.requirements).slice(0, 6),
+    evidence: sanitizeApiText(String(o.evidence ?? "")),
+  };
+}
+
+function getSpecServices(summary: LotSpecSummary | null): LotSpecService[] {
+  const raw = summary?.services;
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const services: LotSpecService[] = [];
+  for (const item of raw) {
+    const service = normalizeSpecService(item);
+    if (!service) continue;
+    const key = service.name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    services.push(service);
+  }
+  return services;
+}
+
+function serviceSearchText(service: LotSpecService): string {
+  return [
+    service.name,
+    service.category,
+    service.quantity,
+    service.evidence,
+    ...(service.requirements ?? []),
+  ].filter(Boolean).join(" ").toLowerCase();
 }
 
 function tokenizeSimilarity(text: string): Set<string> {
@@ -241,6 +297,7 @@ function TenderDetail() {
   const [ragUploadOk, setRagUploadOk] = useState<string | null>(null);
   const [ragExtractedOverride, setRagExtractedOverride] = useState<string | null>(null);
   const [ragSpecSummary, setRagSpecSummary] = useState<LotSpecSummary | null>(null);
+  const [serviceSearch, setServiceSearch] = useState("");
   const [specDownloadLoading, setSpecDownloadLoading] = useState(false);
 
   const [actionLoading, setActionLoading] = useState<"participating" | "rejected" | null>(null);
@@ -284,6 +341,7 @@ function TenderDetail() {
     setRagUploadError(null);
     setRagUploadOk(null);
     setSpecDownloadLoading(false);
+    setServiceSearch("");
     const cached = Number.isFinite(id) && id > 0 ? getTenderSpecCache(id) : null;
     setRagExtractedOverride(typeof cached?.extractedText === "string" ? cached.extractedText : null);
     setRagSpecSummary(
@@ -444,6 +502,45 @@ function TenderDetail() {
     }
   }
 
+  async function handleExtractSpecServices() {
+    if (!tender || ragUploadLoading || specDownloadLoading) return;
+    const picked = pickTenderDocumentForRag(tender.documents);
+    setRagUploadError(null);
+    setRagUploadOk(null);
+    try {
+      if (picked) {
+        setSpecDownloadLoading(true);
+        const blob = await fetchDocumentBlobViaBackendProxy(picked.downloadLink);
+        const file = tenderDocumentBlobToFile(picked, blob);
+        await submitSpecToRag(file, { extractSpecPoints: true, includeExtractedText: true, sourceHintSuffix: `services;${picked.name}` });
+        return;
+      }
+      if (displayTechnicalSpec) {
+        setRagUploadLoading(true);
+        const result = await indexLotText(String(tender.id), displayTechnicalSpec, {
+          sourceHint: `tender-${tender.id};services;text`,
+          extractSpecPoints: true,
+        });
+        if (result.spec_summary) {
+          setRagSpecSummary(result.spec_summary);
+          saveTenderSpecCache(tender.id, {
+            extractedText: ragExtractedOverride ?? displayTechnicalSpec,
+            specSummary: result.spec_summary,
+            uploadStatus: "услуги из ТС извлечены",
+          });
+        }
+        setRagUploadOk("Услуги из ТС извлечены.");
+        return;
+      }
+      setRagUploadError("Сначала нужен файл ТС или извлечённый текст спецификации.");
+    } catch (err: unknown) {
+      setRagUploadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSpecDownloadLoading(false);
+      setRagUploadLoading(false);
+    }
+  }
+
   const handleDecision = async (status: "participating" | "rejected") => {
     if (!tender) return;
     setActionLoading(status);
@@ -490,6 +587,11 @@ function TenderDetail() {
   };
 
   const pickedSpecDocument = tender ? pickTenderDocumentForRag(tender.documents) : null;
+  const specServices = getSpecServices(ragSpecSummary);
+  const serviceQuery = sanitizeApiText(serviceSearch).toLowerCase();
+  const filteredSpecServices = serviceQuery
+    ? specServices.filter((service) => serviceSearchText(service).includes(serviceQuery))
+    : specServices;
 
   const statusInfo = tender ? getTenderStatus(tender.endDate) : null;
   const companyName = tender ? tenderCompanyName(tender) : "";
@@ -709,6 +811,81 @@ function TenderDetail() {
               </div>
             </div>
 
+            <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
+              <div className="flex flex-col gap-3 border-b border-border px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                    <FileText className="h-4 w-4 text-primary" /> Услуги из ТС
+                  </h3>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Groq читает техническую спецификацию и выделяет отдельные услуги/работы для быстрой оценки лота.
+                  </p>
+                </div>
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                  {specServices.length} услуг
+                </span>
+              </div>
+              <div className="space-y-4 px-6 py-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                  <button
+                    type="button"
+                    onClick={handleExtractSpecServices}
+                    disabled={ragUploadLoading || specDownloadLoading || (!pickedSpecDocument && !displayTechnicalSpec)}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    {ragUploadLoading || specDownloadLoading ? "Разбираю ТС…" : specServices.length ? "Обновить услуги AI" : "Разобрать услуги AI"}
+                  </button>
+                  <input
+                    type="search"
+                    value={serviceSearch}
+                    onChange={(e) => setServiceSearch(e.target.value)}
+                    placeholder="Поиск по услугам..."
+                    className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition focus:border-primary"
+                  />
+                </div>
+
+                {ragSpecSummary?.overview && (
+                  <p className="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
+                    {sanitizeApiText(String(ragSpecSummary.overview))}
+                  </p>
+                )}
+
+                {filteredSpecServices.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {filteredSpecServices.map((service, index) => {
+                      const details = [
+                        service.category,
+                        service.quantity,
+                        ...(service.requirements ?? []),
+                        service.evidence,
+                      ].filter(Boolean).join(" · ");
+                      return (
+                        <span
+                          key={`${service.name}-${index}`}
+                          title={details || service.name}
+                          className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700"
+                        >
+                          <span className="truncate">{service.name}</span>
+                          {service.quantity && (
+                            <span className="rounded-full bg-white/80 px-1.5 py-0.5 text-[10px] text-blue-600">
+                              {service.quantity}
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })}
+                  </div>
+                ) : specServices.length > 0 ? (
+                  <p className="text-sm text-muted-foreground">По этому запросу услуги не найдены.</p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Услуги ещё не извлечены. Нажмите “Разобрать услуги AI” после того, как у лота найден или загружен файл ТС.
+                  </p>
+                )}
+              </div>
+            </div>
+
             {/* AI Анализ */}
             <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
               <div className="border-b border-border px-6 py-4">
@@ -907,7 +1084,7 @@ function TenderDetail() {
                     <label className="inline-flex cursor-pointer items-center gap-2 text-muted-foreground">
                       <input type="checkbox" className="rounded" checked={ragExtractSpecPoints} disabled={ragUploadLoading}
                         onChange={(e) => setRagExtractSpecPoints(e.target.checked)} />
-                      Выжимка через OpenAI
+                      Выжимка услуг через AI
                     </label>
                     <label className="inline-flex cursor-pointer items-center gap-2 text-muted-foreground">
                       <input type="checkbox" className="rounded" checked={ragIncludeExtractedText} disabled={ragUploadLoading}

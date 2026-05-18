@@ -159,6 +159,25 @@ export type TenderDocument = {
   downloadLink: string;
 };
 
+export type LotSpecService = {
+  name: string;
+  category?: string;
+  quantity?: string;
+  requirements?: string[];
+  evidence?: string;
+};
+
+export type LotSpecSummary = Record<string, unknown> & {
+  provider?: string;
+  overview?: string;
+  services?: LotSpecService[];
+  key_requirements?: string[];
+  deliverables?: string[];
+  terms_and_deadlines?: string[];
+  constraints?: string[];
+  open_questions?: string[];
+};
+
 export type TenderItem = {
   id: number;
   lot: string;
@@ -809,10 +828,8 @@ export type IndexLotDocumentResult = {
   indexed: boolean;
   text_chars?: number;
   extracted_text?: string;
-  spec_summary?: Record<string, unknown>;
+  spec_summary?: LotSpecSummary;
 };
-
-export type LotSpecSummary = Record<string, unknown>;
 
 function parseIndexDocumentJson(body: unknown): IndexLotDocumentResult {
   if (!body || typeof body !== "object") {
@@ -826,7 +843,7 @@ function parseIndexDocumentJson(body: unknown): IndexLotDocumentResult {
     extracted_text: typeof o.extracted_text === "string" ? o.extracted_text : undefined,
     spec_summary:
       spec && typeof spec === "object" && !Array.isArray(spec)
-        ? (spec as Record<string, unknown>)
+        ? (spec as LotSpecSummary)
         : undefined,
   };
 }
@@ -836,8 +853,8 @@ function formatRagIndexError(status: number, rawText: string, body: unknown): st
     body && typeof body === "object" && "detail" in body
       ? String((body as { detail: unknown }).detail)
       : rawText.trim().slice(0, 400);
-  if (status === 503) return "Выжимка через OpenAI недоступна: не задан OPENAI_API_KEY (503).";
-  if (status === 502) return `Ошибка OpenAI при выжимке (502): ${detail || "без деталей"}`;
+  if (status === 503) return "AI-выжимка недоступна: не задан GROQ_API_KEY или GEMINI_API_KEY (503).";
+  if (status === 502) return `Ошибка AI при выжимке (502): ${detail || "без деталей"}`;
   if (status === 400) return `Не удалось обработать файл (400): ${detail || "пустой файл или формат"}`;
   return `Индексация документа ${status}: ${detail || rawText.slice(0, 240)}`;
 }
@@ -865,6 +882,45 @@ export async function indexLotDocument(
   form.append("include_extracted_text", options?.includeExtractedText === false ? "false" : "true");
 
   const res = await fetch(url, { method: "POST", body: form });
+  const rawText = await res.text();
+  let body: unknown = null;
+  try {
+    body = rawText ? JSON.parse(rawText) : null;
+  } catch {
+    body = null;
+  }
+
+  if (!res.ok) {
+    throw new Error(formatRagIndexError(res.status, rawText, body));
+  }
+
+  return parseIndexDocumentJson(body);
+}
+
+export async function indexLotText(
+  lotId: string,
+  text: string,
+  options?: {
+    sourceHint?: string;
+    extractSpecPoints?: boolean;
+  },
+): Promise<IndexLotDocumentResult> {
+  const trimmedId = lotId.trim();
+  const trimmedText = text.trim();
+  if (!trimmedId) throw new Error("Пустой идентификатор лота");
+  if (!trimmedText) throw new Error("Пустой текст спецификации");
+
+  const base = getRagApiBase();
+  const url = `${base}/v1/lots/${encodeURIComponent(trimmedId)}/index`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text: trimmedText,
+      source_hint: options?.sourceHint,
+      extract_spec_points: options?.extractSpecPoints === true,
+    }),
+  });
   const rawText = await res.text();
   let body: unknown = null;
   try {
