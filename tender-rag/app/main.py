@@ -15,7 +15,7 @@ from app.api.commercial_proposals import router as commercial_proposals_router
 from app.api.crm import router as crm_router
 from app.api.knowledge import router as knowledge_router
 from app.api.tailoring import router as tailoring_router
-from app.config import CORS_ORIGINS, ai_configuration, get_company_profile, is_ai_configured
+from app.config import CORS_ORIGINS, ai_configuration, get_company_profile, is_ai_configured, is_spec_ai_configured
 from app.database import create_async_schema
 from app.document_extract import extract_text_from_bytes
 from app.embeddings import embed_chunks, embed_profile
@@ -89,7 +89,7 @@ class IndexBody(BaseModel):
     )
     extract_spec_points: bool = Field(
         False,
-        description="Извлечь основные пункты ТЗ через AI и сохранить (нужен GROQ_API_KEY или GEMINI_API_KEY)",
+        description="Извлечь основные пункты ТЗ через Groq и сохранить (нужен GROQ_API_KEY)",
     )
 
 
@@ -183,10 +183,10 @@ def index_lot(lot_id: str, body: IndexBody) -> Response:
     try:
         replace_lot_chunks(conn, lot_id, chunks, vectors, body.source_hint)
         if body.extract_spec_points:
-            if not is_ai_configured():
+            if not is_spec_ai_configured():
                 raise HTTPException(
                     status_code=503,
-                    detail="extract_spec_points требует GROQ_API_KEY или GEMINI_API_KEY в окружении",
+                    detail="extract_spec_points требует GROQ_API_KEY в окружении",
                 )
             try:
                 payload = summarize_specification(text)
@@ -195,7 +195,7 @@ def index_lot(lot_id: str, body: IndexBody) -> Response:
             except Exception as e:
                 raise HTTPException(
                     status_code=502,
-                    detail=f"Gemini (spec summary): {e!s}",
+                    detail=f"Groq (spec summary): {e!s}",
                 ) from e
             replace_lot_spec_summary(conn, lot_id, payload)
             return JSONResponse(
@@ -217,9 +217,7 @@ async def index_document(
     ] = None,
     extract_spec_points: Annotated[
         bool,
-        Form(
-            description="Выжимка ТЗ через AI (тратит токены; нужен GROQ_API_KEY или GEMINI_API_KEY)"
-        ),
+        Form(description="Выжимка ТЗ через Groq (тратит токены; нужен GROQ_API_KEY)"),
     ] = False,
     include_extracted_text: Annotated[
         bool,
@@ -251,10 +249,10 @@ async def index_document(
         if include_extracted_text:
             out["extracted_text"] = text
         if extract_spec_points:
-            if not is_ai_configured():
+            if not is_spec_ai_configured():
                 raise HTTPException(
                     status_code=503,
-                    detail="extract_spec_points требует GROQ_API_KEY или GEMINI_API_KEY в окружении",
+                    detail="extract_spec_points требует GROQ_API_KEY в окружении",
                 )
             try:
                 payload = summarize_specification(text)
@@ -263,7 +261,7 @@ async def index_document(
             except Exception as e:
                 raise HTTPException(
                     status_code=502,
-                    detail=f"Gemini (spec summary): {e!s}",
+                    detail=f"Groq (spec summary): {e!s}",
                 ) from e
             replace_lot_spec_summary(conn, lot_id, payload)
             out["spec_summary"] = payload

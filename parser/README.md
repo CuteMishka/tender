@@ -125,7 +125,7 @@ python main.py --once
 
 `COLLECT_ALL_ACTIVE_LOTS=true` включает новый основной режим: parser сохраняет все активные лоты, у которых дедлайн ещё не вышел, проходя по страницам закупок через `limit + offset`. Лоты не отбрасываются по ключевым словам.
 
-`STRICT_KEYWORD_FILTER=false` нужен для режима всех активных лотов. Совпадения по ключевым словам сохраняются отдельно в `raw.matched_keyword`, `raw.match_score`, `raw.match_method`, `raw.match_reason`, `raw.is_suitable`. Именно эти поля использует вкладка `Подходящие` во фронтенде.
+`STRICT_KEYWORD_FILTER=false` нужен для режима всех активных лотов. Совпадения по ключевым словам сохраняются только как контекст (`raw.keyword_match`, `raw.keyword_match_score`, `raw.keyword_match_method`, `raw.keyword_match_reason`) и передаются AI для семантической оценки. Вкладка `Подходящие` использует только результат AI `raw.is_suitable=true`.
 
 `SMART_MATCH_USE_MORPHOLOGY=true` включает лемматизацию русского языка через `pymorphy3`: формы вроде `серверов`, `серверное`, `сервер` считаются совпадением по одной базовой форме.
 

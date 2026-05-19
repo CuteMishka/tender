@@ -8,14 +8,14 @@ from pypdf import PdfReader
 def extract_text_from_bytes(filename: str, data: bytes) -> str:
     suffix = Path(filename).suffix.lower()
     if suffix == ".pdf":
-        return _extract_pdf(data)
+        return _clean_text(_extract_pdf(data))
     if suffix == ".docx":
-        return _extract_docx(data)
+        return _clean_text(_extract_docx(data))
     if suffix in {".txt", ".csv", ".html", ".htm"}:
-        return data.decode("utf-8", errors="ignore")
+        return _clean_text(data.decode("utf-8", errors="ignore"))
     if suffix == ".doc":
-        return data.decode("utf-8", errors="ignore")
-    return data.decode("utf-8", errors="ignore")
+        raise ValueError("legacy .doc extraction is not supported")
+    return _clean_text(data.decode("utf-8", errors="ignore"))
 
 
 def _extract_pdf(data: bytes) -> str:
@@ -34,3 +34,7 @@ def _extract_docx(data: bytes) -> str:
             if values:
                 table_rows.append(" | ".join(values))
     return "\n".join([*paragraphs, *table_rows])
+
+
+def _clean_text(value: str) -> str:
+    return "".join(ch if ch in "\n\r\t" or ord(ch) >= 32 else " " for ch in value).replace("\x00", " ")

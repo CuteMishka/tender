@@ -800,7 +800,10 @@ function guessRagDocExtension(name: string, downloadLink: string): "pdf" | "docx
 
 export function pickTenderDocumentForRag(documents: TenderDocument[] | undefined): TenderDocument | null {
   if (!documents?.length) return null;
-  const ok = documents.filter((d) => guessRagDocExtension(d.name, d.downloadLink) !== null);
+  const ok = documents.filter((d) => {
+    const ext = guessRagDocExtension(d.name, d.downloadLink);
+    return ext === "pdf" || ext === "docx";
+  });
   if (!ok.length) return null;
   const kw = /спецификац|технич|т\.?\s*з\.?|техзадан/i;
   const preferred = ok.find((d) => kw.test(d.name));

@@ -75,7 +75,8 @@ class GroqSuitabilityClient:
             "Не считай подходящими бытовые товары, канцтовары, продукты, строительство, медицину, мебель, "
             "услуги не связанные с IT-инфраструктурой. "
             f"Профиль компании: {self.company_profile}. "
-            f"Контекстные слова: {keywords}. "
+            f"Базовые контекстные слова: {keywords}. "
+            "Эти слова являются только подсказками для семантической оценки, а не правилом точного совпадения. "
             "Ответь только JSON объектом: "
             "{\"is_suitable\": boolean, \"score\": 0-100, \"matched_theme\": string, \"reason\": string, \"keywords\": [string], \"spec_context_used\": boolean}."
         )
@@ -90,6 +91,11 @@ class GroqSuitabilityClient:
         spec_summary = lot.raw.get("spec_summary")
         spec_services = lot.raw.get("spec_services")
         spec_text_sample = str(lot.raw.get("spec_text_sample") or "")
+        ai_context_keywords = lot.raw.get("ai_context_keywords")
+        keyword_context = ""
+        if isinstance(ai_context_keywords, list):
+            values = [str(item).strip() for item in ai_context_keywords if str(item).strip()]
+            keyword_context = ", ".join(values[:80])
         spec_parts: list[str] = []
         if spec_services:
             spec_parts.append("Извлечённые AI услуги из технической спецификации:")
@@ -111,6 +117,7 @@ class GroqSuitabilityClient:
                 f"Тип закупки: {lot.purchase_type or ''}",
                 f"Место: {lot.place or ''}",
                 f"Сумма: {lot.amount or ''}",
+                f"Ключевые слова из справочника для семантической ориентации AI: {keyword_context}",
                 "Дополнительный текст:",
                 "\n".join(raw_parts),
                 "\n".join(spec_parts),

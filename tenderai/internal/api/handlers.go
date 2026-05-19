@@ -129,7 +129,7 @@ func sourceLabel(source string) string {
 }
 
 func parserLotSelectExpr() string {
-	return "parser_lots.*, CASE WHEN raw @> '{\"is_suitable\": true}'::jsonb OR (raw->'is_suitable' IS NULL AND NULLIF(raw->>'matched_keyword', '') IS NOT NULL) THEN true ELSE false END AS is_suitable, NULLIF(raw->>'matched_keyword', '') AS matched_keyword, NULLIF(raw->>'match_score', '')::double precision AS match_score"
+	return "parser_lots.*, CASE WHEN raw @> '{\"is_suitable\": true}'::jsonb THEN true ELSE false END AS is_suitable, NULLIF(raw->>'matched_keyword', '') AS matched_keyword, NULLIF(raw->>'match_score', '')::double precision AS match_score"
 }
 
 func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
@@ -223,7 +223,7 @@ func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {
 		query = applyKeywordFilter(query, keywords)
 	}
 	if parseBoolQuery(r.URL.Query().Get("suitable")) {
-		query = query.Where("(raw @> ?::jsonb OR (raw->'is_suitable' IS NULL AND NULLIF(raw->>'matched_keyword', '') IS NOT NULL))", `{"is_suitable": true}`)
+		query = query.Where("raw @> ?::jsonb", `{"is_suitable": true}`)
 	}
 
 	var total int64

@@ -34,10 +34,11 @@ class SamrukPlatform(TenderPlatform):
                         if self.settings.strict_keyword_filter and not match.matched:
                             continue
                         lot.raw.update({
-                            "matched_keyword": match.keyword or keyword,
-                            "match_score": round(match.score, 4),
-                            "match_method": match.method,
-                            "match_reason": match.reason,
+                            "keyword_match": (match.keyword or keyword) if match.matched else None,
+                            "candidate_keyword": match.keyword or keyword,
+                            "keyword_match_score": round(match.score, 4),
+                            "keyword_match_method": match.method,
+                            "keyword_match_reason": match.reason,
                         })
                         if is_seen and self.settings.stop_at_first_seen_lot and is_seen(lot.stable_id):
                             break
@@ -106,7 +107,7 @@ class SamrukPlatform(TenderPlatform):
                 url=absolute_url(self.settings.samruk_search_url, href),
                 title=text or self._title_from_text(container_text, lot_id),
                 amount=parse_amount(container_text),
-                raw={"platform": self.name, "keyword": keyword, "matched_keyword": keyword, "match_text": match_text[:4000], "card_text": container_text[:2000]},
+                raw={"platform": self.name, "keyword": keyword, "keyword_match": keyword, "match_text": match_text[:4000], "card_text": container_text[:2000]},
             ))
         return lots
 

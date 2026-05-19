@@ -1,6 +1,7 @@
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Any
 
 import structlog
@@ -44,6 +45,13 @@ class ParserScheduler:
         )
         self.notifications = NotificationService(db, settings.our_bins, settings.telegram_bot_token, settings.telegram_chat_id, settings.request_timeout_seconds)
         self.platforms = build_platforms(settings)
+        self._ai_lock = Lock()
+        self._rag_lock = Lock()
+        self._ai_cooldown_until = 0.0
+        self._rag_cooldown_until = 0.0
+        self._last_ai_request_at = 0.0
+        self._last_rag_request_at = 0.0
+        self._rag_spec_ai_requests_this_cycle = 0
 
     def run_forever(self) -> None:
         self.log.info("parser_started", platforms=[p.name for p in self.platforms], interval=self.settings.poll_interval_seconds)
@@ -77,6 +85,7 @@ class ParserScheduler:
         keywords = self.keywords.load_active()
         platform_names = [platform.name for platform in self.platforms]
         run_id = self.db.start_run(platform_names, keywords)
+        self._rag_spec_ai_requests_this_cycle = 0
         lots_found = 0
         lots_changed = 0
         errors: list[dict[str, Any]] = []
@@ -102,6 +111,7 @@ class ParserScheduler:
                         self.log.exception("platform_search_failed", platform=platform.name, error=str(exc))
             work: list[tuple[TenderPlatform, TenderLot]] = []
             remaining = self.settings.max_lots_per_cycle
+            ai_context_keywords = self._ai_context_keywords(keywords)
             for platform, lots in search_results:
                 limit = remaining if remaining > 0 else 0
                 skipped_seen = 0
@@ -109,6 +119,8 @@ class ParserScheduler:
                     selected = lots[:limit] if limit > 0 else lots
                 else:
                     selected, skipped_seen = self.db.filter_new_lots(lots, self.settings.stop_at_first_seen_lot, limit)
+                for lot in selected:
+                    lot.raw = {**lot.raw, "ai_context_keywords": ai_context_keywords}
                 work.extend((platform, lot) for lot in selected)
                 if remaining > 0:
                     remaining = max(0, remaining - len(selected))
@@ -175,8 +187,19 @@ class ParserScheduler:
         self.log.info("platform_search_finished", platform=platform.name, lots=len(lots), matches_by_keyword=matches_by_keyword)
         return lots
 
+    def _ai_context_keywords(self, keywords: list[str]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for keyword in [*self.settings.ai_context_keywords, *keywords]:
+            item = str(keyword).strip()
+            key = item.lower()
+            if item and key not in seen:
+                seen.add(key)
+                result.append(item)
+        return result[:80]
+
     def _process_lot(self, platform: TenderPlatform, lot: TenderLot) -> bool:
-        self.log.info("lot_process_started", platform=platform.name, lot=lot.stable_id, matched_keyword=lot.raw.get("matched_keyword"))
+        self.log.info("lot_process_started", platform=platform.name, lot=lot.stable_id, keyword_match=lot.raw.get("keyword_match"))
         existing_raw = self.db.load_lot_raw(lot.stable_id)
         if existing_raw:
             lot.raw = {**existing_raw, **lot.raw}
@@ -193,7 +216,6 @@ class ParserScheduler:
         suitable = self._is_suitable(enriched)
         if suitable:
             enriched = platform.load_final_protocol(enriched)
-            self._analyze_lot_with_ai(enriched)
             suitable = self._is_suitable(enriched)
         is_new, changes = self.db.upsert_lot(enriched)
         if suitable and is_new:
@@ -216,29 +238,58 @@ class ParserScheduler:
         if not self.ai_suitability.enabled:
             self.log.warning("ai_lot_filter_not_configured", lot=lot.stable_id, provider="groq")
             return
-        try:
-            result = self.ai_suitability.analyze(lot)
-        except Exception as exc:
-            self.log.warning("ai_lot_filter_failed", lot=lot.stable_id, error=str(exc))
+        if self._cooldown_active(self._ai_cooldown_until):
+            lot.raw = {**lot.raw, "ai_filter_status": "cooldown"}
             return
+        with self._ai_lock:
+            if self._cooldown_active(self._ai_cooldown_until):
+                lot.raw = {**lot.raw, "ai_filter_status": "cooldown"}
+                return
+            self._wait_for_ai_delay()
+            try:
+                result = self.ai_suitability.analyze(lot)
+                self._last_ai_request_at = time.monotonic()
+            except Exception as exc:
+                self._last_ai_request_at = time.monotonic()
+                if self._looks_like_rate_limit(exc):
+                    self._ai_cooldown_until = time.monotonic() + self.settings.ai_rate_limit_cooldown_seconds
+                    lot.raw = {**lot.raw, "ai_filter_status": "rate_limited"}
+                self.log.warning("ai_lot_filter_failed", lot=lot.stable_id, error=str(exc))
+                return
         score = int(result.get("score") or 0)
         passed = bool(result.get("passed"))
         previous_suitable = lot.raw.get("is_suitable") is True
         is_suitable = passed
-        matched_keyword = str(result.get("matched_theme") or "AI semantic match") if is_suitable else lot.raw.get("matched_keyword")
+        matched_keyword = str(result.get("matched_theme") or "AI semantic match") if is_suitable else None
         has_spec_context = bool(lot.raw.get("spec_services") or lot.raw.get("spec_summary") or lot.raw.get("spec_text_sample"))
         lot.raw = {
             **lot.raw,
             "ai_filter": result,
+            "ai_filter_status": "ok",
             "ai_score": score,
             "ai_passed": passed,
             "ai_provider": "groq",
             "is_suitable": is_suitable,
             "matched_keyword": matched_keyword,
-            "match_score": max(float(lot.raw.get("match_score") or 0), score / 100),
-            "match_method": "ai_spec_services" if passed and has_spec_context else ("ai_semantic" if passed and not previous_suitable else lot.raw.get("match_method")),
-            "match_reason": result.get("reason") or lot.raw.get("match_reason"),
+            "match_score": score / 100,
+            "match_method": "ai_spec_services" if passed and has_spec_context else ("ai_semantic" if passed else None),
+            "match_reason": result.get("reason") if passed else None,
         }
+
+    def _wait_for_ai_delay(self) -> None:
+        delay = self.settings.ai_request_delay_seconds
+        if delay <= 0:
+            return
+        elapsed = time.monotonic() - self._last_ai_request_at
+        if elapsed < delay:
+            time.sleep(delay - elapsed)
+
+    def _cooldown_active(self, cooldown_until: float) -> bool:
+        return cooldown_until > time.monotonic()
+
+    def _looks_like_rate_limit(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "429" in text or "too many requests" in text or "quota" in text or "лимит" in text or "rate limit" in text
 
     def _process_spec_documents(self, lot: TenderLot) -> None:
         docs = self.documents.pick_spec_documents(lot)
@@ -280,29 +331,63 @@ class ParserScheduler:
                     ):
                         result = {"indexed": True, "spec_summary": lot.raw.get("spec_summary")}
                     else:
-                        result = self.rag.index_document(lot.stable_id, downloaded.local_path, f"{lot.source};auto_spec;{downloaded.name}")
-                    rag_indexed = bool(result.get("indexed"))
-                    text_chars = int(result.get("text_chars") or text_chars or 0)
-                    payload = result.get("spec_summary")
-                    if isinstance(payload, dict):
-                        spec_summary = payload
-                        services = payload.get("services")
-                        lot.raw = {
-                            **lot.raw,
-                            "spec_summary": payload,
-                            "spec_services": services if isinstance(services, list) else [],
-                            "spec_summary_sha256": downloaded.sha256,
-                            "spec_summary_provider": payload.get("provider"),
-                            "spec_processing_status": "ok",
-                            "spec_processed_at": datetime.now(timezone.utc).isoformat(),
-                        }
-                    if rag_indexed:
-                        self.notifications.rag_indexed(lot, downloaded.name, text_chars)
+                        result = self._index_spec_document(lot, downloaded.local_path, f"{lot.source};auto_spec;{downloaded.name}")
+                    if result is not None:
+                        rag_indexed = bool(result.get("indexed"))
+                        text_chars = int(result.get("text_chars") or text_chars or 0)
+                        payload = result.get("spec_summary")
+                        if isinstance(payload, dict):
+                            spec_summary = payload
+                            services = payload.get("services")
+                            lot.raw = {
+                                **lot.raw,
+                                "spec_summary": payload,
+                                "spec_services": services if isinstance(services, list) else [],
+                                "spec_summary_sha256": downloaded.sha256,
+                                "spec_summary_provider": payload.get("provider"),
+                                "spec_processing_status": "ok",
+                                "spec_processed_at": datetime.now(timezone.utc).isoformat(),
+                            }
+                        if rag_indexed:
+                            self.notifications.rag_indexed(lot, downloaded.name, text_chars)
                 except Exception as exc:
                     self.log.warning("rag_index_failed", lot=lot.stable_id, document=doc.name, error=str(exc))
             self.db.upsert_document(lot, downloaded, text_chars=text_chars, rag_indexed=rag_indexed)
             if spec_summary is not None:
                 break
+
+    def _index_spec_document(self, lot: TenderLot, local_path: str, source_hint: str) -> dict[str, Any] | None:
+        if self._cooldown_active(self._rag_cooldown_until):
+            lot.raw = {**lot.raw, "spec_processing_status": "rag_cooldown", "spec_processed_at": datetime.now(timezone.utc).isoformat()}
+            return None
+        with self._rag_lock:
+            if self._cooldown_active(self._rag_cooldown_until):
+                lot.raw = {**lot.raw, "spec_processing_status": "rag_cooldown", "spec_processed_at": datetime.now(timezone.utc).isoformat()}
+                return None
+            max_requests = self.settings.rag_spec_ai_max_per_cycle
+            if max_requests > 0 and self._rag_spec_ai_requests_this_cycle >= max_requests:
+                lot.raw = {**lot.raw, "spec_processing_status": "rag_cycle_budget_exhausted", "spec_processed_at": datetime.now(timezone.utc).isoformat()}
+                return None
+            self._wait_for_rag_delay()
+            self._rag_spec_ai_requests_this_cycle += 1
+            try:
+                result = self.rag.index_document(lot.stable_id, local_path, source_hint)
+                self._last_rag_request_at = time.monotonic()
+                return result
+            except Exception as exc:
+                self._last_rag_request_at = time.monotonic()
+                if self._looks_like_rate_limit(exc):
+                    self._rag_cooldown_until = time.monotonic() + self.settings.rag_rate_limit_cooldown_seconds
+                    lot.raw = {**lot.raw, "spec_processing_status": "rag_rate_limited", "spec_processed_at": datetime.now(timezone.utc).isoformat()}
+                raise
+
+    def _wait_for_rag_delay(self) -> None:
+        delay = self.settings.ai_request_delay_seconds
+        if delay <= 0:
+            return
+        elapsed = time.monotonic() - self._last_rag_request_at
+        if elapsed < delay:
+            time.sleep(delay - elapsed)
 
     def _process_documents(self, lot: TenderLot) -> None:
         self._process_spec_documents(lot)

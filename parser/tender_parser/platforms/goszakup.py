@@ -70,12 +70,11 @@ class GoszakupPlatform(TenderPlatform):
                             if self.settings.strict_keyword_filter and not self.settings.collect_all_active_lots and not match.matched:
                                 continue
                             lot.raw.update({
-                                "matched_keyword": match.keyword if match.matched else None,
+                                "keyword_match": match.keyword if match.matched else None,
                                 "candidate_keyword": match.keyword,
-                                "match_score": round(match.score, 4),
-                                "match_method": match.method,
-                                "match_reason": match.reason,
-                                "is_suitable": match.matched,
+                                "keyword_match_score": round(match.score, 4),
+                                "keyword_match_method": match.method,
+                                "keyword_match_reason": match.reason,
                             })
                             if lot.stable_id not in lots:
                                 added_on_page += 1

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.config import AI_PROVIDER, gemini_chat_json
+from app.config import SPEC_AI_PROVIDER, spec_chat_json
 
 MAX_SPEC_CHARS = 48_000
 
@@ -50,7 +50,7 @@ def summarize_specification(spec_text: str) -> dict[str, Any]:
         raise ValueError("Пустой текст спецификации")
 
     user = "### Текст документа (ТЗ / спецификация / описание лота)\n\n" + text
-    data = gemini_chat_json(SYSTEM_SPEC, user, temperature=0.15)
+    data = spec_chat_json(SYSTEM_SPEC, user, temperature=0.15)
     return _normalize_payload(data)
 
 
@@ -101,7 +101,7 @@ def _normalize_payload(data: Any) -> dict[str, Any]:
         return result[:80]
 
     return {
-        "provider": AI_PROVIDER,
+        "provider": SPEC_AI_PROVIDER,
         "overview": str(data.get("overview", "")).strip() or "—",
         "services": service_list("services"),
         "key_requirements": str_list("key_requirements"),

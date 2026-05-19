@@ -13,6 +13,7 @@ import {
   fetchLotAnalyze,
   fetchLotSpecSummary,
   fetchTenderById,
+  indexLotDocument,
   formatDate,
   formatTenderAmount,
   getLocalApiBase,
@@ -26,6 +27,7 @@ import {
   sanitizeApiText,
   sanitizeApiTextMultiline,
   tenderCompanyName,
+  tenderDocumentBlobToFile,
   tenderSourceLabel,
   type LotAnalyzeResult,
   type LotSpecService,
@@ -283,6 +285,7 @@ function TenderDetail() {
   const [ragUploadOk, setRagUploadOk] = useState<string | null>(null);
   const [ragExtractedOverride, setRagExtractedOverride] = useState<string | null>(null);
   const [ragSpecSummary, setRagSpecSummary] = useState<LotSpecSummary | null>(null);
+  const [specAutoAnalyzeLoading, setSpecAutoAnalyzeLoading] = useState(false);
   const [serviceSearch, setServiceSearch] = useState("");
   const [specDownloadLoading, setSpecDownloadLoading] = useState(false);
 
@@ -320,6 +323,7 @@ function TenderDetail() {
     setRagUploadError(null);
     setRagUploadOk(null);
     setSpecDownloadLoading(false);
+    setSpecAutoAnalyzeLoading(false);
     setServiceSearch("");
     const cached = Number.isFinite(id) && id > 0 ? getTenderSpecCache(id) : null;
     setRagExtractedOverride(typeof cached?.extractedText === "string" ? cached.extractedText : null);
@@ -331,7 +335,7 @@ function TenderDetail() {
   }, [id]);
 
   useEffect(() => {
-    if (!tender?.lot_source_id) return;
+    if (!tender?.lot_source_id || ragSpecSummary) return;
     const ragLotId = tender.lot_source_id;
     let cancelled = false;
     (async () => {
@@ -345,13 +349,49 @@ function TenderDetail() {
             specSummary: saved,
             uploadStatus: "AI-услуги из ТС получены автоматически парсером",
           });
+          return;
+        }
+      } catch (e: unknown) {
+        if (cancelled) return;
+        const message = e instanceof Error ? e.message : String(e);
+        if (!message.includes("404")) setRagUploadError(message);
+      }
+      if (cancelled) return;
+      const picked = pickTenderDocumentForRag(tender.documents);
+      if (!picked) {
+        setRagUploadOk("Поддерживаемая ТС для авторазбора не найдена (нужен PDF или DOCX).");
+        return;
+      }
+      setSpecAutoAnalyzeLoading(true);
+      setRagUploadError(null);
+      setRagUploadOk("ТС ещё не была разобрана parser-ом — запускаю автоматический разбор через Groq…");
+      try {
+        const blob = await fetchDocumentBlobViaBackendProxy(picked.downloadLink);
+        if (cancelled) return;
+        const file = tenderDocumentBlobToFile(picked, blob);
+        const indexed = await indexLotDocument(ragLotId, file, {
+          sourceHint: `${tender.source || "tender"};frontend_lazy_spec;${picked.name || "document"}`,
+          extractSpecPoints: true,
+          includeExtractedText: false,
+        });
+        if (cancelled) return;
+        if (indexed.spec_summary && Object.keys(indexed.spec_summary).length > 0) {
+          setRagSpecSummary(indexed.spec_summary);
+          saveTenderSpecCache(tender.id, {
+            extractedText: ragExtractedOverride ?? undefined,
+            specSummary: indexed.spec_summary,
+            uploadStatus: "AI-услуги из ТС получены автоматически при открытии лота",
+          });
+          setRagUploadOk("AI-услуги из ТС извлечены автоматически через Groq.");
         }
       } catch (e: unknown) {
         if (!cancelled) setRagUploadError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setSpecAutoAnalyzeLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [ragExtractedOverride, tender]);
+  }, [ragExtractedOverride, ragSpecSummary, tender]);
 
   const displayTechnicalSpec =
     specText(ragExtractedOverride ?? undefined) || specText(tender?.technical_specification);
@@ -406,7 +446,7 @@ function TenderDetail() {
     if (!tender || specDownloadLoading) return;
     const picked = pickTenderDocumentForRag(tender.documents);
     if (!picked) {
-      setRagUploadError("В документах тендера не найдена ТС в формате PDF/DOC/DOCX.");
+      setRagUploadError("В документах тендера не найдена ТС в формате PDF/DOCX.");
       return;
     }
     setSpecDownloadLoading(true);
@@ -708,10 +748,6 @@ function TenderDetail() {
               </div>
               <div className="space-y-4 px-6 py-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-                  <span className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-muted/30 px-4 py-2 text-sm font-medium text-muted-foreground">
-                    <Sparkles className="h-4 w-4" />
-                    Автоматически из parser/RAG
-                  </span>
                   <input
                     type="search"
                     value={serviceSearch}
@@ -720,6 +756,12 @@ function TenderDetail() {
                     className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition focus:border-primary"
                   />
                 </div>
+                {specAutoAnalyzeLoading && (
+                  <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Sparkles className="h-4 w-4 animate-spin" />
+                    Groq автоматически разбирает ТС и извлекает услуги…
+                  </p>
+                )}
 
                 {ragSpecSummary?.overview && (
                   <p className="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
@@ -756,7 +798,9 @@ function TenderDetail() {
                   <p className="text-sm text-muted-foreground">По этому запросу услуги не найдены.</p>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    Услуги ещё не извлечены parser-ом. Они появятся автоматически после следующего запуска парсера, если у лота есть поддерживаемый файл ТС.
+                    {specAutoAnalyzeLoading
+                      ? "ТС найдена, Groq извлекает услуги. Обычно это занимает несколько секунд."
+                      : "Услуги ещё не извлечены. Если у лота есть PDF/DOCX ТС, анализ запустится автоматически при открытии страницы."}
                   </p>
                 )}
               </div>

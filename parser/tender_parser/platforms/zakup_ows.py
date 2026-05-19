@@ -127,12 +127,11 @@ class ZakupOwsPlatform(TenderPlatform):
                         match_text = str(lot.raw.get("match_text") or "")
                         match = matcher.match(match_text)
                         lot.raw.update({
-                            "matched_keyword": match.keyword if match.matched else None,
+                            "keyword_match": match.keyword if match.matched else None,
                             "candidate_keyword": match.keyword,
-                            "match_score": round(match.score, 4),
-                            "match_method": match.method,
-                            "match_reason": match.reason,
-                            "is_suitable": match.matched,
+                            "keyword_match_score": round(match.score, 4),
+                            "keyword_match_method": match.method,
+                            "keyword_match_reason": match.reason,
                         })
                         lots[lot.stable_id] = lot
                     if stop_all:
@@ -165,12 +164,11 @@ class ZakupOwsPlatform(TenderPlatform):
                         if self.settings.strict_keyword_filter and not match.matched:
                             continue
                         lot.raw.update({
-                            "matched_keyword": (match.keyword or keyword) if match.matched else None,
+                            "keyword_match": (match.keyword or keyword) if match.matched else None,
                             "candidate_keyword": match.keyword or keyword,
-                            "match_score": round(match.score, 4),
-                            "match_method": match.method,
-                            "match_reason": match.reason,
-                            "is_suitable": match.matched,
+                            "keyword_match_score": round(match.score, 4),
+                            "keyword_match_method": match.method,
+                            "keyword_match_reason": match.reason,
                         })
                         lots[lot.stable_id] = lot
                     if stop_keyword:
@@ -258,7 +256,7 @@ class ZakupOwsPlatform(TenderPlatform):
                 "platform": self.name,
                 "ows_schema": "v3",
                 "keyword": keyword or "",
-                "matched_keyword": keyword or "",
+                "keyword_match": keyword or "",
                 "match_text": match_text[:4000],
                 "customer_bin": customer_bin,
                 "organizer_bin": organizer_bin,

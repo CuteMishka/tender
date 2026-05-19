@@ -10,6 +10,7 @@ from tender_parser.text_extract import extract_text_from_bytes
 SPEC_MARKERS = ("тех", "специф", "тз", "техничес", "technical", "specification")
 PROTOCOL_MARKERS = ("протокол", "итог", "итоги", "protocol", "result")
 SUPPORTED_EXTENSIONS = (".pdf", ".docx", ".doc", ".txt")
+RAG_SPEC_EXTENSIONS = (".pdf", ".docx")
 SUPPORTED_CONTENT_TYPES = (
     "application/pdf",
     "application/msword",
@@ -25,10 +26,10 @@ class DocumentService:
         self.download_dir.mkdir(parents=True, exist_ok=True)
 
     def pick_spec_documents(self, lot: TenderLot) -> list[TenderDocument]:
-        selected = [doc for doc in lot.documents if self._is_supported(doc) and self._has_marker(doc.name, SPEC_MARKERS)]
+        selected = [doc for doc in lot.documents if self.is_rag_spec_supported(doc) and self._has_marker(doc.name, SPEC_MARKERS)]
         if selected:
             return selected
-        return [doc for doc in lot.documents if self._is_supported(doc)][:2]
+        return [doc for doc in lot.documents if self.is_rag_spec_supported(doc)][:2]
 
     def pick_protocol_documents(self, lot: TenderLot) -> list[TenderDocument]:
         return [doc for doc in lot.documents if self._is_supported(doc) and self._has_marker(doc.name, PROTOCOL_MARKERS)]
@@ -55,6 +56,10 @@ class DocumentService:
 
     def extract_text(self, doc: TenderDocument, data: bytes) -> str:
         return extract_text_from_bytes(doc.name, data)
+
+    def is_rag_spec_supported(self, doc: TenderDocument) -> bool:
+        name = (doc.name or doc.url).lower()
+        return any(name.endswith(ext) for ext in RAG_SPEC_EXTENSIONS)
 
     def _is_supported(self, doc: TenderDocument) -> bool:
         name = (doc.name or doc.url).lower()

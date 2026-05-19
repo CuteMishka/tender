@@ -64,6 +64,10 @@ class Settings(BaseSettings):
 
     rag_extract_spec_points: bool = True
     rag_include_extracted_text: bool = False
+    rag_spec_ai_max_per_cycle: int = Field(default=10, ge=0)
+    rag_rate_limit_cooldown_seconds: int = Field(default=900, ge=0)
+    ai_request_delay_seconds: float = Field(default=1.5, ge=0)
+    ai_rate_limit_cooldown_seconds: int = Field(default=120, ge=0)
     request_timeout_seconds: int = Field(default=60, ge=5)
     retry_attempts: int = Field(default=3, ge=1)
     retry_backoff_seconds: float = Field(default=2.0, ge=0.1)
