@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useLocation, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
 import {
   ArrowLeft, ExternalLink, FileText, Sparkles,
@@ -286,6 +286,7 @@ function TenderDetail() {
   const [ragExtractedOverride, setRagExtractedOverride] = useState<string | null>(null);
   const [ragSpecSummary, setRagSpecSummary] = useState<LotSpecSummary | null>(null);
   const [specAutoAnalyzeLoading, setSpecAutoAnalyzeLoading] = useState(false);
+  const [specAutoAnalyzeMessage, setSpecAutoAnalyzeMessage] = useState<string | null>(null);
   const [serviceSearch, setServiceSearch] = useState("");
   const [specDownloadLoading, setSpecDownloadLoading] = useState(false);
 
@@ -302,6 +303,7 @@ function TenderDetail() {
     typeof (location.state as { tendersPage: unknown }).tendersPage === "number"
       ? Math.max(1, Math.floor((location.state as { tendersPage: number }).tendersPage))
       : 1;
+  const attemptedLazySpecLots = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!Number.isFinite(id) || id < 1) {
@@ -324,6 +326,7 @@ function TenderDetail() {
     setRagUploadOk(null);
     setSpecDownloadLoading(false);
     setSpecAutoAnalyzeLoading(false);
+    setSpecAutoAnalyzeMessage(null);
     setServiceSearch("");
     const cached = Number.isFinite(id) && id > 0 ? getTenderSpecCache(id) : null;
     setRagExtractedOverride(typeof cached?.extractedText === "string" ? cached.extractedText : null);
@@ -337,6 +340,7 @@ function TenderDetail() {
   useEffect(() => {
     if (!tender?.lot_source_id || ragSpecSummary) return;
     const ragLotId = tender.lot_source_id;
+    if (attemptedLazySpecLots.current.has(ragLotId)) return;
     let cancelled = false;
     (async () => {
       try {
@@ -357,17 +361,20 @@ function TenderDetail() {
         if (!message.includes("404")) setRagUploadError(message);
       }
       if (cancelled) return;
+      attemptedLazySpecLots.current.add(ragLotId);
       const picked = pickTenderDocumentForRag(tender.documents);
       if (!picked) {
         setRagUploadOk("Поддерживаемая ТС для авторазбора не найдена (нужен PDF или DOCX).");
         return;
       }
       setSpecAutoAnalyzeLoading(true);
+      setSpecAutoAnalyzeMessage("Скачиваю файл ТС через proxy…");
       setRagUploadError(null);
-      setRagUploadOk("ТС ещё не была разобрана parser-ом — запускаю автоматический разбор через Groq…");
+      setRagUploadOk("ТС ещё не была разобрана parser-ом — сначала скачиваю документ.");
       try {
-        const blob = await fetchDocumentBlobViaBackendProxy(picked.downloadLink);
+        const blob = await fetchDocumentBlobViaBackendProxy(picked.downloadLink, { timeoutMs: 45_000 });
         if (cancelled) return;
+        setSpecAutoAnalyzeMessage("Файл ТС скачан, отправляю документ в Groq/RAG…");
         const file = tenderDocumentBlobToFile(picked, blob);
         const indexed = await indexLotDocument(ragLotId, file, {
           sourceHint: `${tender.source || "tender"};frontend_lazy_spec;${picked.name || "document"}`,
@@ -382,10 +389,21 @@ function TenderDetail() {
             specSummary: indexed.spec_summary,
             uploadStatus: "AI-услуги из ТС получены автоматически при открытии лота",
           });
+          setSpecAutoAnalyzeMessage(null);
           setRagUploadOk("AI-услуги из ТС извлечены автоматически через Groq.");
         }
       } catch (e: unknown) {
-        if (!cancelled) setRagUploadError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) {
+          const message = e instanceof Error ? e.message : String(e);
+          const isProxyTimeout = message.includes("Прокси документа (504)") || message.includes("не отдала файл");
+          setSpecAutoAnalyzeMessage(null);
+          setRagUploadOk(null);
+          setRagUploadError(
+            isProxyTimeout
+              ? "Не удалось скачать файл ТС: площадка не ответила через proxy за 45 секунд. Groq не запускался; попробуйте скачать оригинал позже или дождитесь parser-а."
+              : message,
+          );
+        }
       } finally {
         if (!cancelled) setSpecAutoAnalyzeLoading(false);
       }
@@ -759,7 +777,7 @@ function TenderDetail() {
                 {specAutoAnalyzeLoading && (
                   <p className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Sparkles className="h-4 w-4 animate-spin" />
-                    Groq автоматически разбирает ТС и извлекает услуги…
+                    {specAutoAnalyzeMessage || "Автоматический разбор ТС…"}
                   </p>
                 )}
 
@@ -799,7 +817,7 @@ function TenderDetail() {
                 ) : (
                   <p className="text-sm text-muted-foreground">
                     {specAutoAnalyzeLoading
-                      ? "ТС найдена, Groq извлекает услуги. Обычно это занимает несколько секунд."
+                      ? specAutoAnalyzeMessage || "Автоматический разбор ТС…"
                       : "Услуги ещё не извлечены. Если у лота есть PDF/DOCX ТС, анализ запустится автоматически при открытии страницы."}
                   </p>
                 )}

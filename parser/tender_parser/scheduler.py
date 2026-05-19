@@ -235,6 +235,18 @@ class ParserScheduler:
     def _analyze_lot_with_ai(self, lot: TenderLot) -> None:
         if not self.settings.ai_lot_filter_enabled:
             return
+        if lot.raw.get("manual_suitable_removed") is True:
+            lot.raw = {
+                **lot.raw,
+                "is_suitable": False,
+                "ai_passed": False,
+                "matched_keyword": None,
+                "match_score": 0,
+                "match_method": "manual_removed",
+                "match_reason": "Удалено пользователем из Подходящих",
+                "ai_filter_status": "manual_removed",
+            }
+            return
         if not self.ai_suitability.enabled:
             self.log.warning("ai_lot_filter_not_configured", lot=lot.stable_id, provider="groq")
             return

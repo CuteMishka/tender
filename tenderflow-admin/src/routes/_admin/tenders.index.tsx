@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { ExternalLink, Filter, CheckCircle2 } from "lucide-react";
+import { ExternalLink, Filter, CheckCircle2, Trash2 } from "lucide-react";
 import {
   fetchTendersList,
   formatTenderAmount,
@@ -10,6 +10,7 @@ import {
   getTenderStatus,
   getViewedTenders,
   getAllViewInfo,
+  removeTenderFromSuitable,
   sanitizeApiText,
   tenderCompanyName,
   tenderSourceLabel,
@@ -109,6 +110,7 @@ function TendersList() {
   const [filterMinAmount, setFilterMinAmount] = useState("");
   const [filterMaxAmount, setFilterMaxAmount] = useState("");
   const [savedIds, setSavedIds] = useState<Set<number>>(new Set());
+  const [removingSuitableIds, setRemovingSuitableIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     fetch(`${getLocalApiBase()}/api/v1/lots/saved`)
@@ -148,6 +150,35 @@ function TendersList() {
     if (!isNaN(maxA) && t.cost > maxA) return false;
     return true;
   });
+
+  async function handleRemoveFromSuitable(tender: TenderItem) {
+    if (removingSuitableIds.has(tender.id)) return;
+    setRemovingSuitableIds((prev) => new Set(prev).add(tender.id));
+    setError(null);
+    const previous = data;
+    setData((current) => current
+      ? {
+          ...current,
+          items: current.items.filter((item) => item.id !== tender.id),
+          meta: {
+            ...current.meta,
+            totalCount: Math.max(0, (current.meta.totalCount || current.items.length) - 1),
+          },
+        }
+      : current);
+    try {
+      await removeTenderFromSuitable(tender.id);
+    } catch (e: unknown) {
+      setData(previous);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRemovingSuitableIds((prev) => {
+        const next = new Set(prev);
+        next.delete(tender.id);
+        return next;
+      });
+    }
+  }
 
   return (
     <>
@@ -348,6 +379,21 @@ function TendersList() {
                             </span>
                           </td>
                           <td className="px-4 py-4 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                            {activeTab === "Подходящие" && (
+                              <button
+                                type="button"
+                                disabled={removingSuitableIds.has(t.id)}
+                                className="inline-flex rounded-md p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                                title="Удалить из Подходящих"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void handleRemoveFromSuitable(t);
+                                }}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            )}
                             <a
                               href={t.partnerLink}
                               target="_blank"
@@ -358,6 +404,7 @@ function TendersList() {
                             >
                               <ExternalLink className="h-4 w-4" />
                             </a>
+                            </div>
                           </td>
                         </tr>
                       );

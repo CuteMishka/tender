@@ -514,6 +514,18 @@ export async function fetchTenderById(id: number): Promise<TenderItem> {
   throw new Error("Тендер не найден");
 }
 
+export async function removeTenderFromSuitable(id: number): Promise<void> {
+  if (!Number.isFinite(id) || id < 1) {
+    throw new Error("Некорректный ID тендера");
+  }
+  const base = getTenderApiBase();
+  const res = await fetch(`${base}/api/v1/tenders/${id}/suitable`, { method: "DELETE" });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Tenders API ${res.status}: ${text.slice(0, 240)}`);
+  }
+}
+
 export function sanitizeApiText(s: string): string {
   if (!s) return "";
   let t = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -772,16 +784,30 @@ function readFetchDocumentProxyError(status: number, rawText: string): string {
   return t ? t.slice(0, 400) : `HTTP ${status}`;
 }
 
-export async function fetchDocumentBlobViaBackendProxy(remoteUrl: string): Promise<Blob> {
+export async function fetchDocumentBlobViaBackendProxy(remoteUrl: string, options?: { timeoutMs?: number }): Promise<Blob> {
   const proxy = getFetchDocumentProxyUrl();
-  const res = await fetch(proxy, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/octet-stream, application/pdf, application/msword, */*",
-    },
-    body: JSON.stringify({ url: remoteUrl }),
-  });
+  const timeoutMs = options?.timeoutMs ?? 45_000;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(proxy, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/octet-stream, application/pdf, application/msword, */*",
+      },
+      body: JSON.stringify({ url: remoteUrl }),
+      signal: controller.signal,
+    });
+  } catch (e: unknown) {
+    if (controller.signal.aborted) {
+      throw new Error(`Прокси документа: площадка не отдала файл за ${Math.round(timeoutMs / 1000)} сек.`);
+    }
+    throw e;
+  } finally {
+    window.clearTimeout(timeout);
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     const detail = readFetchDocumentProxyError(res.status, text);

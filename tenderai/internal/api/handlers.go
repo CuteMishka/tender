@@ -288,6 +288,54 @@ func (h *Handler) GetTender(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(parserLotToDTO(row, docs))
 }
 
+func (h *Handler) RemoveTenderFromSuitable(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		http.Error(w, `{"error":"database is not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+	idStr := chi.URLParam(r, "tenderId")
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id < 1 {
+		http.Error(w, `{"error":"некорректный ID"}`, http.StatusBadRequest)
+		return
+	}
+	var row ParserLot
+	if err := h.DB.Where("id = ? AND source IN ?", id, []string{"zakup", "goszakup", "samruk"}).First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, `{"error":"тендер не найден"}`, http.StatusNotFound)
+			return
+		}
+		http.Error(w, `{"error":"ошибка получения тендера"}`, http.StatusInternalServerError)
+		return
+	}
+	payload := map[string]interface{}{}
+	if len(row.Raw) > 0 {
+		_ = json.Unmarshal(row.Raw, &payload)
+	}
+	payload["is_suitable"] = false
+	payload["ai_passed"] = false
+	payload["matched_keyword"] = ""
+	payload["match_score"] = 0
+	payload["match_method"] = "manual_removed"
+	payload["match_reason"] = "Удалено пользователем из Подходящих"
+	payload["manual_suitable_removed"] = true
+	payload["manual_suitable_removed_at"] = time.Now().UTC().Format(time.RFC3339)
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, `{"error":"ошибка подготовки обновления"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := h.DB.Model(&ParserLot{}).Where("id = ?", id).Update("raw", raw).Error; err != nil {
+		http.Error(w, `{"error":"ошибка обновления тендера"}`, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok": true,
+		"id": id,
+	})
+}
+
 func splitKeywords(raw string) []string {
 	parts := strings.Split(raw, ",")
 	keywords := make([]string, 0, len(parts))
