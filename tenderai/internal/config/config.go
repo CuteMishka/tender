@@ -97,7 +97,7 @@ func fetchDocumentFromEnv() FetchDocumentConfig {
 		}
 	}
 	if len(hosts) == 0 {
-		hosts = []string{"v3bl.goszakup.gov.kz"}
+		hosts = []string{"v3bl.goszakup.gov.kz", "goszakup.gov.kz", "zakup.gov.kz", "ows.goszakup.gov.kz", "tenderplus.kz", "eep.mitwork.kz"}
 	}
 	maxB := int64(50 * 1024 * 1024)
 	if v := strings.TrimSpace(os.Getenv("FETCH_DOCUMENT_MAX_BYTES")); v != "" {

@@ -4,7 +4,6 @@ ARG GOPROXY=https://goproxy.io,https://proxy.golang.org,direct
 ARG GOSUMDB=sum.golang.org
 ENV GOPROXY=${GOPROXY}
 ENV GOSUMDB=${GOSUMDB}
-RUN apk add --no-cache git
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .

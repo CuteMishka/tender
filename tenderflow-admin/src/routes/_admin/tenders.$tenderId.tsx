@@ -351,7 +351,7 @@ function TenderDetail() {
           saveTenderSpecCache(tender.id, {
             extractedText: ragExtractedOverride ?? undefined,
             specSummary: saved,
-            uploadStatus: "AI-услуги из ТС получены автоматически парсером",
+            uploadStatus: "AI-услуги из ТС получены через RAG",
           });
           return;
         }
@@ -370,7 +370,7 @@ function TenderDetail() {
       setSpecAutoAnalyzeLoading(true);
       setSpecAutoAnalyzeMessage("Скачиваю файл ТС через proxy…");
       setRagUploadError(null);
-      setRagUploadOk("ТС ещё не была разобрана parser-ом — сначала скачиваю документ.");
+        setRagUploadOk("ТС ещё не была разобрана RAG — сначала скачиваю документ из TenderPlus.");
       try {
         const blob = await fetchDocumentBlobViaBackendProxy(picked.downloadLink, { timeoutMs: 45_000 });
         if (cancelled) return;
@@ -400,7 +400,7 @@ function TenderDetail() {
           setRagUploadOk(null);
           setRagUploadError(
             isProxyTimeout
-              ? "Не удалось скачать файл ТС: площадка не ответила через proxy за 45 секунд. Groq не запускался; попробуйте скачать оригинал позже или дождитесь parser-а."
+                ? "Не удалось скачать файл ТС: площадка не ответила через proxy за 45 секунд. Groq не запускался; попробуйте скачать оригинал позже."
               : message,
           );
         }
@@ -954,7 +954,7 @@ function TenderDetail() {
               <div className="border-b border-border px-6 py-4">
                 <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Техническая спецификация</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Parser автоматически индексирует ТС в RAG и сохраняет AI-выжимку услуг; здесь можно скачать исходный файл или посмотреть готовый результат.
+                    Документы приходят из TenderPlus API; RAG индексирует ТС и сохраняет AI-выжимку услуг.
                 </p>
               </div>
               <div className="px-6 py-4 space-y-4">
@@ -1008,7 +1008,7 @@ function TenderDetail() {
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    Текст ТС не хранится в браузере. Parser автоматически индексирует ТС в RAG и сохраняет структурированную выжимку услуг.
+                      Текст ТС не хранится в браузере. RAG индексирует документ из TenderPlus и сохраняет структурированную выжимку услуг.
                   </p>
                 )}
               </div>

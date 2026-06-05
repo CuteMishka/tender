@@ -21,8 +21,8 @@ type DictItem = {
 const tabs: { key: DictKind; label: string; hint: string }[] = [
   { key: "advantages", label: "Преимущества", hint: "Что усиливает релевантность тендера" },
   { key: "blockers", label: "Блокеры", hint: "Что исключает тендер на этапе парсинга" },
-  { key: "keywords", label: "Ключевые слова", hint: "Слова для поиска тендеров и парсера" },
-  { key: "tru", label: "ТРУ коды", hint: "Коды товаров/работ/услуг для будущего парсера" },
+  { key: "keywords", label: "Ключевые слова", hint: "Слова для поиска тендеров через TenderPlus API" },
+  { key: "tru", label: "ТРУ коды", hint: "Коды товаров/работ/услуг для фильтрации и аналитики" },
   { key: "companies", label: "Компании / BIN", hint: "Наши компании, конкуренты и заказчики" },
 ];
 
@@ -222,7 +222,7 @@ function DictionariesPage() {
     <>
       <PageHeader
         title="Справочники"
-        description="Преимущества, блокеры, ключевые слова, ТРУ коды и переменные для будущего парсера"
+        description="Преимущества, блокеры, ключевые слова, ТРУ коды и переменные для анализа лотов"
         actions={
           <div className="flex items-center gap-2">
             <span className={`rounded-full px-2 py-1 text-xs font-medium ${syncStatus === "online" ? "bg-green-100 text-green-700" : syncStatus === "loading" ? "bg-blue-100 text-blue-700" : "bg-yellow-100 text-yellow-700"}`}>

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dauren/tender/internal/service"
+	"github.com/dauren/tender/internal/tenderplus"
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 )
@@ -18,6 +19,7 @@ type Handler struct {
 	DB       *gorm.DB
 	Users    *service.UserService
 	FetchDoc *FetchDocumentProxy
+	TP       *tenderplus.Client
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +119,8 @@ func timePtrRFC3339(value *time.Time) *string {
 
 func sourceLabel(source string) string {
 	switch source {
+	case "tenderplus":
+		return "TenderPlus API"
 	case "zakup":
 		return "Госзакупки"
 	case "goszakup":
@@ -126,6 +130,120 @@ func sourceLabel(source string) string {
 	default:
 		return source
 	}
+}
+
+func tenderPlusLotToDTO(row tenderplus.Lot) LotDTO {
+	source := "tenderplus"
+	label := sourceLabel(source)
+	lotSourceID := strconv.Itoa(row.ID)
+	if row.LotSourceID != nil && strings.TrimSpace(*row.LotSourceID) != "" {
+		lotSourceID = strings.TrimSpace(*row.LotSourceID)
+	}
+	partnerLink := derefString(row.PartnerLink)
+	documents := tenderPlusDocuments(row.Documents, nil)
+	var startDate, endDate, status, partner, purchaseType, organizerName *string
+	if row.LotBuy != nil {
+		startDate = tenderPlusDate(row.LotBuy.BeginDate)
+		endDate = tenderPlusDate(row.LotBuy.EndDate)
+		if row.LotBuy.LotStatus != nil {
+			status = row.LotBuy.LotStatus.Name
+		}
+		if row.LotBuy.Partner != nil {
+			partner = row.LotBuy.Partner.Name
+			organizerName = row.LotBuy.Partner.Name
+		}
+		if row.LotBuy.TitleBuy != nil && strings.TrimSpace(*row.LotBuy.TitleBuy) != "" {
+			purchaseType = row.LotBuy.TitleBuy
+		}
+		documents = tenderPlusDocuments(row.Documents, row.LotBuy.Documents)
+	}
+	region := ""
+	if row.Region != nil && row.Region.Name != nil {
+		region = *row.Region.Name
+	}
+	return LotDTO{
+		ID:            row.ID,
+		Lot:           row.Lot,
+		LotSourceID:   strPtr(lotSourceID),
+		Source:        &source,
+		SourceLabel:   &label,
+		Title:         row.Title,
+		Description:   row.Description,
+		Cost:          row.Cost,
+		OneCost:       row.OneCost,
+		Counts:        row.Counts,
+		PartnerLink:   strPtr(partnerLink),
+		Place:         row.Place,
+		BuyID:         row.BuyID,
+		EndDate:       endDate,
+		StartDate:     startDate,
+		Region:        nullableString(region),
+		Partner:       partner,
+		OrganizerName: organizerName,
+		CustomerName:  organizerName,
+		Status:        status,
+		PurchaseType:  purchaseType,
+		Documents:     documents,
+	}
+}
+
+func tenderPlusDocuments(primary []tenderplus.LotDocument, secondary []tenderplus.LotDocument) []LotDocumentDTO {
+	out := make([]LotDocumentDTO, 0, len(primary)+len(secondary))
+	seen := map[string]bool{}
+	appendDocs := func(docs []tenderplus.LotDocument) {
+		for _, doc := range docs {
+			name := strings.TrimSpace(derefString(doc.Name))
+			link := strings.TrimSpace(derefString(doc.DownloadLink))
+			if name == "" || link == "" {
+				continue
+			}
+			key := name + "\n" + link
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			n, l := name, link
+			out = append(out, LotDocumentDTO{Name: &n, DownloadLink: &l})
+		}
+	}
+	appendDocs(primary)
+	appendDocs(secondary)
+	return out
+}
+
+func tenderPlusDate(value *string) *string {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return nil
+	}
+	raw := strings.TrimSpace(*value)
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
+		"2006-01-02",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
+			formatted := parsed.Format(time.RFC3339)
+			return &formatted
+		}
+	}
+	return &raw
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func nullableString(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func parserLotSelectExpr() string {
@@ -200,6 +318,10 @@ func rawStringValue(raw []byte, key string) string {
 }
 
 func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {
+	if h.TP != nil {
+		h.listTenderPlusTenders(w, r)
+		return
+	}
 	if h.DB == nil {
 		http.Error(w, `{"error":"database is not configured"}`, http.StatusServiceUnavailable)
 		return
@@ -258,7 +380,49 @@ func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) listTenderPlusTenders(w http.ResponseWriter, r *http.Request) {
+	limit := 10
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = min(n, 100)
+		}
+	}
+	page := 1
+	if v := r.URL.Query().Get("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+	keywords := splitKeywords(r.URL.Query().Get("keywords"))
+	endDateFrom := time.Now().Format("2006-01-02")
+	if parseBoolQuery(r.URL.Query().Get("includeExpired")) {
+		endDateFrom = ""
+	}
+	lots, meta, err := h.TP.ListActiveLots(r.Context(), keywords, page, limit, endDateFrom)
+	if err != nil {
+		http.Error(w, `{"error":"TenderPlus API недоступен: `+escapeJSONError(err)+`"}`, http.StatusBadGateway)
+		return
+	}
+	items := make([]LotDTO, 0, len(lots))
+	for _, lot := range lots {
+		items = append(items, tenderPlusLotToDTO(lot))
+	}
+	if meta == nil {
+		meta = map[string]interface{}{}
+	}
+	meta["source"] = "tenderplus"
+	if _, ok := meta["limitPage"]; !ok {
+		meta["limitPage"] = limit
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(TendersListResponse{Items: items, Meta: meta})
+}
+
 func (h *Handler) GetTender(w http.ResponseWriter, r *http.Request) {
+	if h.TP != nil {
+		h.getTenderPlusTender(w, r)
+		return
+	}
 	if h.DB == nil {
 		http.Error(w, `{"error":"database is not configured"}`, http.StatusServiceUnavailable)
 		return
@@ -286,6 +450,31 @@ func (h *Handler) GetTender(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(parserLotToDTO(row, docs))
+}
+
+func (h *Handler) getTenderPlusTender(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "tenderId")
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id < 1 {
+		http.Error(w, `{"error":"некорректный ID"}`, http.StatusBadRequest)
+		return
+	}
+	lot, err := h.TP.GetLotByID(r.Context(), id, nil)
+	if err != nil {
+		http.Error(w, `{"error":"тендер не найден"}`, http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(tenderPlusLotToDTO(*lot))
+}
+
+func escapeJSONError(err error) string {
+	body, marshalErr := json.Marshal(err.Error())
+	if marshalErr != nil {
+		return "ошибка запроса"
+	}
+	trimmed := strings.Trim(string(body), `"`)
+	return trimmed
 }
 
 func (h *Handler) RemoveTenderFromSuitable(w http.ResponseWriter, r *http.Request) {

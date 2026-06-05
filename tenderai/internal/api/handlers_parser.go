@@ -59,6 +59,16 @@ type parserRunRow struct {
 }
 
 func (h *Handler) GetParserStatus(w http.ResponseWriter, r *http.Request) {
+	if h.TP != nil {
+		writeParserStatus(w, ParserStatusDTO{
+			Configured:      true,
+			IntervalSeconds: 0,
+			NextRunAt:       "",
+			LastRun:         &ParserRunDTO{Status: "tenderplus_api", StartedAt: time.Now().Format(time.RFC3339), Platforms: []string{"TenderPlus API"}},
+			LastRequest:     &ParserRequestDTO{RequestedAt: time.Now().Format(time.RFC3339), RequestedBy: "system", Status: "not_required", Message: "Лоты загружаются напрямую из TenderPlus API; отдельный parser отключён."},
+		})
+		return
+	}
 	if h.DB == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "database is not configured")
 		return
@@ -112,6 +122,16 @@ func (h *Handler) GetParserStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) RunParserNow(w http.ResponseWriter, r *http.Request) {
+	if h.TP != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(ParserRequestDTO{
+			RequestedAt: time.Now().Format(time.RFC3339),
+			RequestedBy: "system",
+			Status:      "not_required",
+			Message:     "Отдельный parser отключён: актуальные лоты берутся напрямую из TenderPlus API при каждом запросе.",
+		})
+		return
+	}
 	if h.DB == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "database is not configured")
 		return
@@ -161,6 +181,16 @@ func (h *Handler) RunParserNow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ReanalyzeExistingTenders(w http.ResponseWriter, r *http.Request) {
+	if h.TP != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(ParserRequestDTO{
+			RequestedAt: time.Now().Format(time.RFC3339),
+			RequestedBy: "system",
+			Status:      "not_required",
+			Message:     "AI/RAG-анализ запускается по документам TenderPlus в карточке лота; отдельная переоценка parser-а не нужна.",
+		})
+		return
+	}
 	if h.DB == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "database is not configured")
 		return

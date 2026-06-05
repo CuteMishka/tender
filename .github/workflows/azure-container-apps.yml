@@ -12,7 +12,6 @@ env:
   ACR_NAME: acrtender38098
   ACR_LOGIN_SERVER: acrtender38098.azurecr.io
   BACKEND_APP_NAME: tender-backend
-  PARSER_APP_NAME: tender-parser
   FRONTEND_APP_NAME: tender-frontend
   BACKEND_URL: https://tender-backend.greencliff-036e8698.polandcentral.azurecontainerapps.io
   RAG_URL: https://tender-rag.greencliff-036e8698.polandcentral.azurecontainerapps.io
@@ -42,15 +41,6 @@ jobs:
           docker push ${{ env.ACR_LOGIN_SERVER }}/tender-backend:${{ github.sha }}
           docker push ${{ env.ACR_LOGIN_SERVER }}/tender-backend:latest
 
-      - name: Build and push parser
-        run: |
-          docker build \
-            -t ${{ env.ACR_LOGIN_SERVER }}/tender-parser:${{ github.sha }} \
-            -t ${{ env.ACR_LOGIN_SERVER }}/tender-parser:latest \
-            ./parser
-          docker push ${{ env.ACR_LOGIN_SERVER }}/tender-parser:${{ github.sha }}
-          docker push ${{ env.ACR_LOGIN_SERVER }}/tender-parser:latest
-
       - name: Build and push frontend
         run: |
           docker build \
@@ -70,24 +60,12 @@ jobs:
           az containerapp secret set \
             --name ${{ env.BACKEND_APP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
-            --secrets telegram-bot-token=${{ secrets.TELEGRAM_BOT_TOKEN }}
+            --secrets telegram-bot-token=${{ secrets.TELEGRAM_BOT_TOKEN }} tenderplus-token=${{ secrets.TENDERPLUS_TOKEN }}
           az containerapp update \
             --name ${{ env.BACKEND_APP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --image ${{ env.ACR_LOGIN_SERVER }}/tender-backend:${{ github.sha }} \
-            --set-env-vars TELEGRAM_BOT_TOKEN=secretref:telegram-bot-token
-
-      - name: Update parser Container App
-        run: |
-          az containerapp secret set \
-            --name ${{ env.PARSER_APP_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --secrets telegram-bot-token=${{ secrets.TELEGRAM_BOT_TOKEN }} groq-api-key=${{ secrets.GROQ_API_KEY }}
-          az containerapp update \
-            --name ${{ env.PARSER_APP_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.ACR_LOGIN_SERVER }}/tender-parser:${{ github.sha }} \
-            --set-env-vars TELEGRAM_BOT_TOKEN=secretref:telegram-bot-token GROQ_API_KEY=secretref:groq-api-key AI_LOT_FILTER_ENABLED=true AI_LOT_FILTER_MIN_SCORE=65 GROQ_MODEL=llama-3.1-8b-instant
+            --set-env-vars TELEGRAM_BOT_TOKEN=secretref:telegram-bot-token TENDERPLUS_TOKEN=secretref:tenderplus-token TENDERPLUS_URL=https://api.tenderplus.kz/graphql
 
       - name: Update frontend Container App
         run: |

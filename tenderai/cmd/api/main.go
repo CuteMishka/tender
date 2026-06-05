@@ -43,6 +43,7 @@ func run() error {
 		DB:       db,
 		Users:    users,
 		FetchDoc: fd,
+		TP:       tp,
 	}, cfg.CORSAllowedOrigins)
 
 	// Подключаем локальную БД и добавляем новые эндпоинты

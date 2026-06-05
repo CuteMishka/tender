@@ -183,28 +183,28 @@ function Dashboard() {
                 <Clock className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="text-base font-semibold">Таймер парсера zakup.gov.kz</h3>
-                <p className="text-sm text-muted-foreground">
-                  Последний запуск: {formatSince(parserStatus?.lastRun?.startedAt)}
-                </p>
+                  <h3 className="text-base font-semibold">Источник лотов TenderPlus API</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Проверка: {formatSince(parserStatus?.lastRun?.startedAt)}
+                  </p>
               </div>
             </div>
             <div className="grid gap-3 text-sm sm:grid-cols-4">
               <div>
                 <p className="text-xs text-muted-foreground">Статус</p>
-                <p className="font-medium">{parserStatus?.lastRun?.status || (parserStatus?.configured ? "ожидает" : "нет запусков")}</p>
+                <p className="font-medium">{parserStatus?.lastRun?.status || (parserStatus?.configured ? "подключён" : "нет данных")}</p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Время</p>
                 <p className="font-medium">{formatDateTime(parserStatus?.lastRun?.startedAt)}</p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Найдено / изменено</p>
-                <p className="font-medium">{parserStatus?.lastRun ? `${parserStatus.lastRun.lotsFound} / ${parserStatus.lastRun.lotsChanged}` : "—"}</p>
+                <p className="text-xs text-muted-foreground">Режим</p>
+                <p className="font-medium">TenderPlus API</p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Следующий запуск</p>
-                <p className="font-medium">{formatDateTime(parserStatus?.nextRunAt)}</p>
+                <p className="text-xs text-muted-foreground">Обновление</p>
+                <p className="font-medium">по запросу</p>
               </div>
             </div>
           </div>

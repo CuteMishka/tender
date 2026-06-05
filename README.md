@@ -1,13 +1,12 @@
 # Tender — запуск и production
 
-Проект состоит из **четырёх** сервисов:
+Проект состоит из **трёх** сервисов:
 
 | Сервис | Стек | Порт | Описание |
 |--------|------|------|----------|
 | **tenderai** | Go 1.22, Chi, GORM | `8082` | Основной бэкенд: API тендеров, аналитика, дашборд, заявки |
 | **tender-rag** | Python, FastAPI, pgvector | `8083` | RAG-сервис: семантический поиск и AI-анализ тендеров |
 | **tenderflow-admin** | React 19, Vite, TailwindCSS 4, TanStack Router | `5173` / `8080` | Фронтенд админ-панель |
-| **parser** | Python, Playwright, SQLAlchemy | scheduled | Парсер площадок, загрузка документов, smart matching |
 
 ---
 
@@ -46,24 +45,7 @@ GEMINI_API_KEY=...
 docker compose -f docker-compose.prod.yml --env-file .env up --build -d
 ```
 
-Production compose поднимает frontend, backend, parser, tender-rag и две PostgreSQL БД. Parser работает через публичную страницу `zakup.gov.kz/home/lots` в Playwright-режиме, сохраняет все активные лоты без вышедшего дедлайна и автоматически читает ключевые слова из backend справочника:
-
-```env
-DICTIONARIES_API_URL=http://backend:8082/api/v1/dictionaries?kind=keywords
-```
-
-Подходящие лоты не отделяются отдельной таблицей: parser записывает признак совпадения в `parser_lots.raw` (`is_suitable`, `matched_keyword`, `match_score`). Backend `/api/v1/tenders?suitable=true` отдаёт только такие лоты, а frontend показывает их во вкладке `Подходящие`.
-
-Для полного сбора активной выдачи используются значения:
-
-```env
-STRICT_KEYWORD_FILTER=false
-COLLECT_ALL_ACTIVE_LOTS=true
-STOP_AT_FIRST_SEEN_LOT=false
-PROCESS_EXISTING_LOTS=true
-ZAKUP_LOTS_LIMIT=100
-ZAKUP_LOTS_MAX_PAGES=0
-```
+Production compose поднимает frontend, backend, tender-rag и две PostgreSQL БД. Backend берёт актуальные лоты напрямую из TenderPlus GraphQL API (`TENDERPLUS_URL`, `TENDERPLUS_TOKEN`) и отдаёт их через `/api/v1/tenders`. Документы и технические спецификации приходят из `lot.documents` и `lotBuy.documents`; frontend скачивает выбранный PDF/DOCX через backend proxy и отправляет его в RAG для индексации и AI-выжимки.
 
 Telegram-уведомления отправляются только для новых подходящих лотов. Bot token и chat id храните в `.env`/секретах, не записывайте их в README и не отправляйте в чат.
 
@@ -72,7 +54,7 @@ Telegram-уведомления отправляются только для н�
 ```bash
 curl http://localhost:8082/health
 curl http://localhost:8082/api/v1/dictionaries?kind=keywords
-curl http://localhost:8082/api/v1/parser/status
+curl "http://localhost:8082/api/v1/tenders?limit=10"
 curl http://localhost:8083/health
 ```
 
@@ -84,7 +66,7 @@ curl http://localhost:8083/health
 
 - **Backend API**: `/api/v1/dictionaries`.
 - **Frontend**: страница `/dictionaries` работает через API и сохраняет локальный fallback при недоступном backend.
-- **Parser**: каждый цикл перечитывает активные `keywords` из backend API и автоматически использует новые слова.
+- **TenderPlus API**: backend использует `keywords` из запроса `/api/v1/tenders?keywords=...`; без фильтра отдаёт актуальные лоты из API.
 - **Группы**: `keywords`, `advantages`, `blockers`, `tru`, `companies`.
 
 ---
@@ -128,21 +110,13 @@ ADMIN_PASSWORD=admin
 
 Лоты поддерживают рабочий процесс:
 
-- **Подходящие**: лоты с признаком `is_suitable`/ключевым словом от parser/AI.
+- **Подходящие**: лоты, найденные через TenderPlus API и дополнительно оцененные AI/RAG по документам.
 - **На ревью**: специалист отправил лот второму специалисту с комментарием.
 - **Участвуем**: принято решение участвовать.
 - **В работе**: лот принят из `Участвуем` в работу.
 - **Не подходит**: специалист отклонил лот с причиной.
 
 Для saved lots добавлены поля `status`, `comment`, `assigned_to`, `reviewer`, `action_history`, `external_id`, `source`. `action_history` хранит хронологию действий по лоту в JSON-строке, чтобы комментарии и изменения статусов не терялись.
-
-Для локального parser `.env`:
-
-```env
-DICTIONARIES_API_URL=http://localhost:8082/api/v1/dictionaries?kind=keywords
-```
-
----
 
 ## 1. Запуск PostgreSQL (для Go-бэкенда)
 
@@ -347,5 +321,5 @@ tender1/
 | `connection refused` на 5433 | Проверьте `docker compose up -d` в `tenderai/` |
 | Тендеры возвращают 503 | Задайте `TENDERPLUS_TOKEN` в `tenderai/.env` |
 | AI-анализ не работает | Убедитесь, что RAG запущен и `VITE_RAG_API` указан в `.env` фронта |
-| «Автозагрузка ТЗ не работает» | Задайте `VITE_FETCH_DOCUMENT_PROXY_URL` |
+| «Автозагрузка ТЗ не работает» | Задайте `VITE_FETCH_DOCUMENT_PROXY_URL` и добавьте `tenderplus.kz` в `FETCH_DOCUMENT_ALLOWED_HOSTS` |
 | CORS-ошибки в браузере | Добавьте URL фронта в `CORS_ALLOWED_ORIGINS` бэкенда |

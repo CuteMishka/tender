@@ -217,11 +217,11 @@ function Settings() {
       const base = getLocalApiBase();
       const res = await fetch(`${base}/api/v1/parser/run`, { method: "POST" });
       const body = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(body?.error || "Не удалось запустить парсер");
-      pushNotification("success", "Парсер запускается", "GitHub Actions workflow запущен. Статус обновится автоматически.", "/settings");
+      if (!res.ok) throw new Error(body?.error || "Не удалось проверить источник лотов");
+      pushNotification("success", "TenderPlus API подключён", body?.message || "Лоты загружаются напрямую из API.", "/settings");
       await loadParserStatus();
     } catch (error) {
-      pushNotification("error", "Парсер не запущен", error instanceof Error ? error.message : "Проверьте backend и базу данных.", "/settings");
+      pushNotification("error", "Источник не проверен", error instanceof Error ? error.message : "Проверьте backend и токен TenderPlus.", "/settings");
     } finally {
       setParserRunning(false);
     }
@@ -233,11 +233,11 @@ function Settings() {
       const base = getLocalApiBase();
       const res = await fetch(`${base}/api/v1/parser/reanalyze-existing`, { method: "POST" });
       const body = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(body?.error || "Не удалось запустить AI-переоценку");
-      pushNotification("success", "AI-переоценка запускается", "GitHub Actions проверит существующие тендеры по смыслу и обновит таб «Подходящие».", "/settings");
+      if (!res.ok) throw new Error(body?.error || "Не удалось запустить AI/RAG-проверку");
+      pushNotification("success", "AI/RAG готов", body?.message || "RAG анализирует документы TenderPlus в карточке лота.", "/settings");
       await loadParserStatus();
     } catch (error) {
-      pushNotification("error", "AI-переоценка не запущена", error instanceof Error ? error.message : "Проверьте backend, GitHub Actions и GROQ_API_KEY.", "/settings");
+      pushNotification("error", "AI/RAG не проверен", error instanceof Error ? error.message : "Проверьте backend, RAG и ключ локальной модели.", "/settings");
     } finally {
       setAiReanalyzing(false);
     }
@@ -332,7 +332,7 @@ function Settings() {
                 <div>
                   <h3 className="font-semibold">Telegram-уведомления</h3>
                   <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-                    Напишите боту @freedom_tender_bot команду /start и привяжите Telegram-аккаунт, чтобы получать сообщения о новых подходящих тендерах сразу после запуска парсера.
+                      Напишите боту @freedom_tender_bot команду /start и привяжите Telegram-аккаунт, чтобы получать сообщения о новых подходящих тендерах.
                   </p>
                   <div className="mt-3 flex flex-wrap gap-2 text-xs">
                     <span className={`rounded-full px-2.5 py-1 font-medium ${telegram.configured ? "bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-300" : "bg-muted text-muted-foreground"}`}>
@@ -409,8 +409,8 @@ function Settings() {
                 <Clock className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="font-semibold">Таймер парсера zakup.gov.kz</h3>
-                <p className="text-sm text-muted-foreground">Последний запуск: {formatSince(parserStatus?.lastRun?.startedAt)}</p>
+                <h3 className="font-semibold">Источник лотов TenderPlus API</h3>
+                <p className="text-sm text-muted-foreground">Проверка: {formatSince(parserStatus?.lastRun?.startedAt)}</p>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -421,13 +421,13 @@ function Settings() {
                 style={{ background: "var(--gradient-primary)" }}
               >
                 {parserRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                {parserRequestActive ? "Парсер запускается" : "Запустить сейчас"}
+                {parserRequestActive ? "Проверка идёт" : "Проверить API"}
               </button>
               <button
                 onClick={reanalyzeExistingTenders}
                 disabled={aiReanalyzing || parserRequestActive}
                 className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-4 text-sm font-semibold transition hover:bg-accent disabled:opacity-60"
-                title="Запустить Groq AI-переоценку уже сохранённых тендеров"
+                title="Проверить готовность AI/RAG для документов TenderPlus"
               >
                 {aiReanalyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 Проверить существующие AI
@@ -447,16 +447,16 @@ function Settings() {
               <p className="mt-1 font-medium">{formatDateTime(parserStatus?.lastRun?.startedAt)}</p>
             </div>
             <div className="rounded-lg bg-muted/40 p-3">
-              <p className="text-xs text-muted-foreground">Следующий запуск</p>
-              <p className="mt-1 font-medium">{formatDateTime(parserStatus?.nextRunAt)}</p>
+              <p className="text-xs text-muted-foreground">Обновление</p>
+              <p className="mt-1 font-medium">по запросу</p>
             </div>
             <div className="rounded-lg bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">Интервал</p>
               <p className="mt-1 font-medium">{formatInterval(parserStatus?.intervalSeconds)}</p>
             </div>
             <div className="rounded-lg bg-muted/40 p-3">
-              <p className="text-xs text-muted-foreground">Найдено / изменено</p>
-              <p className="mt-1 font-medium">{parserStatus?.lastRun ? `${parserStatus.lastRun.lotsFound} / ${parserStatus.lastRun.lotsChanged}` : "—"}</p>
+              <p className="text-xs text-muted-foreground">Режим</p>
+              <p className="mt-1 font-medium">TenderPlus API</p>
             </div>
           </div>
           <div className="mt-3 rounded-lg bg-muted/30 p-3 text-sm">
