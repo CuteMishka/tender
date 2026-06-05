@@ -55,6 +55,9 @@ type LotDTO struct {
 	IsSuitable     *bool            `json:"isSuitable,omitempty"`
 	MatchedKeyword *string          `json:"matchedKeyword,omitempty"`
 	MatchScore     *float64         `json:"matchScore,omitempty"`
+	AIScore        *int             `json:"aiScore,omitempty"`
+	AIStatus       *string          `json:"aiStatus,omitempty"`
+	AIProvider     *string          `json:"aiProvider,omitempty"`
 	Documents      []LotDocumentDTO `json:"documents"`
 }
 
@@ -83,6 +86,9 @@ type ParserLot struct {
 	IsSuitable     *bool      `gorm:"column:is_suitable"`
 	MatchedKeyword *string    `gorm:"column:matched_keyword"`
 	MatchScore     *float64   `gorm:"column:match_score"`
+	AIScore        *int       `gorm:"column:ai_score"`
+	AIStatus       *string    `gorm:"column:ai_status"`
+	AIProvider     *string    `gorm:"column:ai_provider"`
 	Raw            []byte     `gorm:"column:raw"`
 }
 
@@ -100,6 +106,10 @@ type ParserDocument struct {
 func (ParserDocument) TableName() string {
 	return "parser_documents"
 }
+
+const tendersMaxResultWindow int64 = 500
+
+var parserTenderSources = []string{"zakup", "goszakup", "samruk", "tenderplus"}
 
 func strPtr(v string) *string { return &v }
 
@@ -123,13 +133,15 @@ func sourceLabel(source string) string {
 		return "Госзакупки"
 	case "samruk":
 		return "Самрук.kz"
+	case "tenderplus":
+		return "TenderPlus API"
 	default:
 		return source
 	}
 }
 
 func parserLotSelectExpr() string {
-	return "parser_lots.*, CASE WHEN raw @> '{\"is_suitable\": true}'::jsonb THEN true ELSE false END AS is_suitable, NULLIF(raw->>'matched_keyword', '') AS matched_keyword, NULLIF(raw->>'match_score', '')::double precision AS match_score"
+	return "parser_lots.*, CASE WHEN raw @> '{\"is_suitable\": true}'::jsonb THEN true ELSE false END AS is_suitable, NULLIF(raw->>'matched_keyword', '') AS matched_keyword, NULLIF(raw->>'match_score', '')::double precision AS match_score, NULLIF(raw->>'ai_score', '')::integer AS ai_score, NULLIF(raw->>'ai_filter_status', '') AS ai_status, NULLIF(raw->>'ai_provider', '') AS ai_provider"
 }
 
 func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
@@ -145,6 +157,9 @@ func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
 	}
 	source := row.Source
 	label := sourceLabel(row.Source)
+	if rawLabel := rawStringValue(row.Raw, "source_label"); rawLabel != "" {
+		label = rawLabel
+	}
 	partnerLink := concreteLotURL(row)
 	return LotDTO{
 		ID:             row.ID,
@@ -168,6 +183,9 @@ func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
 		IsSuitable:     row.IsSuitable,
 		MatchedKeyword: row.MatchedKeyword,
 		MatchScore:     row.MatchScore,
+		AIScore:        row.AIScore,
+		AIStatus:       row.AIStatus,
+		AIProvider:     row.AIProvider,
 		Documents:      documents,
 	}
 }
@@ -217,13 +235,21 @@ func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	query := h.DB.Model(&ParserLot{}).Where("source IN ?", []string{"zakup", "goszakup", "samruk"})
+	query := h.DB.Model(&ParserLot{}).Where("source IN ?", parserTenderSources)
 	keywords := splitKeywords(r.URL.Query().Get("keywords"))
 	if len(keywords) > 0 {
 		query = applyKeywordFilter(query, keywords)
 	}
+	if !parseBoolQuery(r.URL.Query().Get("includeExpired")) {
+		query = query.Where("(end_date IS NULL OR end_date >= ?)", time.Now().UTC())
+	}
 	if parseBoolQuery(r.URL.Query().Get("suitable")) {
-		query = query.Where("raw @> ?::jsonb", `{"is_suitable": true}`)
+		query = query.
+			Where("raw @> ?::jsonb", `{"is_suitable": true}`).
+			Where("raw @> ?::jsonb", `{"ai_passed": true}`).
+			Where("COALESCE(raw->>'ai_filter_status', '') = ?", "ok").
+			Where("COALESCE(raw->>'ai_provider', '') = ?", "local-llm").
+			Where("COALESCE(raw->>'manual_suitable_removed', 'false') != ?", "true")
 	}
 
 	var total int64
@@ -232,8 +258,22 @@ func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	effectiveTotal := total
+	limited := false
+	if effectiveTotal > tendersMaxResultWindow {
+		effectiveTotal = tendersMaxResultWindow
+		limited = true
+	}
+	pageCount := 1
+	if effectiveTotal > 0 {
+		pageCount = int(math.Ceil(float64(effectiveTotal) / float64(limit)))
+	}
+	if page > pageCount {
+		page = pageCount
+	}
+
 	var rows []ParserLot
-	if err := query.Select(parserLotSelectExpr()).Order("updated_at desc, id desc").Limit(limit).Offset((page - 1) * limit).Find(&rows).Error; err != nil {
+	if err := query.Select(parserLotSelectExpr()).Order("end_date asc NULLS LAST, updated_at desc, id desc").Limit(limit).Offset((page - 1) * limit).Find(&rows).Error; err != nil {
 		http.Error(w, `{"error":"ошибка получения тендеров"}`, http.StatusInternalServerError)
 		return
 	}
@@ -248,12 +288,16 @@ func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(TendersListResponse{
 		Items: items,
 		Meta: map[string]interface{}{
-			"firstId":    firstItemID(items),
-			"lastId":     lastItemID(items),
-			"limitPage":  limit,
-			"pageCount":  int(math.Ceil(float64(total) / float64(limit))),
-			"totalCount": total,
-			"source":     "parser",
+			"firstId":          firstItemID(items),
+			"lastId":           lastItemID(items),
+			"limitPage":        limit,
+			"page":             page,
+			"pageCount":        pageCount,
+			"totalCount":       effectiveTotal,
+			"actualTotalCount": total,
+			"limited":          limited,
+			"resultWindow":     tendersMaxResultWindow,
+			"source":           "parser",
 		},
 	})
 }
@@ -271,7 +315,7 @@ func (h *Handler) GetTender(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var row ParserLot
-	err = h.DB.Select(parserLotSelectExpr()).Where("id = ? AND source IN ?", id, []string{"zakup", "goszakup", "samruk"}).First(&row).Error
+	err = h.DB.Select(parserLotSelectExpr()).Where("id = ? AND source IN ?", id, parserTenderSources).First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		http.Error(w, `{"error":"тендер не найден"}`, http.StatusNotFound)
 		return
@@ -300,7 +344,7 @@ func (h *Handler) RemoveTenderFromSuitable(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var row ParserLot
-	if err := h.DB.Where("id = ? AND source IN ?", id, []string{"zakup", "goszakup", "samruk"}).First(&row).Error; err != nil {
+	if err := h.DB.Where("id = ? AND source IN ?", id, parserTenderSources).First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			http.Error(w, `{"error":"тендер не найден"}`, http.StatusNotFound)
 			return

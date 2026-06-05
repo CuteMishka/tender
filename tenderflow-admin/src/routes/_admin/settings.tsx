@@ -28,6 +28,7 @@ type ParserStatus = {
     requestedAt: string;
     requestedBy: string;
     status: string;
+    runMode?: string;
     startedAt?: string;
     finishedAt?: string;
     message?: string;
@@ -105,6 +106,12 @@ function formatInterval(seconds?: number) {
   if (!seconds) return "—";
   const minutes = Math.round(seconds / 60);
   return minutes >= 60 ? `${Math.floor(minutes / 60)} ч. ${minutes % 60} мин.` : `${minutes} мин.`;
+}
+
+function formatRunMode(mode?: string) {
+  if (mode === "reanalyze_existing") return "AI-переоценка";
+  if (mode === "parse") return "Парсинг";
+  return "Ручной запуск";
 }
 
 function Settings() {
@@ -218,7 +225,7 @@ function Settings() {
       const res = await fetch(`${base}/api/v1/parser/run`, { method: "POST" });
       const body = await res.json().catch(() => null);
       if (!res.ok) throw new Error(body?.error || "Не удалось запустить парсер");
-      pushNotification("success", "Парсер запускается", "GitHub Actions workflow запущен. Статус обновится автоматически.", "/settings");
+      pushNotification("success", "Парсер запускается", "Запрос отправлен на ВМ. Статус обновится автоматически.", "/settings");
       await loadParserStatus();
     } catch (error) {
       pushNotification("error", "Парсер не запущен", error instanceof Error ? error.message : "Проверьте backend и базу данных.", "/settings");
@@ -234,10 +241,10 @@ function Settings() {
       const res = await fetch(`${base}/api/v1/parser/reanalyze-existing`, { method: "POST" });
       const body = await res.json().catch(() => null);
       if (!res.ok) throw new Error(body?.error || "Не удалось запустить AI-переоценку");
-      pushNotification("success", "AI-переоценка запускается", "GitHub Actions проверит существующие тендеры по смыслу и обновит таб «Подходящие».", "/settings");
+      pushNotification("success", "AI-переоценка запускается", "Переоценка отправлена в текущий runner-механизм. Статус обновится автоматически.", "/settings");
       await loadParserStatus();
     } catch (error) {
-      pushNotification("error", "AI-переоценка не запущена", error instanceof Error ? error.message : "Проверьте backend, GitHub Actions и GROQ_API_KEY.", "/settings");
+      pushNotification("error", "AI-переоценка не запущена", error instanceof Error ? error.message : "Проверьте backend и AI-конфигурацию.", "/settings");
     } finally {
       setAiReanalyzing(false);
     }
@@ -427,7 +434,7 @@ function Settings() {
                 onClick={reanalyzeExistingTenders}
                 disabled={aiReanalyzing || parserRequestActive}
                 className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-4 text-sm font-semibold transition hover:bg-accent disabled:opacity-60"
-                title="Запустить Groq AI-переоценку уже сохранённых тендеров"
+                title="Запустить AI-переоценку уже сохранённых тендеров"
               >
                 {aiReanalyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 Проверить существующие AI
@@ -463,9 +470,12 @@ function Settings() {
             <p className="text-xs text-muted-foreground">Последний ручной запуск</p>
             <p className="mt-1 font-medium">
               {parserStatus?.lastRequest
-                ? `${parserStatus.lastRequest.status} · ${formatDateTime(parserStatus.lastRequest.requestedAt)}`
+                ? `${formatRunMode(parserStatus.lastRequest.runMode)} · ${parserStatus.lastRequest.status} · ${formatDateTime(parserStatus.lastRequest.requestedAt)}`
                 : "—"}
             </p>
+            {parserStatus?.lastRequest?.message && (
+              <p className="mt-1 text-xs text-muted-foreground">{parserStatus.lastRequest.message}</p>
+            )}
           </div>
         </div>
 

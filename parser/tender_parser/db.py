@@ -207,7 +207,7 @@ class Database:
             run.errors = errors
             session.commit()
 
-    def claim_run_request(self) -> int | None:
+    def claim_run_request(self) -> dict[str, Any] | None:
         now = datetime.now(timezone.utc)
         with self.session() as session:
             request = session.scalar(
@@ -222,7 +222,13 @@ class Database:
             request.status = "running"
             request.started_at = now
             session.commit()
-            return request.id
+            mode, limit, message = self.parse_run_request_message(request.message)
+            return {
+                "id": request.id,
+                "mode": mode,
+                "limit": limit,
+                "message": message,
+            }
 
     def finish_run_request(self, request_id: int, status: str, message: str = "") -> None:
         with self.session() as session:
@@ -233,6 +239,37 @@ class Database:
             request.finished_at = datetime.now(timezone.utc)
             request.message = message
             session.commit()
+
+    @staticmethod
+    def build_run_request_message(mode: str, limit: int, message: str) -> str:
+        normalized_mode = (mode or "parse").strip().lower() or "parse"
+        normalized_limit = max(0, int(limit))
+        return f"[parser mode={normalized_mode} limit={normalized_limit}] {message.strip()}"
+
+    @staticmethod
+    def parse_run_request_message(message: str | None) -> tuple[str, int, str]:
+        text = (message or "").strip()
+        if not text.startswith("[parser "):
+            return "parse", 0, text
+        end = text.find("]")
+        if end <= 0:
+            return "parse", 0, text
+        meta = text[len("[parser ") : end]
+        display = text[end + 1 :].strip()
+        mode = "parse"
+        limit = 0
+        for item in meta.split():
+            key, _, value = item.partition("=")
+            key = key.strip().lower()
+            value = value.strip()
+            if key == "mode" and value:
+                mode = value.lower()
+            elif key == "limit":
+                try:
+                    limit = max(0, int(value))
+                except ValueError:
+                    limit = 0
+        return mode, limit, display
 
     def lot_exists(self, stable_id: str) -> bool:
         with self.session() as session:

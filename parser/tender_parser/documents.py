@@ -29,7 +29,12 @@ class DocumentService:
         selected = [doc for doc in lot.documents if self.is_rag_spec_supported(doc) and self._has_marker(doc.name, SPEC_MARKERS)]
         if selected:
             return selected
-        return [doc for doc in lot.documents if self.is_rag_spec_supported(doc)][:2]
+        supported = [doc for doc in lot.documents if self.is_rag_spec_supported(doc)]
+        if supported:
+            return supported[:2]
+        if lot.source == "tenderplus":
+            return lot.documents[:2]
+        return []
 
     def pick_protocol_documents(self, lot: TenderLot) -> list[TenderDocument]:
         return [doc for doc in lot.documents if self._is_supported(doc) and self._has_marker(doc.name, PROTOCOL_MARKERS)]
@@ -40,7 +45,7 @@ class DocumentService:
             res = client.get(url)
             res.raise_for_status()
             data = res.content
-        content_type = (res.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+        content_type = (res.headers.get("content-type") or "").split(";", 1)[0].strip().strip('"').strip("'").lower()
         if not self._looks_like_supported_file(url, doc.name, content_type, data):
             raise ValueError(f"unsupported document response: content_type={content_type or 'unknown'} url={url}")
         digest = bytes_sha256(data)
@@ -55,11 +60,20 @@ class DocumentService:
         return data, doc
 
     def extract_text(self, doc: TenderDocument, data: bytes) -> str:
-        return extract_text_from_bytes(doc.name, data)
+        name = doc.name or "document"
+        if not Path(name).suffix:
+            content_type = (doc.content_type or "").lower()
+            if data.startswith(b"%PDF") or content_type == "application/pdf":
+                name = f"{name}.pdf"
+            elif data.startswith(b"PK\x03\x04") or "openxmlformats" in content_type:
+                name = f"{name}.docx"
+            elif content_type == "text/plain":
+                name = f"{name}.txt"
+        return extract_text_from_bytes(name, data)
 
     def is_rag_spec_supported(self, doc: TenderDocument) -> bool:
         name = (doc.name or doc.url).lower()
-        return any(name.endswith(ext) for ext in RAG_SPEC_EXTENSIONS)
+        return any(name.endswith(ext) for ext in RAG_SPEC_EXTENSIONS) or self._has_marker(name, SPEC_MARKERS)
 
     def _is_supported(self, doc: TenderDocument) -> bool:
         name = (doc.name or doc.url).lower()

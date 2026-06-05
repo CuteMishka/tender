@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     stop_at_first_seen_lot: bool = False
     process_existing_lots: bool = True
     max_lots_per_cycle: int = Field(default=0, ge=0)
-    platforms_csv: str = Field(default="goszakup", validation_alias="PLATFORMS")
+    platforms_csv: str = Field(default="tenderplus", validation_alias="PLATFORMS")
     default_keywords_csv: str = Field(
         default="",
         validation_alias="DEFAULT_KEYWORDS",
@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     zakup_ows_limit_per_page: int = Field(default=200, ge=1, le=200)
     zakup_ows_max_pages_per_keyword: int = Field(default=0, ge=0, le=1000)
     samruk_search_url: str = "https://zakupki.kz/result"
+    tenderplus_url: str = "https://api.tenderplus.kz/graphql"
+    tenderplus_token: str | None = None
+    tenderplus_page_size: int = Field(default=25, ge=1, le=100)
+    tenderplus_max_pages: int = Field(default=2, ge=1, le=20)
+    tenderplus_max_lots: int = Field(default=50, ge=1, le=500)
+    tenderplus_include_documents: bool = True
+    tenderplus_document_max_downloads: int = Field(default=2, ge=0, le=10)
+    tenderplus_rag_index_documents: bool = False
 
     rag_extract_spec_points: bool = True
     rag_include_extracted_text: bool = False
@@ -83,6 +91,7 @@ class Settings(BaseSettings):
         "zakup_public_base_url",
         "zakup_lots_url",
         "samruk_search_url",
+        "tenderplus_url",
         "dictionaries_api_url",
         "groq_api_base",
     )

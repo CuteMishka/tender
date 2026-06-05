@@ -205,6 +205,9 @@ export type TenderItem = {
   isSuitable?: boolean | null;
   matchedKeyword?: string | null;
   matchScore?: number | null;
+  aiScore?: number | null;
+  aiStatus?: string | null;
+  aiProvider?: string | null;
   documents?: TenderDocument[];
   technical_specification?: string;
   ai_analysis?: string;
@@ -259,8 +262,12 @@ export type TendersListResponse = {
     firstId: number;
     lastId: number;
     limitPage: number;
+    page?: number;
     pageCount: number;
     totalCount: number;
+    actualTotalCount?: number;
+    limited?: boolean;
+    resultWindow?: number;
   };
 };
 
@@ -367,6 +374,9 @@ function normalizeTenderPayload(body: unknown): TenderItem | null {
       isSuitable: typeof o.isSuitable === "boolean" ? o.isSuitable : null,
       matchedKeyword: typeof o.matchedKeyword === "string" ? o.matchedKeyword : null,
       matchScore: typeof o.matchScore === "number" ? o.matchScore : null,
+      aiScore: typeof o.aiScore === "number" ? o.aiScore : null,
+      aiStatus: typeof o.aiStatus === "string" ? o.aiStatus : null,
+      aiProvider: typeof o.aiProvider === "string" ? o.aiProvider : null,
       ...(technical_specification !== undefined ? { technical_specification } : {}),
       ...(ai_analysis !== undefined ? { ai_analysis } : {}),
     };
@@ -416,8 +426,12 @@ function metaFromRecord(
     firstId: typeof m.firstId === "number" ? m.firstId : (items[0]?.id ?? 0),
     lastId: typeof m.lastId === "number" ? m.lastId : (items[items.length - 1]?.id ?? 0),
     limitPage: typeof m.limitPage === "number" ? m.limitPage : limit,
+    page: typeof m.page === "number" ? Math.max(1, m.page) : undefined,
     pageCount: typeof m.pageCount === "number" ? Math.max(1, m.pageCount) : 1,
     totalCount: typeof m.totalCount === "number" ? m.totalCount : items.length,
+    actualTotalCount: typeof m.actualTotalCount === "number" ? m.actualTotalCount : undefined,
+    limited: typeof m.limited === "boolean" ? m.limited : undefined,
+    resultWindow: typeof m.resultWindow === "number" ? m.resultWindow : undefined,
   };
 }
 
@@ -459,7 +473,7 @@ export async function fetchTendersList(input: {
   suitable?: boolean;
 }): Promise<TendersListResponse> {
   const { page, limit } = normalizeInput(input);
-  const base = getTenderApiBase();
+  const base = getLocalApiBase();
   const params = new URLSearchParams();
   params.set("limit", String(limit));
   params.set("page", String(page));
@@ -485,7 +499,7 @@ export async function fetchTenderById(id: number): Promise<TenderItem> {
   if (!Number.isFinite(id) || id < 1) {
     throw new Error("Некорректный ID тендера");
   }
-  const base = getTenderApiBase();
+  const base = getLocalApiBase();
 
   // Сначала пробуем прямой GET /api/v1/tenders/:id
   const detailRes = await fetch(`${base}/api/v1/tenders/${id}`);
@@ -518,7 +532,7 @@ export async function removeTenderFromSuitable(id: number): Promise<void> {
   if (!Number.isFinite(id) || id < 1) {
     throw new Error("Некорректный ID тендера");
   }
-  const base = getTenderApiBase();
+  const base = getLocalApiBase();
   const res = await fetch(`${base}/api/v1/tenders/${id}/suitable`, { method: "DELETE" });
   if (!res.ok) {
     const text = await res.text();

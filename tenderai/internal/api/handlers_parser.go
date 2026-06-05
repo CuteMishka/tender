@@ -41,6 +41,7 @@ type ParserRequestDTO struct {
 	RequestedAt string `json:"requestedAt"`
 	RequestedBy string `json:"requestedBy"`
 	Status      string `json:"status"`
+	RunMode     string `json:"runMode,omitempty"`
 	StartedAt   string `json:"startedAt,omitempty"`
 	FinishedAt  string `json:"finishedAt,omitempty"`
 	Message     string `json:"message,omitempty"`
@@ -71,7 +72,7 @@ func (h *Handler) GetParserStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !exists {
-		writeParserStatus(w, ParserStatusDTO{Configured: lastRequest != nil || githubParserConfigured(), IntervalSeconds: interval, LastRequest: lastRequest})
+		writeParserStatus(w, ParserStatusDTO{Configured: lastRequest != nil || parserRunnerConfigured(), IntervalSeconds: interval, LastRequest: lastRequest})
 		return
 	}
 	var row parserRunRow
@@ -85,7 +86,7 @@ func (h *Handler) GetParserStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if row.ID == 0 {
-		writeParserStatus(w, ParserStatusDTO{Configured: true, IntervalSeconds: interval, LastRequest: lastRequest})
+		writeParserStatus(w, ParserStatusDTO{Configured: parserRunnerConfigured() || lastRequest != nil, IntervalSeconds: interval, LastRequest: lastRequest})
 		return
 	}
 	dto := ParserRunDTO{
@@ -120,7 +121,7 @@ func (h *Handler) RunParserNow(w http.ResponseWriter, r *http.Request) {
 	if requestedBy == "" {
 		requestedBy = "admin"
 	}
-	if githubParserConfigured() {
+	if parserUsesGitHub() {
 		if active := h.currentParserRequest(); active != nil && isActiveParserStatus(active.Status) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
@@ -150,7 +151,11 @@ func (h *Handler) RunParserNow(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(parserRequestDTO(existing))
 		return
 	}
-	req := domain.ParserRunRequest{RequestedBy: requestedBy, Status: "pending"}
+	req := domain.ParserRunRequest{
+		RequestedBy: requestedBy,
+		Status:      "pending",
+		Message:     encodeVMParserRequestMessage("parse", 0, "VM parser run requested"),
+	}
 	if err := h.DB.Create(&req).Error; err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "не удалось поставить парсер в очередь")
 		return
@@ -165,8 +170,8 @@ func (h *Handler) ReanalyzeExistingTenders(w http.ResponseWriter, r *http.Reques
 		writeJSONError(w, http.StatusServiceUnavailable, "database is not configured")
 		return
 	}
-	if !githubParserConfigured() {
-		writeJSONError(w, http.StatusServiceUnavailable, "GitHub Actions не настроен для переоценки существующих тендеров")
+	if false {
+		writeJSONError(w, http.StatusServiceUnavailable, "AI-переоценка доступна только в GitHub Actions режиме")
 		return
 	}
 	if active := h.currentParserRequest(); active != nil && isActiveParserStatus(active.Status) {
@@ -179,6 +184,22 @@ func (h *Handler) ReanalyzeExistingTenders(w http.ResponseWriter, r *http.Reques
 	if requestedBy == "" {
 		requestedBy = "admin"
 	}
+	reanalyzeLimit := parserReanalyzeLimit()
+	if !parserUsesGitHub() {
+		req := domain.ParserRunRequest{
+			RequestedBy: requestedBy,
+			Status:      "pending",
+			Message:     encodeVMParserRequestMessage("reanalyze_existing", reanalyzeLimit, "VM parser AI reanalysis requested"),
+		}
+		if err := h.DB.Create(&req).Error; err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "РЅРµ СѓРґР°Р»РѕСЃСЊ РїРѕСЃС‚Р°РІРёС‚СЊ AI-РїРµСЂРµРѕС†РµРЅРєСѓ РІ РѕС‡РµСЂРµРґСЊ")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(parserRequestDTO(req))
+		return
+	}
 	req := domain.ParserRunRequest{RequestedBy: requestedBy, Status: "pending", Message: "GitHub Actions AI reanalysis requested"}
 	if err := h.DB.Create(&req).Error; err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "не удалось создать запрос AI-переоценки")
@@ -186,7 +207,7 @@ func (h *Handler) ReanalyzeExistingTenders(w http.ResponseWriter, r *http.Reques
 	}
 	inputs := map[string]string{
 		"run_mode":        "reanalyze_existing",
-		"reanalyze_limit": getEnvDefault("GITHUB_PARSER_REANALYZE_LIMIT", "0"),
+		"reanalyze_limit": strconv.Itoa(reanalyzeLimit),
 	}
 	if err := dispatchGitHubParserWorkflow(inputs); err != nil {
 		now := time.Now()
@@ -213,6 +234,9 @@ func (h *Handler) lastParserRequest() *ParserRequestDTO {
 
 func (h *Handler) currentParserRequest() *ParserRequestDTO {
 	dbRequest := h.lastParserRequest()
+	if !parserUsesGitHub() {
+		return dbRequest
+	}
 	githubRequest := latestGitHubParserRequest()
 	if githubRequest == nil {
 		return dbRequest
@@ -238,12 +262,14 @@ func isActiveParserStatus(status string) bool {
 }
 
 func parserRequestDTO(req domain.ParserRunRequest) ParserRequestDTO {
+	runMode, _, message := decodeVMParserRequestMessage(req.Message)
 	dto := ParserRequestDTO{
 		ID:          req.ID,
 		RequestedAt: req.RequestedAt.Format(time.RFC3339),
 		RequestedBy: req.RequestedBy,
 		Status:      req.Status,
-		Message:     req.Message,
+		RunMode:     runMode,
+		Message:     message,
 	}
 	if req.StartedAt != nil {
 		dto.StartedAt = req.StartedAt.Format(time.RFC3339)
@@ -272,6 +298,27 @@ type githubWorkflowRun struct {
 
 func githubParserConfigured() bool {
 	return githubActionsToken() != "" && githubRepository() != ""
+}
+
+func parserRunnerMode() string {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("PARSER_RUNNER_MODE")))
+	switch mode {
+	case "github", "vm":
+		return mode
+	default:
+		return "vm"
+	}
+}
+
+func parserUsesGitHub() bool {
+	return parserRunnerMode() == "github" && githubParserConfigured()
+}
+
+func parserRunnerConfigured() bool {
+	if parserRunnerMode() == "github" {
+		return githubParserConfigured()
+	}
+	return true
 }
 
 func githubActionsToken() string {
@@ -454,6 +501,61 @@ func parserIntervalSeconds() int {
 		}
 	}
 	return 1800
+}
+
+func parserReanalyzeLimit() int {
+	value := strings.TrimSpace(os.Getenv("PARSER_REANALYZE_LIMIT"))
+	if value == "" {
+		value = getEnvDefault("GITHUB_PARSER_REANALYZE_LIMIT", "0")
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return 0
+	}
+	return parsed
+}
+
+func encodeVMParserRequestMessage(mode string, limit int, message string) string {
+	cleanMode := strings.ToLower(strings.TrimSpace(mode))
+	if cleanMode == "" {
+		cleanMode = "parse"
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	return fmt.Sprintf("[parser mode=%s limit=%d] %s", cleanMode, limit, strings.TrimSpace(message))
+}
+
+func decodeVMParserRequestMessage(message string) (string, int, string) {
+	trimmed := strings.TrimSpace(message)
+	if !strings.HasPrefix(trimmed, "[parser ") {
+		return "", 0, trimmed
+	}
+	end := strings.Index(trimmed, "]")
+	if end <= 0 {
+		return "", 0, trimmed
+	}
+	meta := trimmed[len("[parser "):end]
+	display := strings.TrimSpace(trimmed[end+1:])
+	runMode := "parse"
+	limit := 0
+	for _, part := range strings.Fields(meta) {
+		key, value, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "mode":
+			if parsed := strings.ToLower(strings.TrimSpace(value)); parsed != "" {
+				runMode = parsed
+			}
+		case "limit":
+			if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && parsed >= 0 {
+				limit = parsed
+			}
+		}
+	}
+	return runMode, limit, display
 }
 
 func decodeStringList(raw json.RawMessage) []string {

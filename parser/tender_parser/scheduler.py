@@ -68,16 +68,25 @@ class ParserScheduler:
     def _sleep_or_run_requested(self, sleep_for: float) -> None:
         deadline = time.monotonic() + sleep_for
         while time.monotonic() < deadline:
-            request_id = self.db.claim_run_request()
-            if request_id is not None:
-                self.log.info("manual_parser_run_requested", request_id=request_id)
+            request = self.db.claim_run_request()
+            if request is not None:
+                request_id = int(request["id"])
+                mode = str(request.get("mode") or "parse")
+                limit = int(request.get("limit") or 0)
+                self.log.info("manual_parser_run_requested", request_id=request_id, run_mode=mode, limit=limit)
                 try:
-                    self.run_once()
-                    self.db.finish_run_request(request_id, "completed")
-                    self.log.info("manual_parser_run_finished", request_id=request_id)
+                    if mode == "reanalyze_existing":
+                        self.reanalyze_existing_lots(limit=max(0, limit))
+                        done_message = self.db.build_run_request_message(mode, limit, "VM parser AI reanalysis completed")
+                    else:
+                        self.run_once()
+                        done_message = self.db.build_run_request_message("parse", 0, "VM parser run completed")
+                    self.db.finish_run_request(request_id, "completed", done_message)
+                    self.log.info("manual_parser_run_finished", request_id=request_id, run_mode=mode, limit=limit)
                 except Exception as exc:
-                    self.db.finish_run_request(request_id, "failed", str(exc))
-                    self.log.exception("manual_parser_run_failed", request_id=request_id, error=str(exc))
+                    fail_message = self.db.build_run_request_message(mode, limit, f"VM parser request failed: {exc}")
+                    self.db.finish_run_request(request_id, "failed", fail_message)
+                    self.log.exception("manual_parser_run_failed", request_id=request_id, run_mode=mode, limit=limit, error=str(exc))
                 deadline = time.monotonic() + self.settings.poll_interval_seconds
             time.sleep(min(5, max(0, deadline - time.monotonic())))
 
@@ -248,7 +257,7 @@ class ParserScheduler:
             }
             return
         if not self.ai_suitability.enabled:
-            self.log.warning("ai_lot_filter_not_configured", lot=lot.stable_id, provider="groq")
+            self.log.warning("ai_lot_filter_not_configured", lot=lot.stable_id, provider=self.ai_suitability.provider_name)
             return
         if self._cooldown_active(self._ai_cooldown_until):
             lot.raw = {**lot.raw, "ai_filter_status": "cooldown"}
@@ -280,7 +289,7 @@ class ParserScheduler:
             "ai_filter_status": "ok",
             "ai_score": score,
             "ai_passed": passed,
-            "ai_provider": "groq",
+            "ai_provider": self.ai_suitability.provider_name,
             "is_suitable": is_suitable,
             "matched_keyword": matched_keyword,
             "match_score": score / 100,
@@ -305,6 +314,16 @@ class ParserScheduler:
 
     def _process_spec_documents(self, lot: TenderLot) -> None:
         docs = self.documents.pick_spec_documents(lot)
+        if lot.source == "tenderplus":
+            max_docs = self.settings.tenderplus_document_max_downloads
+            if max_docs <= 0:
+                lot.raw = {
+                    **lot.raw,
+                    "spec_processing_status": "document_download_disabled",
+                    "spec_processed_at": datetime.now(timezone.utc).isoformat(),
+                }
+                return
+            docs = docs[:max_docs]
         if not docs:
             lot.raw = {
                 **lot.raw,
@@ -334,6 +353,16 @@ class ParserScheduler:
                     }
             except Exception as exc:
                 self.log.warning("document_text_extract_failed", lot=lot.stable_id, document=doc.name, error=str(exc))
+            if lot.source == "tenderplus" and not self.settings.tenderplus_rag_index_documents:
+                lot.raw = {
+                    **lot.raw,
+                    "spec_processing_status": "text_extracted" if text_chars else "text_extract_empty",
+                    "spec_processed_at": datetime.now(timezone.utc).isoformat(),
+                }
+                self.db.upsert_document(lot, downloaded, text_chars=text_chars, rag_indexed=False)
+                if text_chars:
+                    break
+                continue
             if downloaded.local_path:
                 try:
                     if (

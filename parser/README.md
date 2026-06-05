@@ -4,8 +4,8 @@
 
 ## Возможности
 
-- многопоточный цикл мониторинга публичной страницы `zakup.gov.kz/home/lots` через Playwright каждые 30 минут;
-- Playwright для динамических страниц;
+- API-only мониторинг TenderPlus GraphQL без Playwright/Chromium;
+- загрузка документов и технических спецификаций по ссылкам API;
 - сбор всех активных лотов без вышедшего дедлайна и отдельная маркировка подходящих по ключам;
 - умное определение подходящих лотов: exact match, лемматизация `pymorphy3`, опциональные embeddings и LLM-фильтр;
 - PostgreSQL-хранилище с защитой от дублей по `source + external_id`;
@@ -54,7 +54,6 @@ cd C:\Users\user\Desktop\tender1\parser
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-python -m playwright install chromium
 ```
 
 ## Настройка
@@ -82,7 +81,7 @@ AI_LOT_FILTER_ENABLED=false
 STOP_AT_FIRST_SEEN_LOT=false
 PROCESS_EXISTING_LOTS=true
 MAX_LOTS_PER_CYCLE=0
-PLATFORMS=zakup
+PLATFORMS=tenderplus
 DEFAULT_KEYWORDS=
 ZAKUP_PUBLIC_BASE_URL=https://zakup.gov.kz
 ZAKUP_LOTS_URL=https://zakup.gov.kz/home/lots
@@ -172,8 +171,8 @@ SELECT * FROM parser_runs ORDER BY started_at DESC;
 2. Унаследуйте класс от `TenderPlatform`.
 3. Реализуйте `search`, `enrich`, `load_final_protocol`.
 4. Зарегистрируйте адаптер в `tender_parser/platforms/__init__.py`.
-5. Добавьте имя площадки в `.env`: `PLATFORMS=zakup,new_platform`.
+5. Добавьте имя API-платформы в `.env`: `PLATFORMS=tenderplus`.
 
 ## Важное ограничение
 
-Основной адаптер `zakup` работает без OWS-токена через Playwright и публичный route `/home/lots?limit=100&offset=0&ord=undefined&system_id__in=1__2__3`. Если позже появится OWS-токен, отдельный режим `PLATFORMS=zakup_ows` оставлен в проекте; он тоже поддерживает режим `COLLECT_ALL_ACTIVE_LOTS=true`.
+Текущий финальный режим парсера: `PLATFORMS=tenderplus`. Браузерные адаптеры отключены в сборке, новые тендеры и документы берутся через TenderPlus API.

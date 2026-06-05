@@ -44,12 +44,13 @@ services:
     environment:
       PORT: 8082
       DATABASE_URL: host=postgres user=${POSTGRES_USER:-tender} password=${POSTGRES_PASSWORD:-tender} dbname=${POSTGRES_DB:-tender} port=5432 sslmode=disable TimeZone=Asia/Almaty
+      PARSER_RUNNER_MODE: ${PARSER_RUNNER_MODE:-vm}
       TENDERPLUS_URL: ${TENDERPLUS_URL:-https://api.tenderplus.kz/graphql}
       TENDERPLUS_TOKEN: ${TENDERPLUS_TOKEN:-}
       TENDERS_KEYWORDS: ${TENDERS_KEYWORDS:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:5173}
       FETCH_DOCUMENT_ALLOWED_HOSTS: ${FETCH_DOCUMENT_ALLOWED_HOSTS:-v3bl.goszakup.gov.kz,goszakup.gov.kz,zakup.gov.kz,ows.goszakup.gov.kz}
-      PARSER_POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-1800}
+      PARSER_POLL_INTERVAL_SECONDS: ${PARSER_POLL_INTERVAL_SECONDS:-300}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     ports:
       - "${BACKEND_PORT:-8082}:8082"
@@ -70,10 +71,15 @@ services:
       DATABASE_URL: postgresql://${RAG_POSTGRES_USER:-rag}:${RAG_POSTGRES_PASSWORD:-rag}@rag-db:5432/${RAG_POSTGRES_DB:-rag}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-small}
       FILES_DIR: /files
-      AI_PROVIDER: ${AI_PROVIDER:-gemini}
+      AI_PROVIDER: ${AI_PROVIDER:-groq}
+      LOT_ANALYZE_AI_PROVIDER: ${LOT_ANALYZE_AI_PROVIDER:-groq}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      CHAT_MODEL: ${CHAT_MODEL:-gemini-2.5-flash}
+      GROQ_API_KEY: ${GROQ_API_KEY:-ollama}
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-http://llm:11434/v1}
+      CHAT_MODEL: ${CHAT_MODEL:-qwen2.5:3b}
+      LOT_ANALYZE_CHAT_MODEL: ${LOT_ANALYZE_CHAT_MODEL:-qwen2.5:3b}
+      SPEC_AI_PROVIDER: ${SPEC_AI_PROVIDER:-groq}
+      SPEC_CHAT_MODEL: ${SPEC_CHAT_MODEL:-qwen2.5:3b}
       COMPANY_PROFILE: ${COMPANY_PROFILE:-}
       COMPANY_PROFILE_FILE: ${COMPANY_PROFILE_FILE:-/files/company_profile.txt}
     volumes:
@@ -93,12 +99,14 @@ services:
     build:
       context: ./parser
     restart: unless-stopped
+    init: true
+    shm_size: "1gb"
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tender}:${POSTGRES_PASSWORD:-tender}@postgres:5432/${POSTGRES_DB:-tender}
       RAG_API_BASE: http://rag-api:8083
       DICTIONARIES_API_URL: http://backend:8082/api/v1/dictionaries?kind=keywords
-      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-1800}
-      MAX_WORKERS: ${MAX_WORKERS:-4}
+      POLL_INTERVAL_SECONDS: ${PARSER_POLL_INTERVAL_SECONDS:-300}
+      MAX_WORKERS: ${PARSER_MAX_WORKERS:-1}
       HEADLESS: "true"
       DOWNLOAD_DIR: /app/downloads
       STRICT_KEYWORD_FILTER: ${STRICT_KEYWORD_FILTER:-false}
@@ -106,41 +114,70 @@ services:
       SMART_MATCH_ENABLED: "true"
       SMART_MATCH_USE_MORPHOLOGY: "true"
       SEMANTIC_MATCH_ENABLED: ${SEMANTIC_MATCH_ENABLED:-false}
-      AI_LOT_FILTER_ENABLED: ${AI_LOT_FILTER_ENABLED:-true}
+      AI_LOT_FILTER_ENABLED: ${PARSER_AI_LOT_FILTER_ENABLED:-true}
       AI_LOT_FILTER_MIN_SCORE: ${AI_LOT_FILTER_MIN_SCORE:-65}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
-      STOP_AT_FIRST_SEEN_LOT: ${STOP_AT_FIRST_SEEN_LOT:-false}
-      PROCESS_EXISTING_LOTS: ${PROCESS_EXISTING_LOTS:-true}
-      MAX_LOTS_PER_CYCLE: ${MAX_LOTS_PER_CYCLE:-0}
-      PLATFORMS: ${PLATFORMS:-goszakup}
+      GROQ_API_KEY: ${GROQ_API_KEY:-ollama}
+      GROQ_API_BASE: ${GROQ_API_BASE:-http://llm:11434/v1}
+      GROQ_MODEL: ${GROQ_MODEL:-qwen2.5:3b}
+      STOP_AT_FIRST_SEEN_LOT: ${PARSER_STOP_AT_FIRST_SEEN_LOT:-true}
+      PROCESS_EXISTING_LOTS: ${PARSER_PROCESS_EXISTING_LOTS:-false}
+      MAX_LOTS_PER_CYCLE: ${PARSER_MAX_LOTS_PER_CYCLE:-10}
+      PLATFORMS: ${PLATFORMS:-tenderplus}
       DEFAULT_KEYWORDS: ${DEFAULT_KEYWORDS:-}
       GOSZAKUP_BASE_URL: ${GOSZAKUP_BASE_URL:-https://goszakup.gov.kz}
       GOSZAKUP_SEARCH_URL: ${GOSZAKUP_SEARCH_URL:-https://goszakup.gov.kz/ru/search/lots}
       GOSZAKUP_LOTS_COUNT_RECORD: ${GOSZAKUP_LOTS_COUNT_RECORD:-50}
-      GOSZAKUP_LOTS_MAX_PAGES: ${GOSZAKUP_LOTS_MAX_PAGES:-0}
+      GOSZAKUP_LOTS_MAX_PAGES: ${PARSER_GOSZAKUP_LOTS_MAX_PAGES:-3}
       GOSZAKUP_OWS_TOKEN: ${GOSZAKUP_OWS_TOKEN:-}
       GOSZAKUP_OWS_BASE_URL: ${GOSZAKUP_OWS_BASE_URL:-https://ows.goszakup.gov.kz}
       GOSZAKUP_OWS_GRAPHQL_URL: ${GOSZAKUP_OWS_GRAPHQL_URL:-https://ows.goszakup.gov.kz/v3/graphql}
       ZAKUP_PUBLIC_BASE_URL: ${ZAKUP_PUBLIC_BASE_URL:-https://zakup.gov.kz}
       ZAKUP_LOTS_URL: ${ZAKUP_LOTS_URL:-https://zakup.gov.kz/home/lots}
       ZAKUP_LOTS_LIMIT: ${ZAKUP_LOTS_LIMIT:-100}
-      ZAKUP_LOTS_MAX_PAGES: ${ZAKUP_LOTS_MAX_PAGES:-0}
+      ZAKUP_LOTS_MAX_PAGES: ${PARSER_ZAKUP_LOTS_MAX_PAGES:-3}
       ZAKUP_LOTS_SYSTEM_IDS: ${ZAKUP_LOTS_SYSTEM_IDS:-}
       ZAKUP_OWS_LIMIT_PER_PAGE: ${ZAKUP_OWS_LIMIT_PER_PAGE:-200}
       ZAKUP_OWS_MAX_PAGES_PER_KEYWORD: ${ZAKUP_OWS_MAX_PAGES_PER_KEYWORD:-0}
+      TENDERPLUS_URL: ${TENDERPLUS_URL:-https://api.tenderplus.kz/graphql}
+      TENDERPLUS_TOKEN: ${TENDERPLUS_TOKEN:-}
+      TENDERPLUS_PAGE_SIZE: ${TENDERPLUS_PAGE_SIZE:-25}
+      TENDERPLUS_MAX_PAGES: ${TENDERPLUS_MAX_PAGES:-2}
+      TENDERPLUS_MAX_LOTS: ${TENDERPLUS_MAX_LOTS:-50}
+      TENDERPLUS_INCLUDE_DOCUMENTS: ${TENDERPLUS_INCLUDE_DOCUMENTS:-true}
+      TENDERPLUS_DOCUMENT_MAX_DOWNLOADS: ${TENDERPLUS_DOCUMENT_MAX_DOWNLOADS:-2}
+      TENDERPLUS_RAG_INDEX_DOCUMENTS: ${TENDERPLUS_RAG_INDEX_DOCUMENTS:-false}
       OUR_BINS: ${OUR_BINS:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      REQUEST_TIMEOUT_SECONDS: ${PARSER_REQUEST_TIMEOUT_SECONDS:-30}
     volumes:
       - parser_downloads:/app/downloads
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       postgres:
         condition: service_healthy
       backend:
         condition: service_healthy
-      rag-api:
-        condition: service_healthy
+
+  llm:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-24h}
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "127.0.0.1:${LLM_PORT:-11434}:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
 
   frontend:
     build:
@@ -152,7 +189,8 @@ services:
         VITE_FETCH_DOCUMENT_PROXY_URL: ${PUBLIC_BACKEND_URL:-http://localhost:8082}/api/v1/fetch-document
     restart: unless-stopped
     ports:
-      - "${FRONTEND_PORT:-8080}:80"
+      - "80:3000"
+      - "${FRONTEND_PORT:-8080}:3000"
     depends_on:
       backend:
         condition: service_healthy
@@ -161,3 +199,4 @@ volumes:
   tender_postgres_data:
   rag_postgres_data:
   parser_downloads:
+  ollama_data:

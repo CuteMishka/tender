@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from typing import Any
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
-from playwright.sync_api import Locator, Page
 
 
 def clean_text(value: str | None) -> str:
@@ -50,7 +52,7 @@ def parse_datetime(value: str | None) -> datetime | None:
     return None
 
 
-def first_text(page: Page, selectors: list[str]) -> str:
+def first_text(page: Any, selectors: list[str]) -> str:
     for selector in selectors:
         locator = page.locator(selector).first
         try:
@@ -63,7 +65,7 @@ def first_text(page: Page, selectors: list[str]) -> str:
     return ""
 
 
-def attr_or_empty(locator: Locator, attr: str) -> str:
+def attr_or_empty(locator: Any, attr: str) -> str:
     try:
         return locator.get_attribute(attr) or ""
     except Exception:

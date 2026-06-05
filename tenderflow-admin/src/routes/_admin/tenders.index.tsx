@@ -94,6 +94,60 @@ function sourceBadgeClass(source?: string | null): string {
   }
 }
 
+function renderAiStatusLabel(status?: string | null): string {
+  const value = (status || "").trim().toLowerCase();
+  switch (value) {
+    case "ok":
+      return "AI проверен";
+    case "cooldown":
+      return "AI cooldown";
+    case "rate_limited":
+      return "AI rate limit";
+    case "manual_removed":
+      return "Убрано вручную";
+    case "no_supported_documents":
+      return "Без ТЗ";
+    default:
+      return value ? `AI: ${status}` : "AI в очереди";
+  }
+}
+
+function renderAiStatusClass(status?: string | null, suitable?: boolean | null): string {
+  const value = (status || "").trim().toLowerCase();
+  if (suitable) return "border-green-200 bg-green-50 text-green-700";
+  if (value === "ok") return "border-sky-200 bg-sky-50 text-sky-700";
+  if (value === "cooldown" || value === "rate_limited") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (value === "manual_removed") return "border-red-200 bg-red-50 text-red-700";
+  return "border-border bg-muted/50 text-muted-foreground";
+}
+
+type PaginationItem = number | "ellipsis-start" | "ellipsis-end";
+
+function buildPaginationItems(currentPage: number, pageCount: number): PaginationItem[] {
+  const total = Math.max(1, pageCount);
+  const current = Math.min(Math.max(1, currentPage), total);
+  if (total <= 9) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+
+  const pages = new Set<number>([1, 2, total - 1, total]);
+  for (let p = current - 2; p <= current + 2; p += 1) {
+    if (p >= 1 && p <= total) pages.add(p);
+  }
+
+  const sorted = [...pages].sort((a, b) => a - b);
+  const out: PaginationItem[] = [];
+  for (const p of sorted) {
+    const last = out[out.length - 1];
+    const previous = typeof last === "number" ? last : null;
+    if (previous !== null && p - previous > 1) {
+      out.push(previous < current ? "ellipsis-start" : "ellipsis-end");
+    }
+    out.push(p);
+  }
+  return out;
+}
+
 function TendersList() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -150,6 +204,8 @@ function TendersList() {
     if (!isNaN(maxA) && t.cost > maxA) return false;
     return true;
   });
+  const currentPage = data?.meta.page ?? page;
+  const pageCount = Math.max(1, data?.meta.pageCount || 1);
 
   async function handleRemoveFromSuitable(tender: TenderItem) {
     if (removingSuitableIds.has(tender.id)) return;
@@ -349,6 +405,13 @@ function TendersList() {
                                 Подходит: {t.matchedKeyword}
                               </div>
                             )}
+                            {(t.aiStatus || typeof t.aiScore === "number") && (
+                              <div className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${renderAiStatusClass(t.aiStatus, t.isSuitable)}`}>
+                                {renderAiStatusLabel(t.aiStatus)}
+                                {typeof t.aiScore === "number" ? ` · ${t.aiScore}%` : ""}
+                                {t.aiProvider ? ` · ${t.aiProvider}` : ""}
+                              </div>
+                            )}
                             <div className="mt-1 max-w-sm text-xs text-muted-foreground">{truncate(t.description, 120)}</div>
                           </td>
                           <td className="px-4 py-4 text-right font-semibold tabular-nums">{formatTenderAmount(t.cost)}</td>
@@ -423,31 +486,35 @@ function TendersList() {
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-6 py-3 text-sm text-muted-foreground">
                 <span>
-                  Стр. {page} из {Math.max(1, data.meta.pageCount || 1)} · записей: {filteredItems.length} · всего: {data.meta.totalCount}
+                  Стр. {currentPage} из {pageCount} · записей: {filteredItems.length} · всего: {data.meta.totalCount}
                   {loading ? " · обновление…" : ""}
                 </span>
                 <div className="flex flex-wrap gap-1">
                   <Link
                     to="/tenders"
-                    search={{ page: Math.max(1, page - 1) }}
-                    className={`rounded-md border border-border px-3 py-1 hover:bg-accent ${page <= 1 ? "pointer-events-none opacity-40" : ""}`}
+                    search={{ page: Math.max(1, currentPage - 1) }}
+                    className={`rounded-md border border-border px-3 py-1 hover:bg-accent ${currentPage <= 1 ? "pointer-events-none opacity-40" : ""}`}
                   >
                     ←
                   </Link>
-                  {Array.from({ length: Math.max(1, data.meta.pageCount || 1) }, (_, i) => i + 1).map((p) => (
-                    <Link
-                      key={p}
-                      to="/tenders"
-                      search={{ page: p }}
-                      className={`rounded-md px-3 py-1 ${p === page ? "bg-primary text-primary-foreground" : "border border-border hover:bg-accent"}`}
-                    >
-                      {p}
-                    </Link>
+                  {buildPaginationItems(currentPage, pageCount).map((entry) => (
+                    typeof entry === "number" ? (
+                      <Link
+                        key={entry}
+                        to="/tenders"
+                        search={{ page: entry }}
+                        className={`rounded-md px-3 py-1 ${entry === currentPage ? "bg-primary text-primary-foreground" : "border border-border hover:bg-accent"}`}
+                      >
+                        {entry}
+                      </Link>
+                    ) : (
+                      <span key={entry} className="rounded-md px-2 py-1 text-muted-foreground">...</span>
+                    )
                   ))}
                   <Link
                     to="/tenders"
-                    search={{ page: Math.min(Math.max(1, data.meta.pageCount || 1), page + 1) }}
-                    className={`rounded-md border border-border px-3 py-1 hover:bg-accent ${page >= (data.meta.pageCount || 1) ? "pointer-events-none opacity-40" : ""}`}
+                    search={{ page: Math.min(pageCount, currentPage + 1) }}
+                    className={`rounded-md border border-border px-3 py-1 hover:bg-accent ${currentPage >= pageCount ? "pointer-events-none opacity-40" : ""}`}
                   >
                     →
                   </Link>

@@ -36,12 +36,13 @@ class GroqSuitabilityClient:
         payload = {
             "model": self.model,
             "temperature": 0.1,
-            "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": self._system_prompt()},
                 {"role": "user", "content": self._user_prompt(lot)},
             ],
         }
+        if not self._is_local_openai_compatible():
+            payload["response_format"] = {"type": "json_object"}
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -55,12 +56,33 @@ class GroqSuitabilityClient:
         score = self._normalize_score(result.get("score"))
         result["score"] = score
         result["passed"] = score >= self.min_score and bool(result.get("is_suitable", score >= self.min_score))
-        result["provider"] = "groq"
+        result["provider"] = self.provider_name
         result["model"] = self.model
         return result
 
+    @property
+    def provider_name(self) -> str:
+        if self._is_local_openai_compatible():
+            return "local-llm"
+        return "groq"
+
+    def _is_local_openai_compatible(self) -> bool:
+        normalized = self.base_url.lower()
+        return "11434" in normalized or "ollama" in normalized or "localhost" in normalized or "127.0.0.1" in normalized
+
     def _system_prompt(self) -> str:
         keywords = ", ".join(self.context_keywords)
+        return (
+            "You select public procurement tenders for Freedom Cloud. "
+            "Freedom Cloud fits cloud infrastructure, IaaS/PaaS/SaaS, VPS/VDS, dedicated servers, "
+            "data centers, colocation, virtualization, Kubernetes, Linux/server administration, "
+            "storage, backup/DR, network equipment, firewalls, WAF, SIEM/SOC and IT security. "
+            "Reject household goods, stationery, food, medicine, construction, furniture, chemicals, "
+            "industrial equipment and other non-IT infrastructure tenders. "
+            f"Use these context hints for semantic matching only: {keywords}. "
+            "Return only compact JSON: "
+            "{\"is_suitable\": boolean, \"score\": 0-100, \"matched_theme\": string, \"reason\": string, \"keywords\": [string], \"spec_context_used\": boolean}."
+        )
         return (
             "Ты эксперт по государственным закупкам и облачной IT-инфраструктуре. "
             "Оценивай, подходит ли тендер компании Freedom Cloud. "
@@ -82,6 +104,44 @@ class GroqSuitabilityClient:
         )
 
     def _user_prompt(self, lot: TenderLot) -> str:
+        if lot.source == "tenderplus":
+            ai_context_keywords = lot.raw.get("ai_context_keywords")
+            keyword_context = ""
+            if isinstance(ai_context_keywords, list):
+                values = [str(item).strip() for item in ai_context_keywords if str(item).strip()]
+                keyword_context = ", ".join(values[:80])
+            spec_summary = lot.raw.get("spec_summary")
+            spec_services = lot.raw.get("spec_services")
+            spec_text_sample = str(lot.raw.get("spec_text_sample") or "")
+            spec_parts: list[str] = []
+            if spec_services:
+                spec_parts.append("Document services extracted by local analyzer:")
+                spec_parts.append(json.dumps(spec_services, ensure_ascii=False)[:8000])
+            if isinstance(spec_summary, dict):
+                spec_parts.append("Structured technical specification summary:")
+                spec_parts.append(json.dumps(spec_summary, ensure_ascii=False)[:8000])
+            if spec_text_sample:
+                spec_parts.append("Technical specification/document text:")
+                spec_parts.append(spec_text_sample[:10000])
+            text = "\n".join(
+                part
+                for part in [
+                    f"Source: {lot.source}",
+                    f"Published platform: {lot.raw.get('published_platform') or lot.raw.get('source_label') or ''}",
+                    f"ID: {lot.external_id}",
+                    f"Title: {lot.title}",
+                    f"Description: {lot.description}",
+                    f"Customer: {lot.customer_name or lot.organizer_name or ''}",
+                    f"Purchase type: {lot.purchase_type or ''}",
+                    f"Place: {lot.place or ''}",
+                    f"Amount: {lot.amount or ''}",
+                    f"Dictionary hints: {keyword_context}",
+                    f"Extra text: {lot.raw.get('match_text') or ''}",
+                    "\n".join(spec_parts),
+                ]
+                if part
+            )
+            return text[:24000]
         raw_parts = [
             str(lot.raw.get("match_text") or ""),
             str(lot.raw.get("announce_title") or ""),

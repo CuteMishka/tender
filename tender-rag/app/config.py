@@ -147,6 +147,11 @@ def _provider_api_key(provider: str) -> str:
     return GROQ_API_KEY if provider == "groq" else GEMINI_API_KEY
 
 
+def _is_local_openai_compatible_base() -> bool:
+    normalized = GROQ_BASE_URL.lower()
+    return "11434" in normalized or "ollama" in normalized or "localhost" in normalized or "127.0.0.1" in normalized
+
+
 def gemini_chat(
     system: str,
     user: str,
@@ -211,15 +216,17 @@ def ai_chat(
                     from openai import OpenAI
 
                     client = OpenAI(api_key=api_key, base_url=GROQ_BASE_URL)
-                    response = client.chat.completions.create(
-                        model=model,
-                        messages=[
+                    request_payload = {
+                        "model": model,
+                        "messages": [
                             {"role": "system", "content": system},
                             {"role": "user", "content": user},
                         ],
-                        temperature=temperature,
-                        response_format={"type": "json_object"},
-                    )
+                        "temperature": temperature,
+                    }
+                    if not _is_local_openai_compatible_base():
+                        request_payload["response_format"] = {"type": "json_object"}
+                    response = client.chat.completions.create(**request_payload)
                     text = response.choices[0].message.content or ""
                 else:
                     import google.generativeai as genai
