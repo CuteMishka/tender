@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     groq_api_base: str = "https://api.groq.com/openai/v1"
     groq_model: str = "llama-3.1-8b-instant"
+    ai_provider: str = "groq"
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
     dictionaries_api_url: str | None = None
     stop_at_first_seen_lot: bool = False
     process_existing_lots: bool = True

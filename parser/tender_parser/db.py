@@ -47,6 +47,12 @@ class ParserLot(Base):
     complaints_count: Mapped[int | None] = mapped_column(Integer)
     winner_bin: Mapped[str | None] = mapped_column(String(32), index=True)
     winner_name: Mapped[str | None] = mapped_column(Text)
+    is_suitable: Mapped[bool | None] = mapped_column(Boolean)
+    matched_keyword: Mapped[str | None] = mapped_column(Text)
+    match_score: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))
+    ai_score: Mapped[int | None] = mapped_column(Integer)
+    ai_status: Mapped[str | None] = mapped_column(String(64))
+    ai_provider: Mapped[str | None] = mapped_column(String(64))
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     documents_fingerprint: Mapped[str | None] = mapped_column(String(64))
     raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
@@ -180,6 +186,12 @@ class Database:
             if row is None:
                 return
             row.raw = lot.raw
+            row.is_suitable = self._bool_or_none(lot.raw.get("is_suitable"))
+            row.matched_keyword = self._str_or_none(lot.raw.get("matched_keyword"))
+            row.match_score = self._decimal_or_none(lot.raw.get("match_score"))
+            row.ai_score = self._int_or_none(lot.raw.get("ai_score"))
+            row.ai_status = self._str_or_none(lot.raw.get("ai_filter_status"))
+            row.ai_provider = self._str_or_none(lot.raw.get("ai_provider"))
             row.updated_at = now
             session.commit()
 
@@ -328,6 +340,12 @@ class Database:
                     "complaints_count": values["complaints_count"],
                     "winner_bin": values["winner_bin"],
                     "winner_name": values["winner_name"],
+                    "is_suitable": values["is_suitable"],
+                    "matched_keyword": values["matched_keyword"],
+                    "match_score": values["match_score"],
+                    "ai_score": values["ai_score"],
+                    "ai_status": values["ai_status"],
+                    "ai_provider": values["ai_provider"],
                     "fingerprint": values["fingerprint"],
                     "documents_fingerprint": values["documents_fingerprint"],
                     "raw": values["raw"],
@@ -420,6 +438,12 @@ class Database:
             "complaints_count": lot.complaints_count,
             "winner_bin": lot.winner_bin,
             "winner_name": lot.winner_name,
+            "is_suitable": self._bool_or_none(lot.raw.get("is_suitable")),
+            "matched_keyword": self._str_or_none(lot.raw.get("matched_keyword")),
+            "match_score": self._decimal_or_none(lot.raw.get("match_score")),
+            "ai_score": self._int_or_none(lot.raw.get("ai_score")),
+            "ai_status": self._str_or_none(lot.raw.get("ai_filter_status")),
+            "ai_provider": self._str_or_none(lot.raw.get("ai_provider")),
             "fingerprint": fingerprint,
             "documents_fingerprint": docs_fingerprint,
             "raw": lot.raw,
@@ -447,3 +471,30 @@ class Database:
             winner_name=row.winner_name,
             raw=dict(row.raw or {}),
         )
+
+    @staticmethod
+    def _str_or_none(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
+    def _int_or_none(value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _decimal_or_none(value: Any) -> Decimal | None:
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _bool_or_none(value: Any) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        return None

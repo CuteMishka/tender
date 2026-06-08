@@ -35,13 +35,14 @@ class ParserScheduler:
             settings.rag_include_extracted_text,
         )
         self.ai_suitability = GroqSuitabilityClient(
-            settings.groq_api_key,
+            settings.gemini_api_key if settings.ai_provider.strip().lower() == "gemini" else settings.groq_api_key,
             settings.groq_api_base,
-            settings.groq_model,
+            settings.gemini_model if settings.ai_provider.strip().lower() == "gemini" else settings.groq_model,
             settings.request_timeout_seconds,
             settings.ai_lot_filter_min_score,
             settings.ai_company_profile,
             settings.ai_context_keywords,
+            settings.ai_provider,
         )
         self.notifications = NotificationService(db, settings.our_bins, settings.telegram_bot_token, settings.telegram_chat_id, settings.request_timeout_seconds)
         self.platforms = build_platforms(settings)
@@ -272,9 +273,21 @@ class ParserScheduler:
                 self._last_ai_request_at = time.monotonic()
             except Exception as exc:
                 self._last_ai_request_at = time.monotonic()
+                status = "error"
                 if self._looks_like_rate_limit(exc):
                     self._ai_cooldown_until = time.monotonic() + self.settings.ai_rate_limit_cooldown_seconds
-                    lot.raw = {**lot.raw, "ai_filter_status": "rate_limited"}
+                    status = "rate_limited"
+                lot.raw = {
+                    **lot.raw,
+                    "ai_filter_status": status,
+                    "ai_provider": self.ai_suitability.provider_name,
+                    "ai_score": 0,
+                    "ai_passed": False,
+                    "is_suitable": False,
+                    "matched_keyword": None,
+                    "match_score": 0,
+                    "match_reason": str(exc),
+                }
                 self.log.warning("ai_lot_filter_failed", lot=lot.stable_id, error=str(exc))
                 return
         score = int(result.get("score") or 0)

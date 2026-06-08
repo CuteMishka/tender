@@ -1,0 +1,5 @@
+./client.go
+./dashboard.go
+./lot_documents.go
+./lot_handlers.go
+./models.go

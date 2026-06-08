@@ -1,7 +1,10 @@
 from collections.abc import Callable
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any
+import html
+import re
+from typing import Any, Callable
+from urllib.parse import urljoin
 
 import httpx
 import structlog
@@ -169,7 +172,8 @@ class TenderPlusPlatform(TenderPlatform):
         status = clean_text(self._str_value(status_obj.get("name")) or "active")[:64] or "active"
         start_date = parse_datetime(self._str_value(lot_buy.get("pub_date")) or self._str_value(lot_buy.get("begin_date")))
         end_date = parse_datetime(self._str_value(lot_buy.get("end_date")))
-        available_documents = self._documents(row, lot_buy)
+        tenderplus_page_url = f"https://tenderplus.kz/zakupki/{lot_id}"
+        available_documents = self._documents(row, lot_buy, tenderplus_page_url)
         documents = available_documents if self.settings.tenderplus_include_documents else []
         match_text = clean_text(
             " ".join(
@@ -222,6 +226,8 @@ class TenderPlusPlatform(TenderPlatform):
             "tender_type_partner": tender_type_name,
             "documents_available": len(available_documents),
             "documents_skipped": not self.settings.tenderplus_include_documents,
+            "documents": [{"name": doc.name, "downloadLink": doc.url} for doc in available_documents],
+            "tenderplus_page_url": tenderplus_page_url,
             "match_text": match_text[:4000],
         }
 
@@ -243,7 +249,7 @@ class TenderPlusPlatform(TenderPlatform):
             documents=documents,
         )
 
-    def _documents(self, row: dict[str, Any], lot_buy: dict[str, Any]) -> list[TenderDocument]:
+    def _documents(self, row: dict[str, Any], lot_buy: dict[str, Any], tenderplus_page_url: str) -> list[TenderDocument]:
         docs: list[TenderDocument] = []
         seen: set[str] = set()
         for source in (row.get("documents"), lot_buy.get("documents")):
@@ -258,7 +264,41 @@ class TenderPlusPlatform(TenderPlatform):
                 seen.add(url)
                 name = clean_text(self._str_value(item.get("name")) or url.rsplit("/", 1)[-1] or "document")
                 docs.append(TenderDocument(name=name, url=url))
+        docs.extend(self._attached_files_from_page(tenderplus_page_url, seen))
         return docs
+
+    def _attached_files_from_page(self, page_url: str, seen: set[str]) -> list[TenderDocument]:
+        try:
+            response = httpx.get(
+                page_url,
+                timeout=self.settings.request_timeout_seconds,
+                follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 tender-parser/1.0"},
+            )
+            response.raise_for_status()
+        except Exception as exc:
+            self.log.warning("tenderplus_attached_files_fetch_failed", url=page_url, error=str(exc))
+            return []
+
+        text = response.text
+        lowered = text.lower()
+        start = lowered.find("прикреп")
+        fragment = text[start : start + 30000] if start >= 0 else text
+        docs: list[TenderDocument] = []
+        for match in re.finditer(r"<a\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", fragment, flags=re.IGNORECASE | re.DOTALL):
+            href = html.unescape(match.group(1).strip())
+            label_html = match.group(2)
+            label = clean_text(re.sub(r"<[^>]+>", " ", html.unescape(label_html)))
+            absolute = urljoin(page_url, href)
+            if absolute in seen or not self._looks_like_attachment(absolute, label):
+                continue
+            seen.add(absolute)
+            docs.append(TenderDocument(name=label or absolute.rsplit("/", 1)[-1] or "document", url=absolute))
+        return docs
+
+    def _looks_like_attachment(self, url: str, label: str) -> bool:
+        value = f"{url} {label}".lower()
+        return bool(re.search(r"\.(pdf|docx?|xlsx?|zip|rar|7z)(?:[\s?#]|$)", value))
 
     def _is_active_lot(self, lot: TenderLot) -> bool:
         if lot.end_date and lot.end_date < datetime.utcnow():

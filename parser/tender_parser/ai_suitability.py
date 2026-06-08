@@ -17,6 +17,7 @@ class GroqSuitabilityClient:
         min_score: int,
         company_profile: str | None,
         context_keywords: list[str],
+        provider: str = "groq",
     ) -> None:
         self.api_key = (api_key or "").strip()
         self.base_url = base_url.rstrip("/")
@@ -25,6 +26,7 @@ class GroqSuitabilityClient:
         self.min_score = min_score
         self.company_profile = (company_profile or "").strip()
         self.context_keywords = context_keywords
+        self.provider = (provider or "groq").strip().lower()
 
     @property
     def enabled(self) -> bool:
@@ -32,7 +34,10 @@ class GroqSuitabilityClient:
 
     def analyze(self, lot: TenderLot) -> dict[str, Any]:
         if not self.enabled:
-            return {"score": 0, "passed": False, "reason": "GROQ_API_KEY is not configured"}
+            key_name = "GEMINI_API_KEY" if self.provider == "gemini" else "GROQ_API_KEY"
+            return {"score": 0, "passed": False, "reason": f"{key_name} is not configured"}
+        if self.provider == "gemini":
+            return self._analyze_gemini(lot)
         payload = {
             "model": self.model,
             "temperature": 0.1,
@@ -60,8 +65,47 @@ class GroqSuitabilityClient:
         result["model"] = self.model
         return result
 
+    def _analyze_gemini(self, lot: TenderLot) -> dict[str, Any]:
+        payload = {
+            "system_instruction": {
+                "parts": [{"text": self._system_prompt()}],
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": self._user_prompt(lot)}],
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.1,
+                "responseMimeType": "application/json",
+            },
+        }
+        model = self.model
+        if model.startswith("models/"):
+            model = model.removeprefix("models/")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.api_key,
+        }
+        with httpx.Client(timeout=self.timeout_seconds, follow_redirects=True) as client:
+            response = client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+        content = self._gemini_text(data)
+        result = self._parse_json(content)
+        score = self._normalize_score(result.get("score"))
+        result["score"] = score
+        result["passed"] = score >= self.min_score and bool(result.get("is_suitable", score >= self.min_score))
+        result["provider"] = self.provider_name
+        result["model"] = self.model
+        return result
+
     @property
     def provider_name(self) -> str:
+        if self.provider == "gemini":
+            return "gemini"
         if self._is_local_openai_compatible():
             return "local-llm"
         return "groq"
@@ -198,6 +242,17 @@ class GroqSuitabilityClient:
                 return value if isinstance(value, dict) else {}
             except json.JSONDecodeError:
                 return {}
+
+    def _gemini_text(self, data: dict[str, Any]) -> str:
+        parts: list[str] = []
+        for candidate in data.get("candidates") or []:
+            content = candidate.get("content") if isinstance(candidate, dict) else None
+            if not isinstance(content, dict):
+                continue
+            for part in content.get("parts") or []:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    parts.append(part["text"])
+        return "\n".join(parts)
 
     def _normalize_score(self, value: Any) -> int:
         try:

@@ -98,7 +98,7 @@ function renderAiStatusLabel(status?: string | null): string {
   const value = (status || "").trim().toLowerCase();
   switch (value) {
     case "ok":
-      return "AI проверен";
+      return "AI оценка";
     case "cooldown":
       return "AI cooldown";
     case "rate_limited":
@@ -119,6 +119,20 @@ function renderAiStatusClass(status?: string | null, suitable?: boolean | null):
   if (value === "cooldown" || value === "rate_limited") return "border-amber-200 bg-amber-50 text-amber-700";
   if (value === "manual_removed") return "border-red-200 bg-red-50 text-red-700";
   return "border-border bg-muted/50 text-muted-foreground";
+}
+
+function aiScoreTone(score?: number | null): string {
+  if (typeof score !== "number") return "text-muted-foreground";
+  if (score >= 65) return "text-green-700";
+  if (score >= 35) return "text-amber-700";
+  return "text-red-700";
+}
+
+function aiScoreBarTone(score?: number | null): string {
+  if (typeof score !== "number") return "bg-muted-foreground/30";
+  if (score >= 65) return "bg-green-500";
+  if (score >= 35) return "bg-amber-500";
+  return "bg-red-500";
 }
 
 type PaginationItem = number | "ellipsis-start" | "ellipsis-end";
@@ -325,12 +339,13 @@ function TendersList() {
           ) : data ? (
             <>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1000px] text-sm">
+                <table className="w-full min-w-[1120px] text-sm">
                   <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
                     <tr>
                       <th className="px-4 py-3 text-left font-medium">ID / закупка</th>
                       <th className="px-4 py-3 text-left font-medium">Лот / источник</th>
                       <th className="px-4 py-3 text-left font-medium">Тендер</th>
+                      <th className="px-4 py-3 text-left font-medium">Подходит</th>
                       <th className="px-4 py-3 text-right font-medium">Сумма ₸</th>
                       <th className="px-4 py-3 text-left font-medium">Дедлайн</th>
                       <th className="px-4 py-3 text-left font-medium">Статус</th>
@@ -405,14 +420,28 @@ function TendersList() {
                                 Подходит: {t.matchedKeyword}
                               </div>
                             )}
-                            {(t.aiStatus || typeof t.aiScore === "number") && (
-                              <div className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${renderAiStatusClass(t.aiStatus, t.isSuitable)}`}>
-                                {renderAiStatusLabel(t.aiStatus)}
-                                {typeof t.aiScore === "number" ? ` · ${t.aiScore}%` : ""}
-                                {t.aiProvider ? ` · ${t.aiProvider}` : ""}
-                              </div>
-                            )}
                             <div className="mt-1 max-w-sm text-xs text-muted-foreground">{truncate(t.description, 120)}</div>
+                          </td>
+                          <td className="px-4 py-4">
+                            {typeof t.aiScore === "number" ? (
+                              <div className="min-w-28">
+                                <div className="mb-1 flex items-center justify-between gap-2">
+                                  <span className={`text-sm font-bold tabular-nums ${aiScoreTone(t.aiScore)}`}>{t.aiScore}%</span>
+                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${renderAiStatusClass(t.aiStatus, t.isSuitable)}`}>
+                                    {renderAiStatusLabel(t.aiStatus)}
+                                  </span>
+                                </div>
+                                <div className="h-2 overflow-hidden rounded-full bg-muted">
+                                  <div
+                                    className={`h-full rounded-full ${aiScoreBarTone(t.aiScore)}`}
+                                    style={{ width: `${Math.max(0, Math.min(100, t.aiScore))}%` }}
+                                  />
+                                </div>
+                                {t.aiProvider && <div className="mt-1 text-[10px] text-muted-foreground">{t.aiProvider}</div>}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">ожидает AI</span>
+                            )}
                           </td>
                           <td className="px-4 py-4 text-right font-semibold tabular-nums">{formatTenderAmount(t.cost)}</td>
                           <td className="px-4 py-4 text-xs text-muted-foreground">
@@ -474,7 +503,7 @@ function TendersList() {
                     })}
                     {filteredItems.length === 0 && !loading && (
                       <tr>
-                        <td colSpan={7} className="px-6 py-16 text-center text-sm text-muted-foreground">
+                        <td colSpan={8} className="px-6 py-16 text-center text-sm text-muted-foreground">
                           {searchText.trim()
                             ? "По названию, заказчику или виду закупки тендеры не найдены. Попробуйте другое слово или сбросьте фильтр."
                             : "Тендеры не найдены"}

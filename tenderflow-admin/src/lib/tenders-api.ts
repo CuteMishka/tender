@@ -209,6 +209,7 @@ export type TenderItem = {
   aiStatus?: string | null;
   aiProvider?: string | null;
   documents?: TenderDocument[];
+  documentsDebug?: string | null;
   technical_specification?: string;
   ai_analysis?: string;
 };
@@ -243,7 +244,14 @@ export function tenderCompanyName(tender: TenderItem): string {
 }
 
 export function tenderSourceLabel(tender: TenderItem): string {
-  if (tender.sourceLabel?.trim()) return tender.sourceLabel.trim();
+  const explicit = tender.sourceLabel?.trim();
+  if (explicit && !isGenericTenderPlusLabel(explicit)) return explicit;
+  if ((tender.source || "").trim().toLowerCase() === "tenderplus") {
+    for (const value of [tender.partner, tender.customer_name, tender.customerName, tender.organizer_name, tender.organizerName]) {
+      const candidate = value?.trim();
+      if (candidate && looksLikeProcurementPlatform(candidate)) return candidate;
+    }
+  }
   switch ((tender.source || "").trim().toLowerCase()) {
     case "zakup":
       return "Госзакупки";
@@ -251,9 +259,32 @@ export function tenderSourceLabel(tender: TenderItem): string {
       return "Госзакупки";
     case "samruk":
       return "Самрук.kz";
+    case "tenderplus":
+      return explicit || "TenderPlus API";
     default:
       return "Источник не указан";
   }
+}
+
+function isGenericTenderPlusLabel(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === "tenderplus" || normalized === "tenderplus api";
+}
+
+function looksLikeProcurementPlatform(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return [
+    "samruk",
+    "самрук",
+    "kazyna",
+    "store",
+    "goszakup",
+    "госзак",
+    "государственные закуп",
+    "mp.kz",
+    "omarket",
+    "tizilim",
+  ].some((marker) => normalized.includes(marker));
 }
 
 export type TendersListResponse = {
@@ -359,6 +390,7 @@ function normalizeTenderPayload(body: unknown): TenderItem | null {
     return {
       ...(o as unknown as TenderItem),
       documents,
+      documentsDebug: typeof o.documentsDebug === "string" ? o.documentsDebug : null,
       purchaseType: typeof o.purchaseType === "string" ? o.purchaseType : null,
       endDate: typeof o.endDate === "string" ? o.endDate : null,
       startDate: typeof o.startDate === "string" ? o.startDate : null,
@@ -718,7 +750,7 @@ function writeLotAnalyzeCache(cacheKey: string, value: LotAnalyzeResult): void {
   }
 }
 
-export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: string; force?: boolean }): Promise<LotAnalyzeResult | null> {
+export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: string; force?: boolean; timeoutMs?: number }): Promise<LotAnalyzeResult | null> {
   const trimmed = lotText.trim();
   if (!trimmed) return null;
 
@@ -734,11 +766,25 @@ export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: st
   const request = (async () => {
     const base = getRagApiBase();
     const url = `${base}/v1/lot/analyze`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json, text/plain;q=0.9, */*;q=0.8" },
-      body: JSON.stringify({ lot_text: trimmed, profile: readCompanyProfile() }),
-    });
+    const controller = new AbortController();
+    const timeoutMs = options?.timeoutMs ?? 60_000;
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/plain;q=0.9, */*;q=0.8" },
+        body: JSON.stringify({ lot_text: trimmed, profile: readCompanyProfile() }),
+        signal: controller.signal,
+      });
+    } catch (e: unknown) {
+      if (controller.signal.aborted) {
+        throw new Error(`AI-анализ не ответил за ${Math.round(timeoutMs / 1000)} сек.`);
+      }
+      throw e;
+    } finally {
+      window.clearTimeout(timeout);
+    }
 
     const rawText = await res.text();
     if (!res.ok) {

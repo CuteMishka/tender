@@ -41,19 +41,18 @@ services:
         GOPROXY: ${GOPROXY:-https://goproxy.io,https://proxy.golang.org,direct}
         GOSUMDB: ${GOSUMDB:-sum.golang.org}
     restart: unless-stopped
+    network_mode: host
     environment:
       PORT: 8082
-      DATABASE_URL: host=postgres user=${POSTGRES_USER:-tender} password=${POSTGRES_PASSWORD:-tender} dbname=${POSTGRES_DB:-tender} port=5432 sslmode=disable TimeZone=Asia/Almaty
+      DATABASE_URL: host=127.0.0.1 user=${POSTGRES_USER:-tender} password=${POSTGRES_PASSWORD:-tender} dbname=${POSTGRES_DB:-tender} port=${POSTGRES_PORT:-5433} sslmode=disable TimeZone=Asia/Almaty
       PARSER_RUNNER_MODE: ${PARSER_RUNNER_MODE:-vm}
       TENDERPLUS_URL: ${TENDERPLUS_URL:-https://api.tenderplus.kz/graphql}
       TENDERPLUS_TOKEN: ${TENDERPLUS_TOKEN:-}
       TENDERS_KEYWORDS: ${TENDERS_KEYWORDS:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:5173}
-      FETCH_DOCUMENT_ALLOWED_HOSTS: ${FETCH_DOCUMENT_ALLOWED_HOSTS:-v3bl.goszakup.gov.kz,goszakup.gov.kz,zakup.gov.kz,ows.goszakup.gov.kz}
+      FETCH_DOCUMENT_ALLOWED_HOSTS: ${FETCH_DOCUMENT_ALLOWED_HOSTS:-v3bl.goszakup.gov.kz,goszakup.gov.kz,zakup.gov.kz,ows.goszakup.gov.kz,api.tenderplus.kz,.tenderplus.kz}
       PARSER_POLL_INTERVAL_SECONDS: ${PARSER_POLL_INTERVAL_SECONDS:-300}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-    ports:
-      - "${BACKEND_PORT:-8082}:8082"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8082/health >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -71,15 +70,15 @@ services:
       DATABASE_URL: postgresql://${RAG_POSTGRES_USER:-rag}:${RAG_POSTGRES_PASSWORD:-rag}@rag-db:5432/${RAG_POSTGRES_DB:-rag}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-small}
       FILES_DIR: /files
-      AI_PROVIDER: ${AI_PROVIDER:-groq}
-      LOT_ANALYZE_AI_PROVIDER: ${LOT_ANALYZE_AI_PROVIDER:-groq}
+      AI_PROVIDER: ${AI_PROVIDER:-gemini}
+      LOT_ANALYZE_AI_PROVIDER: ${LOT_ANALYZE_AI_PROVIDER:-gemini}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-ollama}
       GROQ_BASE_URL: ${GROQ_BASE_URL:-http://llm:11434/v1}
-      CHAT_MODEL: ${CHAT_MODEL:-qwen2.5:3b}
-      LOT_ANALYZE_CHAT_MODEL: ${LOT_ANALYZE_CHAT_MODEL:-qwen2.5:3b}
-      SPEC_AI_PROVIDER: ${SPEC_AI_PROVIDER:-groq}
-      SPEC_CHAT_MODEL: ${SPEC_CHAT_MODEL:-qwen2.5:3b}
+      CHAT_MODEL: ${CHAT_MODEL:-gemini-2.5-flash}
+      LOT_ANALYZE_CHAT_MODEL: ${LOT_ANALYZE_CHAT_MODEL:-gemini-2.5-flash}
+      SPEC_AI_PROVIDER: ${SPEC_AI_PROVIDER:-gemini}
+      SPEC_CHAT_MODEL: ${SPEC_CHAT_MODEL:-gemini-2.5-flash}
       COMPANY_PROFILE: ${COMPANY_PROFILE:-}
       COMPANY_PROFILE_FILE: ${COMPANY_PROFILE_FILE:-/files/company_profile.txt}
     volumes:
@@ -99,12 +98,13 @@ services:
     build:
       context: ./parser
     restart: unless-stopped
+    network_mode: host
     init: true
     shm_size: "1gb"
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tender}:${POSTGRES_PASSWORD:-tender}@postgres:5432/${POSTGRES_DB:-tender}
-      RAG_API_BASE: http://rag-api:8083
-      DICTIONARIES_API_URL: http://backend:8082/api/v1/dictionaries?kind=keywords
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tender}:${POSTGRES_PASSWORD:-tender}@127.0.0.1:${POSTGRES_PORT:-5433}/${POSTGRES_DB:-tender}
+      RAG_API_BASE: http://127.0.0.1:${RAG_PORT:-8083}
+      DICTIONARIES_API_URL: http://127.0.0.1:${BACKEND_PORT:-8082}/api/v1/dictionaries?kind=keywords
       POLL_INTERVAL_SECONDS: ${PARSER_POLL_INTERVAL_SECONDS:-300}
       MAX_WORKERS: ${PARSER_MAX_WORKERS:-1}
       HEADLESS: "true"
@@ -116,9 +116,14 @@ services:
       SEMANTIC_MATCH_ENABLED: ${SEMANTIC_MATCH_ENABLED:-false}
       AI_LOT_FILTER_ENABLED: ${PARSER_AI_LOT_FILTER_ENABLED:-true}
       AI_LOT_FILTER_MIN_SCORE: ${AI_LOT_FILTER_MIN_SCORE:-65}
+      AI_PROVIDER: ${AI_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       GROQ_API_KEY: ${GROQ_API_KEY:-ollama}
       GROQ_API_BASE: ${GROQ_API_BASE:-http://llm:11434/v1}
       GROQ_MODEL: ${GROQ_MODEL:-qwen2.5:3b}
+      AI_REQUEST_DELAY_SECONDS: ${AI_REQUEST_DELAY_SECONDS:-40}
+      AI_RATE_LIMIT_COOLDOWN_SECONDS: ${AI_RATE_LIMIT_COOLDOWN_SECONDS:-300}
       STOP_AT_FIRST_SEEN_LOT: ${PARSER_STOP_AT_FIRST_SEEN_LOT:-true}
       PROCESS_EXISTING_LOTS: ${PARSER_PROCESS_EXISTING_LOTS:-false}
       MAX_LOTS_PER_CYCLE: ${PARSER_MAX_LOTS_PER_CYCLE:-10}

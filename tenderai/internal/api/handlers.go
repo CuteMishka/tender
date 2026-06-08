@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dauren/tender/internal/service"
+	"github.com/dauren/tender/internal/tenderplus"
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 )
@@ -18,6 +19,7 @@ type Handler struct {
 	DB       *gorm.DB
 	Users    *service.UserService
 	FetchDoc *FetchDocumentProxy
+	TP       *tenderplus.Client
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +61,9 @@ type LotDTO struct {
 	AIStatus       *string          `json:"aiStatus,omitempty"`
 	AIProvider     *string          `json:"aiProvider,omitempty"`
 	Documents      []LotDocumentDTO `json:"documents"`
+	TechnicalSpec  *string          `json:"technical_specification,omitempty"`
+	AIAnalysis     *string          `json:"ai_analysis,omitempty"`
+	DocumentsDebug *string          `json:"documentsDebug,omitempty"`
 }
 
 type TendersListResponse struct {
@@ -141,7 +146,7 @@ func sourceLabel(source string) string {
 }
 
 func parserLotSelectExpr() string {
-	return "parser_lots.*, CASE WHEN raw @> '{\"is_suitable\": true}'::jsonb THEN true ELSE false END AS is_suitable, NULLIF(raw->>'matched_keyword', '') AS matched_keyword, NULLIF(raw->>'match_score', '')::double precision AS match_score, NULLIF(raw->>'ai_score', '')::integer AS ai_score, NULLIF(raw->>'ai_filter_status', '') AS ai_status, NULLIF(raw->>'ai_provider', '') AS ai_provider"
+	return "parser_lots.*"
 }
 
 func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
@@ -155,12 +160,36 @@ func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
 		url := doc.URL
 		documents = append(documents, LotDocumentDTO{Name: &name, DownloadLink: &url})
 	}
+	documents = mergeLotDocuments(documents, rawLotDocuments(row.Raw))
 	source := row.Source
-	label := sourceLabel(row.Source)
-	if rawLabel := rawStringValue(row.Raw, "source_label"); rawLabel != "" {
-		label = rawLabel
-	}
+	label := displaySourceLabel(row)
 	partnerLink := concreteLotURL(row)
+	technicalSpec := rawStringValue(row.Raw, "spec_text_sample")
+	aiAnalysis := rawAIAnalysis(row.Raw)
+	isSuitable := row.IsSuitable
+	if isSuitable == nil {
+		isSuitable = rawBoolPtr(row.Raw, "is_suitable")
+	}
+	matchedKeyword := row.MatchedKeyword
+	if matchedKeyword == nil {
+		matchedKeyword = strPtrOrNil(rawStringValue(row.Raw, "matched_keyword"))
+	}
+	matchScore := row.MatchScore
+	if matchScore == nil {
+		matchScore = rawFloatPtr(row.Raw, "match_score")
+	}
+	aiScore := row.AIScore
+	if aiScore == nil {
+		aiScore = rawIntPtr(row.Raw, "ai_score")
+	}
+	aiStatus := row.AIStatus
+	if aiStatus == nil {
+		aiStatus = strPtrOrNil(rawStringValue(row.Raw, "ai_filter_status"))
+	}
+	aiProvider := row.AIProvider
+	if aiProvider == nil {
+		aiProvider = strPtrOrNil(rawStringValue(row.Raw, "ai_provider"))
+	}
 	return LotDTO{
 		ID:             row.ID,
 		Lot:            strPtr(row.ExternalID),
@@ -172,7 +201,7 @@ func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
 		Cost:           floatPtr(amount),
 		PartnerLink:    strPtr(partnerLink),
 		Place:          row.Place,
-		BuyID:          intPtr(row.ID),
+		BuyID:          intPtr(rawIntValue(row.Raw, "buy_id", row.ID)),
 		EndDate:        timePtrRFC3339(row.EndDate),
 		StartDate:      timePtrRFC3339(row.StartDate),
 		Partner:        &label,
@@ -180,14 +209,235 @@ func parserLotToDTO(row ParserLot, docs []ParserDocument) LotDTO {
 		CustomerName:   row.CustomerName,
 		Status:         strPtr(row.Status),
 		PurchaseType:   row.PurchaseType,
-		IsSuitable:     row.IsSuitable,
-		MatchedKeyword: row.MatchedKeyword,
-		MatchScore:     row.MatchScore,
-		AIScore:        row.AIScore,
-		AIStatus:       row.AIStatus,
-		AIProvider:     row.AIProvider,
+		IsSuitable:     isSuitable,
+		MatchedKeyword: matchedKeyword,
+		MatchScore:     matchScore,
+		AIScore:        aiScore,
+		AIStatus:       aiStatus,
+		AIProvider:     aiProvider,
 		Documents:      documents,
+		TechnicalSpec:  strPtrOrNil(technicalSpec),
+		AIAnalysis:     strPtrOrNil(aiAnalysis),
 	}
+}
+
+func strPtrOrNil(v string) *string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return &v
+}
+
+func displaySourceLabel(row ParserLot) string {
+	if rawLabel := rawStringValue(row.Raw, "source_label"); rawLabel != "" && !isGenericTenderPlusLabel(rawLabel) {
+		return rawLabel
+	}
+	for _, key := range []string{"published_platform", "partner"} {
+		if value := rawStringValue(row.Raw, key); value != "" && !isGenericTenderPlusLabel(value) {
+			return value
+		}
+	}
+	if row.Source == "tenderplus" {
+		if row.CustomerName != nil && looksLikeProcurementPlatform(*row.CustomerName) {
+			return strings.TrimSpace(*row.CustomerName)
+		}
+		if row.OrganizerName != nil && looksLikeProcurementPlatform(*row.OrganizerName) {
+			return strings.TrimSpace(*row.OrganizerName)
+		}
+	}
+	return sourceLabel(row.Source)
+}
+
+func isGenericTenderPlusLabel(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	return normalized == "" || normalized == "tenderplus api" || normalized == "tenderplus"
+}
+
+func looksLikeProcurementPlatform(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return false
+	}
+	markers := []string{"samruk", "самрук", "goszakup", "госзак", "государственные закуп", "mp.kz", "omarket", "tizilim", "kazyna", "store"}
+	for _, marker := range markers {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeLotDocuments(base []LotDocumentDTO, extra []LotDocumentDTO) []LotDocumentDTO {
+	seen := make(map[string]bool, len(base)+len(extra))
+	out := make([]LotDocumentDTO, 0, len(base)+len(extra))
+	for _, doc := range append(base, extra...) {
+		if doc.DownloadLink == nil || strings.TrimSpace(*doc.DownloadLink) == "" {
+			continue
+		}
+		key := strings.TrimSpace(*doc.DownloadLink)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, doc)
+	}
+	return out
+}
+
+func rawLotDocuments(raw []byte) []LotDocumentDTO {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	var out []LotDocumentDTO
+	for _, key := range []string{"documents", "api_documents", "lot_documents"} {
+		items, ok := payload[key].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, item := range items {
+			obj, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name := strings.TrimSpace(stringFromAny(obj["name"]))
+			url := strings.TrimSpace(stringFromAny(obj["downloadLink"]))
+			if url == "" {
+				url = strings.TrimSpace(stringFromAny(obj["url"]))
+			}
+			if url == "" {
+				continue
+			}
+			if name == "" {
+				name = "document"
+			}
+			out = append(out, LotDocumentDTO{Name: &name, DownloadLink: &url})
+		}
+	}
+	return out
+}
+
+func rawAIAnalysis(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	filter, ok := payload["ai_filter"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	reason := strings.TrimSpace(stringFromAny(filter["reason"]))
+	theme := strings.TrimSpace(stringFromAny(filter["matched_theme"]))
+	score := strings.TrimSpace(stringFromAny(payload["ai_score"]))
+	parts := make([]string, 0, 3)
+	if score != "" {
+		parts = append(parts, "Оценка: "+score+"%")
+	}
+	if theme != "" {
+		parts = append(parts, "Тема: "+theme)
+	}
+	if reason != "" {
+		parts = append(parts, reason)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func stringFromAny(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(v)
+	default:
+		return ""
+	}
+}
+
+func intFromAny(value interface{}) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case float64:
+		return int(v), true
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		return n, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func rawIntValue(raw []byte, key string, fallback int) int {
+	if len(raw) == 0 {
+		return fallback
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return fallback
+	}
+	if value, ok := intFromAny(payload[key]); ok {
+		return value
+	}
+	return fallback
+}
+
+func rawIntPtr(raw []byte, key string) *int {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	if value, ok := intFromAny(payload[key]); ok {
+		return &value
+	}
+	return nil
+}
+
+func rawFloatPtr(raw []byte, key string) *float64 {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	switch v := payload[key].(type) {
+	case float64:
+		return &v
+	case int:
+		f := float64(v)
+		return &f
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err == nil {
+			return &f
+		}
+	}
+	return nil
+}
+
+func rawBoolPtr(raw []byte, key string) *bool {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	if value, ok := payload[key].(bool); ok {
+		return &value
+	}
+	return nil
 }
 
 func concreteLotURL(row ParserLot) string {
@@ -327,9 +577,117 @@ func (h *Handler) GetTender(w http.ResponseWriter, r *http.Request) {
 
 	var docs []ParserDocument
 	_ = h.DB.Where("lot_stable_id = ?", row.StableID).Order("updated_at desc, id desc").Find(&docs).Error
+	dto := parserLotToDTO(row, docs)
+	if row.Source == "tenderplus" && h.TP != nil {
+		if lot, lotErr := h.TP.FindLot(r.Context(), tenderPlusLookups(row)); lotErr == nil && lot != nil {
+			dto.Documents = mergeLotDocuments(dto.Documents, tenderPlusDocumentsToDTO(lot.AllDocuments()))
+			if link := strings.TrimSpace(derefString(lot.PartnerLink)); link != "" {
+				dto.PartnerLink = &link
+			}
+			if platform := tenderPlusPlatformName(lot); platform != "" && (isGenericTenderPlusLabel(derefString(dto.SourceLabel)) || looksLikeProcurementPlatform(platform)) {
+				dto.SourceLabel = &platform
+				dto.Partner = &platform
+			}
+		} else if len(dto.Documents) == 0 {
+			reason := "TenderPlus live lookup did not return documents"
+			if lotErr != nil {
+				reason = "TenderPlus live lookup failed: " + lotErr.Error()
+			}
+			dto.DocumentsDebug = &reason
+		}
+		if len(dto.Documents) == 0 {
+			if attached, attachedErr := h.TP.AttachedFilesFromPage(r.Context(), tenderPlusPublicPageURL(row, dto)); attachedErr == nil {
+				dto.Documents = mergeLotDocuments(dto.Documents, tenderPlusDocumentsToDTO(attached))
+				dto.DocumentsDebug = nil
+			} else if attachedErr != nil {
+				reason := "TenderPlus attached files page lookup failed: " + attachedErr.Error()
+				dto.DocumentsDebug = &reason
+			}
+		}
+	} else if len(dto.Documents) == 0 && row.Source == "tenderplus" {
+		reason := "TenderPlus client is disabled: TENDERPLUS_TOKEN is empty"
+		dto.DocumentsDebug = &reason
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(parserLotToDTO(row, docs))
+	_ = json.NewEncoder(w).Encode(dto)
+}
+
+func tenderPlusPublicPageURL(row ParserLot, dto LotDTO) string {
+	if rawURL := rawStringValue(row.Raw, "tenderplus_page_url"); rawURL != "" {
+		return rawURL
+	}
+	if row.ExternalID != "" {
+		return "https://tenderplus.kz/zakupki/" + row.ExternalID
+	}
+	if row.StableID != "" {
+		stable := strings.TrimPrefix(row.StableID, "tenderplus:")
+		if stable != "" {
+			return "https://tenderplus.kz/zakupki/" + stable
+		}
+	}
+	if dto.PartnerLink != nil && strings.Contains(*dto.PartnerLink, "tenderplus.kz/zakupki/") {
+		return strings.TrimSpace(*dto.PartnerLink)
+	}
+	if strings.Contains(row.URL, "tenderplus.kz/zakupki/") {
+		return row.URL
+	}
+	return ""
+}
+
+func tenderPlusLookups(row ParserLot) []tenderplus.LotLookup {
+	raw := map[string]interface{}{}
+	if len(row.Raw) > 0 {
+		_ = json.Unmarshal(row.Raw, &raw)
+	}
+	values := []tenderplus.LotLookup{
+		{Field: "lot_source_id", Value: stringFromAny(raw["lot_source_id"])},
+		{Field: "lotNumber", Value: stringFromAny(raw["lot"])},
+		{Field: "source_id", Value: stringFromAny(raw["buy_source_id"])},
+		{Field: "buy", Value: stringFromAny(raw["buy"])},
+	}
+	if row.ExternalID != "" {
+		values = append(values,
+			tenderplus.LotLookup{Field: "lotNumOrSourceId", Value: row.ExternalID},
+			tenderplus.LotLookup{Field: "lotNumber", Value: row.ExternalID},
+			tenderplus.LotLookup{Field: "lot_source_id", Value: row.ExternalID},
+		)
+	}
+	if row.StableID != "" {
+		stable := strings.TrimPrefix(row.StableID, "tenderplus:")
+		values = append(values, tenderplus.LotLookup{Field: "lotNumOrSourceId", Value: stable})
+	}
+	return values
+}
+
+func tenderPlusDocumentsToDTO(docs []tenderplus.LotDocument) []LotDocumentDTO {
+	out := make([]LotDocumentDTO, 0, len(docs))
+	for _, doc := range docs {
+		name := strings.TrimSpace(derefString(doc.Name))
+		url := strings.TrimSpace(derefString(doc.DownloadLink))
+		if url == "" {
+			continue
+		}
+		if name == "" {
+			name = "document"
+		}
+		out = append(out, LotDocumentDTO{Name: &name, DownloadLink: &url})
+	}
+	return out
+}
+
+func tenderPlusPlatformName(lot *tenderplus.Lot) string {
+	if lot == nil || lot.LotBuy == nil || lot.LotBuy.Partner == nil {
+		return ""
+	}
+	return strings.TrimSpace(derefString(lot.LotBuy.Partner.Name))
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (h *Handler) RemoveTenderFromSuitable(w http.ResponseWriter, r *http.Request) {

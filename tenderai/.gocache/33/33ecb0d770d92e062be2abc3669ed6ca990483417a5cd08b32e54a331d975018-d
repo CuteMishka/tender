@@ -1,0 +1,7 @@
+./fetch_document.go
+./handlers.go
+./handlers_dictionaries.go
+./handlers_parser.go
+./handlers_telegram_settings.go
+./handlers_users.go
+./router.go

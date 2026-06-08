@@ -126,6 +126,21 @@ function buildLotTextWithSpec(tender: TenderItem, spec: string, summary: LotSpec
   return parts.join("\n");
 }
 
+function savedAnalysisFromTender(tender: TenderItem | null): LotAnalyzeResult | null {
+  if (!tender || typeof tender.aiScore !== "number") return null;
+  const score = Math.max(0, Math.min(100, Math.round(tender.aiScore)));
+  const savedReason = specText(tender.ai_analysis);
+  const fit = tender.isSuitable || score >= 65 ? "подходит" : score >= 35 ? "требует проверки" : "не подходит";
+  const source = tender.aiProvider ? `Источник: ${tender.aiProvider}` : "Источник: parser";
+  return {
+    score,
+    fit,
+    summary: score >= 65 ? "Лот прошёл семантический отбор." : score >= 35 ? "Лот требует ручной проверки." : "Лот не прошёл семантический отбор.",
+    reason: savedReason || `${source}. Сохранённая оценка: ${score}%.`,
+    checks: tender.aiStatus ? `Статус AI: ${tender.aiStatus}` : null,
+  };
+}
+
 function stringsFromUnknown(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.map((x) => sanitizeApiText(String(x))).filter(Boolean);
@@ -287,7 +302,6 @@ function TenderDetail() {
   const [ragSpecSummary, setRagSpecSummary] = useState<LotSpecSummary | null>(null);
   const [specAutoAnalyzeLoading, setSpecAutoAnalyzeLoading] = useState(false);
   const [specAutoAnalyzeMessage, setSpecAutoAnalyzeMessage] = useState<string | null>(null);
-  const [serviceSearch, setServiceSearch] = useState("");
   const [specDownloadLoading, setSpecDownloadLoading] = useState(false);
 
   const [actionLoading, setActionLoading] = useState<"participating" | "rejected" | null>(null);
@@ -314,6 +328,10 @@ function TenderDetail() {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setTender(null);
+    setLotAnalysis(null);
+    setLotAnalysisError(null);
+    setLotAnalysisLoading(false);
     fetchTenderById(id)
       .then((t) => { if (!cancelled) { setTender(t); markTenderViewed(id); setViewInfo(getTenderViewInfo(id)); } })
       .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
@@ -327,7 +345,6 @@ function TenderDetail() {
     setSpecDownloadLoading(false);
     setSpecAutoAnalyzeLoading(false);
     setSpecAutoAnalyzeMessage(null);
-    setServiceSearch("");
     const cached = Number.isFinite(id) && id > 0 ? getTenderSpecCache(id) : null;
     setRagExtractedOverride(typeof cached?.extractedText === "string" ? cached.extractedText : null);
     setRagSpecSummary(
@@ -374,7 +391,7 @@ function TenderDetail() {
       try {
         const blob = await fetchDocumentBlobViaBackendProxy(picked.downloadLink, { timeoutMs: 45_000 });
         if (cancelled) return;
-        setSpecAutoAnalyzeMessage("Файл ТС скачан, отправляю документ в Groq/RAG…");
+        setSpecAutoAnalyzeMessage("Файл ТС скачан, отправляю документ в AI/RAG…");
         const file = tenderDocumentBlobToFile(picked, blob);
         const indexed = await indexLotDocument(ragLotId, file, {
           sourceHint: `${tender.source || "tender"};frontend_lazy_spec;${picked.name || "document"}`,
@@ -390,7 +407,7 @@ function TenderDetail() {
             uploadStatus: "AI-услуги из ТС получены автоматически при открытии лота",
           });
           setSpecAutoAnalyzeMessage(null);
-          setRagUploadOk("AI-услуги из ТС извлечены автоматически через Groq.");
+          setRagUploadOk("AI-выжимка ТС получена автоматически.");
         }
       } catch (e: unknown) {
         if (!cancelled) {
@@ -400,7 +417,7 @@ function TenderDetail() {
           setRagUploadOk(null);
           setRagUploadError(
             isProxyTimeout
-              ? "Не удалось скачать файл ТС: площадка не ответила через proxy за 45 секунд. Groq не запускался; попробуйте скачать оригинал позже или дождитесь parser-а."
+              ? "Не удалось скачать файл ТС: площадка не ответила через proxy за 45 секунд. AI-анализ не запускался; попробуйте скачать оригинал позже или дождитесь parser-а."
               : message,
           );
         }
@@ -413,6 +430,15 @@ function TenderDetail() {
 
   const displayTechnicalSpec =
     specText(ragExtractedOverride ?? undefined) || specText(tender?.technical_specification);
+
+  useEffect(() => {
+    const saved = savedAnalysisFromTender(tender);
+    if (saved) {
+      setLotAnalysis(saved);
+      setLotAnalysisError(null);
+      setLotAnalysisLoading(false);
+    }
+  }, [tender]);
 
   useEffect(() => {
     if (!tender) return;
@@ -451,7 +477,7 @@ function TenderDetail() {
     setLotAnalysisLoading(true);
     setLotAnalysisError(null);
     try {
-      const result = await fetchLotAnalyze(lotText, { cacheKey: `tender-${tender.id}-${displayTechnicalSpec ? "with-spec" : "card-only"}` });
+      const result = await fetchLotAnalyze(lotText, { cacheKey: `tender-${tender.id}-${displayTechnicalSpec ? "with-spec" : "card-only"}`, timeoutMs: 60_000 });
       setLotAnalysis(result);
     } catch (e: unknown) {
       setLotAnalysisError(e instanceof Error ? e.message : String(e));
@@ -459,6 +485,14 @@ function TenderDetail() {
       setLotAnalysisLoading(false);
     }
   }, [displayTechnicalSpec, ragSpecSummary, tender, lotAnalysisLoading]);
+
+  useEffect(() => {
+    if (!tender || lotAnalysis || lotAnalysisLoading || lotAnalysisError) return;
+    const hasDocuments = Boolean(tender.documents?.length);
+    const hasSpecContext = Boolean(displayTechnicalSpec || ragSpecSummary);
+    if (hasDocuments && !hasSpecContext && !ragUploadError && !ragUploadOk) return;
+    void handleLotAnalyze();
+  }, [displayTechnicalSpec, handleLotAnalyze, lotAnalysis, lotAnalysisError, lotAnalysisLoading, ragSpecSummary, ragUploadError, ragUploadOk, tender]);
 
   async function handleDownloadOriginalSpec() {
     if (!tender || specDownloadLoading) return;
@@ -526,12 +560,6 @@ function TenderDetail() {
   };
 
   const pickedSpecDocument = tender ? pickTenderDocumentForRag(tender.documents) : null;
-  const specServices = getSpecServices(ragSpecSummary);
-  const serviceQuery = sanitizeApiText(serviceSearch).toLowerCase();
-  const filteredSpecServices = serviceQuery
-    ? specServices.filter((service) => serviceSearchText(service).includes(serviceQuery))
-    : specServices;
-
   const statusInfo = tender ? getTenderStatus(tender.endDate) : null;
   const companyName = tender ? tenderCompanyName(tender) : "";
   const sourceLabel = tender ? tenderSourceLabel(tender) : "";
@@ -724,103 +752,38 @@ function TenderDetail() {
                   </div>
                   <div className="px-4 py-3">
                     {tender.documents && tender.documents.length > 0 ? (
-                      <ul className="space-y-1">
+                      <ul className="space-y-2">
                         {tender.documents.map((doc, i) => (
                           <li key={`${doc.downloadLink}-${i}`}>
                             <a
                               href={doc.downloadLink}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition hover:bg-muted/60"
+                              download
+                              className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 text-sm transition hover:border-primary/30 hover:bg-muted/40"
                             >
-                              <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                              <FileText className="h-4 w-4 shrink-0 text-primary" />
                               <span className="min-w-0 flex-1 truncate font-medium text-primary hover:underline">
                                 {blockText(doc.name)}
                               </span>
-                              <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                              <span className="hidden rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground sm:inline-flex">
+                                DIRECT
+                              </span>
+                              <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                             </a>
                           </li>
                         ))}
                       </ul>
                     ) : (
-                      <p className="py-2 text-sm text-muted-foreground">Файлов нет.</p>
+                      <div className="space-y-1 py-2">
+                        <p className="text-sm text-muted-foreground">Файлов нет.</p>
+                        {tender.documentsDebug && (
+                          <p className="text-xs text-amber-700">{tender.documentsDebug}</p>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
-              <div className="flex flex-col gap-3 border-b border-border px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                    <FileText className="h-4 w-4 text-primary" /> Услуги из ТС
-                  </h3>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Groq читает техническую спецификацию и выделяет отдельные услуги/работы для быстрой оценки лота.
-                  </p>
-                </div>
-                <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                  {specServices.length} услуг
-                </span>
-              </div>
-              <div className="space-y-4 px-6 py-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-                  <input
-                    type="search"
-                    value={serviceSearch}
-                    onChange={(e) => setServiceSearch(e.target.value)}
-                    placeholder="Поиск по услугам..."
-                    className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition focus:border-primary"
-                  />
-                </div>
-                {specAutoAnalyzeLoading && (
-                  <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Sparkles className="h-4 w-4 animate-spin" />
-                    {specAutoAnalyzeMessage || "Автоматический разбор ТС…"}
-                  </p>
-                )}
-
-                {ragSpecSummary?.overview && (
-                  <p className="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
-                    {sanitizeApiText(String(ragSpecSummary.overview))}
-                  </p>
-                )}
-
-                {filteredSpecServices.length > 0 ? (
-                  <div className="flex flex-wrap gap-2">
-                    {filteredSpecServices.map((service, index) => {
-                      const details = [
-                        service.category,
-                        service.quantity,
-                        ...(service.requirements ?? []),
-                        service.evidence,
-                      ].filter(Boolean).join(" · ");
-                      return (
-                        <span
-                          key={`${service.name}-${index}`}
-                          title={details || service.name}
-                          className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700"
-                        >
-                          <span className="truncate">{service.name}</span>
-                          {service.quantity && (
-                            <span className="rounded-full bg-white/80 px-1.5 py-0.5 text-[10px] text-blue-600">
-                              {service.quantity}
-                            </span>
-                          )}
-                        </span>
-                      );
-                    })}
-                  </div>
-                ) : specServices.length > 0 ? (
-                  <p className="text-sm text-muted-foreground">По этому запросу услуги не найдены.</p>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    {specAutoAnalyzeLoading
-                      ? specAutoAnalyzeMessage || "Автоматический разбор ТС…"
-                      : "Услуги ещё не извлечены. Если у лота есть PDF/DOCX ТС, анализ запустится автоматически при открытии страницы."}
-                  </p>
-                )}
               </div>
             </div>
 
@@ -842,9 +805,6 @@ function TenderDetail() {
                     <Sparkles className="h-4 w-4" />
                     {lotAnalysisLoading ? "Анализирую…" : lotAnalysis ? "Анализ выполнен" : "Запустить AI-анализ"}
                   </button>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Запрос к AI выполняется только вручную. Повторный одинаковый результат может вернуться из локального кэша без расхода лимита.
-                  </p>
                 </div>
                 {lotAnalysisLoading ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">

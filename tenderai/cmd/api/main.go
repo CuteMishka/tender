@@ -29,11 +29,9 @@ func run() error {
 		return fmt.Errorf("config: %w", err)
 	}
 
-	var tp *tenderplus.Client
-	if cfg.HasTenderPlus() {
-		tp = tenderplus.NewClient(cfg.TenderPlusURL, cfg.TenderPlusToken)
-	} else {
-		log.Print("warning: TENDERPLUS_TOKEN is empty; analytics sync from TenderPlus is disabled")
+	tp := tenderplus.NewClient(cfg.TenderPlusURL, cfg.TenderPlusToken)
+	if !cfg.HasTenderPlus() {
+		log.Print("warning: TENDERPLUS_TOKEN is empty; TenderPlus GraphQL is disabled, public attached files fallback remains available")
 	}
 
 	fd := api.NewFetchDocumentProxy(cfg.FetchDocument)
@@ -43,6 +41,7 @@ func run() error {
 		DB:       db,
 		Users:    users,
 		FetchDoc: fd,
+		TP:       tp,
 	}, cfg.CORSAllowedOrigins)
 
 	// Подключаем локальную БД и добавляем новые эндпоинты
