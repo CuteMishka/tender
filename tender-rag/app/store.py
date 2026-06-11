@@ -66,14 +66,27 @@ def replace_lot_chunks(
 ) -> None:
     if len(chunks) != len(embeddings):
         raise ValueError("chunks and embeddings length mismatch")
+    source_hint = (source_hint or "").strip() or None
     if not chunks:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM tender_chunks WHERE lot_id = %s", (lot_id,))
+            if source_hint is None:
+                cur.execute("DELETE FROM tender_chunks WHERE lot_id = %s", (lot_id,))
+            else:
+                cur.execute(
+                    "DELETE FROM tender_chunks WHERE lot_id = %s AND source_hint = %s",
+                    (lot_id, source_hint),
+                )
         conn.commit()
         return
 
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM tender_chunks WHERE lot_id = %s", (lot_id,))
+        if source_hint is None:
+            cur.execute("DELETE FROM tender_chunks WHERE lot_id = %s", (lot_id,))
+        else:
+            cur.execute(
+                "DELETE FROM tender_chunks WHERE lot_id = %s AND source_hint = %s",
+                (lot_id, source_hint),
+            )
         for idx, (content, emb) in enumerate(zip(chunks, embeddings, strict=True)):
             cur.execute(
                 """
@@ -83,6 +96,39 @@ def replace_lot_chunks(
                 (lot_id, idx, content, emb, source_hint),
             )
     conn.commit()
+
+
+def search_lot_chunks(
+    conn,
+    lot_id: str,
+    query_embedding: list[float],
+    *,
+    source_hints: list[str] | None = None,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {"lot_id": lot_id, "q": query_embedding, "lim": limit}
+    source_filter = ""
+    if source_hints:
+        params["sources"] = source_hints
+        source_filter = "AND source_hint = ANY(%(sources)s)"
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT content, source_hint,
+                   (1 - (embedding <=> %(q)s::vector))::float AS score
+            FROM tender_chunks
+            WHERE lot_id = %(lot_id)s
+              {source_filter}
+            ORDER BY embedding <=> %(q)s::vector
+            LIMIT %(lim)s
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+    return [
+        {"content": content, "source_hint": source_hint or "Документ лота", "score": float(score)}
+        for content, source_hint, score in rows
+    ]
 
 
 def replace_lot_spec_summary(conn, lot_id: str, payload: dict[str, Any]) -> None:

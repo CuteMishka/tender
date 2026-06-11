@@ -1,8 +1,6 @@
-name: Parser Cron
+name: Parser one-off run (manual only)
 
 on:
-  schedule:
-    - cron: "*/30 * * * *"
   workflow_dispatch:
     inputs:
       max_pages:

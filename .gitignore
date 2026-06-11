@@ -1,9 +1,55 @@
-TenderMachine.html
-документация.html
-Единая платформа закупок.html
-Портал государственных закупок Республики Казахстан.html
-пример лота.html
-Реестр лотов __ Портал государственных закупок Республики Казахстан.html
-goszakup.html
-project.tar.gz
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+!.env.production.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Go
+.gocache/
+vendor/
+server
+*.exe
+
+# Node / frontend
+node_modules/
+dist/
+.output/
+.vite/
+coverage/
+
+# Runtime data and logs
+*.log
+downloads/
+pgdata/
 .cache/
+*.pid
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Deployment artifacts
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.msi
+backups/
+.codex_tmp/
+
+# Browser "Save page as" dumps used only during one-off research
+/*_files/
+/*.html

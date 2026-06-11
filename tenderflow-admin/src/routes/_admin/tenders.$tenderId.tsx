@@ -36,6 +36,7 @@ import {
   type TenderViewInfo,
 } from "@/lib/tenders-api";
 import { pushNotification } from "@/hooks/use-notifications";
+import { CloudyChat } from "@/components/admin/CloudyChat";
 
 export const Route = createFileRoute("/_admin/tenders/$tenderId")({
   ssr: false,
@@ -977,6 +978,12 @@ function TenderDetail() {
           </div>
         )}
       </div>
+      {tender && (
+        <CloudyChat
+          lotId={tender.lot_source_id || String(tender.id)}
+          documents={tender.documents || []}
+        />
+      )}
     </>
   );
 }

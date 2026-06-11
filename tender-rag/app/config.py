@@ -23,6 +23,11 @@ LOT_ANALYZE_CHAT_MODEL = os.environ.get(
 ).strip()
 SPEC_AI_PROVIDER = os.environ.get("SPEC_AI_PROVIDER", "groq").strip().lower()
 SPEC_CHAT_MODEL = os.environ.get("SPEC_CHAT_MODEL", "llama-3.1-8b-instant").strip()
+CLOUDY_AI_PROVIDER = os.environ.get("CLOUDY_AI_PROVIDER", "groq").strip().lower()
+CLOUDY_CHAT_MODEL = os.environ.get(
+    "CLOUDY_CHAT_MODEL",
+    os.environ.get("GROQ_MODEL", "qwen2.5:14b"),
+).strip()
 if LOT_ANALYZE_AI_PROVIDER == "gemini" and LOT_ANALYZE_CHAT_MODEL in {"gemini-1.5-flash-8b", "models/gemini-1.5-flash-8b"}:
     LOT_ANALYZE_CHAT_MODEL = "gemini-2.5-flash"
 AI_PROVIDER = LOT_ANALYZE_AI_PROVIDER
@@ -128,6 +133,12 @@ def is_spec_ai_configured() -> bool:
     return bool(GEMINI_API_KEY)
 
 
+def is_cloudy_ai_configured() -> bool:
+    if CLOUDY_AI_PROVIDER == "groq":
+        return bool(GROQ_API_KEY)
+    return bool(GEMINI_API_KEY)
+
+
 def ai_configuration() -> dict[str, Any]:
     key = GROQ_API_KEY if AI_PROVIDER == "groq" else GEMINI_API_KEY
     key_name = "GROQ_API_KEY" if AI_PROVIDER == "groq" else "GEMINI_API_KEY"
@@ -140,6 +151,9 @@ def ai_configuration() -> dict[str, Any]:
         "spec_provider": SPEC_AI_PROVIDER,
         "spec_model": SPEC_CHAT_MODEL,
         "spec_configured": is_spec_ai_configured(),
+        "cloudy_provider": CLOUDY_AI_PROVIDER,
+        "cloudy_model": CLOUDY_CHAT_MODEL,
+        "cloudy_configured": is_cloudy_ai_configured(),
     }
 
 
@@ -167,6 +181,7 @@ def ai_chat(
     *,
     provider: str,
     model: str,
+    use_cache: bool = True,
 ) -> str:
     """Отправляет запрос в выбранный AI-провайдер и возвращает текст ответа."""
     rate_limit_exceptions: tuple[type[Exception], ...] = ()
@@ -185,22 +200,24 @@ def ai_chat(
 
     provider = provider.strip().lower()
     model = model.strip()
-    key = _ai_cache_key(provider, model, system, user, temperature)
-    cached = _read_gemini_cache(key)
-    if cached is not None:
-        return cached
-
-    owner, event = _wait_or_register_gemini_request(key)
-    if not owner:
-        event.wait(timeout=180)
+    key = _ai_cache_key(provider, model, system, user, temperature) if use_cache else ""
+    event = threading.Event()
+    if use_cache:
         cached = _read_gemini_cache(key)
         if cached is not None:
             return cached
-        raise RuntimeError("Gemini: анализ уже выполнялся, но кэш не был получен. Попробуйте позже.")
+        owner, event = _wait_or_register_gemini_request(key)
+        if not owner:
+            event.wait(timeout=180)
+            cached = _read_gemini_cache(key)
+            if cached is not None:
+                return cached
+            raise RuntimeError("AI-анализ уже выполнялся, но кэш не был получен. Попробуйте позже.")
 
     api_key = _provider_api_key(provider)
     if not api_key:
-        _finish_gemini_request(key, event)
+        if use_cache:
+            _finish_gemini_request(key, event)
         env_name = "GROQ_API_KEY" if provider == "groq" else "GEMINI_API_KEY"
         raise ValueError(f"{env_name} не задан в .env")
 
@@ -244,7 +261,8 @@ def ai_chat(
                     text = response.text
                 if not text:
                     raise RuntimeError(f"Пустой ответ от {provider}")
-                _write_gemini_cache(key, text)
+                if use_cache:
+                    _write_gemini_cache(key, text)
                 return text
             except rate_limit_exceptions as e:
                 last_err = e
@@ -258,7 +276,8 @@ def ai_chat(
             f"{provider}: превышен лимит запросов (429). Подождите минуту и попробуйте снова. Детали: {last_err}"
         )
     finally:
-        _finish_gemini_request(key, event)
+        if use_cache:
+            _finish_gemini_request(key, event)
 
 
 def gemini_chat_json(
@@ -277,6 +296,21 @@ def spec_chat_json(
     return ai_chat_json(system, user, temperature, provider=SPEC_AI_PROVIDER, model=SPEC_CHAT_MODEL)
 
 
+def cloudy_chat_json(
+    system: str,
+    user: str,
+    temperature: float = 0.1,
+) -> Any:
+    return ai_chat_json(
+        system,
+        user,
+        temperature,
+        provider=CLOUDY_AI_PROVIDER,
+        model=CLOUDY_CHAT_MODEL,
+        use_cache=False,
+    )
+
+
 def ai_chat_json(
     system: str,
     user: str,
@@ -284,9 +318,10 @@ def ai_chat_json(
     *,
     provider: str,
     model: str,
+    use_cache: bool = True,
 ) -> Any:
     """Возвращает уже распарсенный JSON из ответа AI."""
-    text = ai_chat(system, user, temperature, provider=provider, model=model)
+    text = ai_chat(system, user, temperature, provider=provider, model=model, use_cache=use_cache)
     # Убираем markdown-обёртку если модель всё же добавила ```json
     cleaned = text.strip()
     if cleaned.startswith("```"):

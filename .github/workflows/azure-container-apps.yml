@@ -1,10 +1,6 @@
-name: Deploy to Azure Container Apps
+name: Legacy Azure deploy (manual only)
 
 on:
-  push:
-    branches:
-      - main
-      - master
   workflow_dispatch:
 
 env:

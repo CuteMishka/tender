@@ -13,7 +13,14 @@ CREATE TABLE IF NOT EXISTS tender_chunks (
   UNIQUE (lot_id, chunk_index)
 );
 
+ALTER TABLE tender_chunks
+  DROP CONSTRAINT IF EXISTS tender_chunks_lot_id_chunk_index_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS tender_chunks_lot_source_chunk_idx
+  ON tender_chunks (lot_id, COALESCE(source_hint, ''), chunk_index);
+
 CREATE INDEX IF NOT EXISTS tender_chunks_lot_id_idx ON tender_chunks (lot_id);
+CREATE INDEX IF NOT EXISTS tender_chunks_lot_source_idx ON tender_chunks (lot_id, source_hint);
 
 -- Approximate NN index (ok to create on empty table in pgvector 0.5+)
 CREATE INDEX IF NOT EXISTS tender_chunks_embedding_hnsw

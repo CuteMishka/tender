@@ -2,6 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        antiword \
+        poppler-utils \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        tesseract-ocr-rus \
+    && rm -rf /var/lib/apt/lists/*
+
 # CPU-only torch (smaller image than default CUDA wheel)
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 

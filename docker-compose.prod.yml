@@ -1,73 +1,90 @@
+name: tender
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-tender}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tender}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       POSTGRES_DB: ${POSTGRES_DB:-tender}
     volumes:
       - tender_postgres_data:/var/lib/postgresql/data
     ports:
-      - "${POSTGRES_PORT:-5433}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tender} -d ${POSTGRES_DB:-tender}"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 10s
+    logging: *default-logging
 
   rag-db:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${RAG_POSTGRES_USER:-rag}
-      POSTGRES_PASSWORD: ${RAG_POSTGRES_PASSWORD:-rag}
+      POSTGRES_PASSWORD: ${RAG_POSTGRES_PASSWORD:?RAG_POSTGRES_PASSWORD is required}
       POSTGRES_DB: ${RAG_POSTGRES_DB:-rag}
     volumes:
       - rag_postgres_data:/var/lib/postgresql/data
       - ./tender-rag/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     ports:
-      - "${RAG_POSTGRES_PORT:-5434}:5432"
+      - "127.0.0.1:${RAG_POSTGRES_PORT:-5434}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${RAG_POSTGRES_USER:-rag} -d ${RAG_POSTGRES_DB:-rag}"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 10s
+    logging: *default-logging
 
   backend:
     build:
       context: ./tenderai
       args:
-        GOPROXY: ${GOPROXY:-https://goproxy.io,https://proxy.golang.org,direct}
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
         GOSUMDB: ${GOSUMDB:-sum.golang.org}
     restart: unless-stopped
-    network_mode: host
     environment:
-      PORT: 8082
-      DATABASE_URL: host=127.0.0.1 user=${POSTGRES_USER:-tender} password=${POSTGRES_PASSWORD:-tender} dbname=${POSTGRES_DB:-tender} port=${POSTGRES_PORT:-5433} sslmode=disable TimeZone=Asia/Almaty
-      PARSER_RUNNER_MODE: ${PARSER_RUNNER_MODE:-vm}
+      PORT: "8082"
+      DATABASE_URL: host=postgres user=${POSTGRES_USER:-tender} password=${POSTGRES_PASSWORD} dbname=${POSTGRES_DB:-tender} port=5432 sslmode=disable TimeZone=Asia/Almaty
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@tender.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      PARSER_RUNNER_MODE: vm
       TENDERPLUS_URL: ${TENDERPLUS_URL:-https://api.tenderplus.kz/graphql}
       TENDERPLUS_TOKEN: ${TENDERPLUS_TOKEN:-}
       TENDERS_KEYWORDS: ${TENDERS_KEYWORDS:-}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:5173}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       FETCH_DOCUMENT_ALLOWED_HOSTS: ${FETCH_DOCUMENT_ALLOWED_HOSTS:-v3bl.goszakup.gov.kz,goszakup.gov.kz,zakup.gov.kz,ows.goszakup.gov.kz,api.tenderplus.kz,.tenderplus.kz}
-      PARSER_POLL_INTERVAL_SECONDS: ${PARSER_POLL_INTERVAL_SECONDS:-300}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    expose:
+      - "8082"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/health >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/health >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
+    logging: *default-logging
 
   rag-api:
     build:
       context: ./tender-rag
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://${RAG_POSTGRES_USER:-rag}:${RAG_POSTGRES_PASSWORD:-rag}@rag-db:5432/${RAG_POSTGRES_DB:-rag}
+      PORT: "8083"
+      DATABASE_URL: postgresql://${RAG_POSTGRES_USER:-rag}:${RAG_POSTGRES_PASSWORD}@rag-db:5432/${RAG_POSTGRES_DB:-rag}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-small}
       FILES_DIR: /files
       AI_PROVIDER: ${AI_PROVIDER:-gemini}
@@ -79,40 +96,45 @@ services:
       LOT_ANALYZE_CHAT_MODEL: ${LOT_ANALYZE_CHAT_MODEL:-gemini-2.5-flash}
       SPEC_AI_PROVIDER: ${SPEC_AI_PROVIDER:-gemini}
       SPEC_CHAT_MODEL: ${SPEC_CHAT_MODEL:-gemini-2.5-flash}
+      CLOUDY_AI_PROVIDER: ${CLOUDY_AI_PROVIDER:-groq}
+      CLOUDY_CHAT_MODEL: ${CLOUDY_CHAT_MODEL:-qwen2.5:14b}
       COMPANY_PROFILE: ${COMPANY_PROFILE:-}
       COMPANY_PROFILE_FILE: ${COMPANY_PROFILE_FILE:-/files/company_profile.txt}
     volumes:
       - ./tender-rag/files:/files:ro
-    ports:
-      - "${RAG_PORT:-8083}:8083"
+    expose:
+      - "8083"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8083/health', timeout=5).read()\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8083/health', timeout=5).read()\""]
       interval: 15s
-      timeout: 5s
+      timeout: 8s
       retries: 20
+      start_period: 30s
     depends_on:
       rag-db:
         condition: service_healthy
+      llm:
+        condition: service_healthy
+    logging: *default-logging
 
   parser:
     build:
       context: ./parser
     restart: unless-stopped
-    network_mode: host
     init: true
     shm_size: "1gb"
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tender}:${POSTGRES_PASSWORD:-tender}@127.0.0.1:${POSTGRES_PORT:-5433}/${POSTGRES_DB:-tender}
-      RAG_API_BASE: http://127.0.0.1:${RAG_PORT:-8083}
-      DICTIONARIES_API_URL: http://127.0.0.1:${BACKEND_PORT:-8082}/api/v1/dictionaries?kind=keywords
-      POLL_INTERVAL_SECONDS: ${PARSER_POLL_INTERVAL_SECONDS:-300}
-      MAX_WORKERS: ${PARSER_MAX_WORKERS:-1}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tender}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tender}
+      RAG_API_BASE: http://rag-api:8083
+      DICTIONARIES_API_URL: http://backend:8082/api/v1/dictionaries?kind=keywords
+      POLL_INTERVAL_SECONDS: ${PARSER_POLL_INTERVAL_SECONDS:-1800}
+      MAX_WORKERS: ${PARSER_MAX_WORKERS:-2}
       HEADLESS: "true"
       DOWNLOAD_DIR: /app/downloads
       STRICT_KEYWORD_FILTER: ${STRICT_KEYWORD_FILTER:-false}
       COLLECT_ALL_ACTIVE_LOTS: ${COLLECT_ALL_ACTIVE_LOTS:-true}
-      SMART_MATCH_ENABLED: "true"
-      SMART_MATCH_USE_MORPHOLOGY: "true"
+      SMART_MATCH_ENABLED: ${SMART_MATCH_ENABLED:-true}
+      SMART_MATCH_USE_MORPHOLOGY: ${SMART_MATCH_USE_MORPHOLOGY:-true}
       SEMANTIC_MATCH_ENABLED: ${SEMANTIC_MATCH_ENABLED:-false}
       AI_LOT_FILTER_ENABLED: ${PARSER_AI_LOT_FILTER_ENABLED:-true}
       AI_LOT_FILTER_MIN_SCORE: ${AI_LOT_FILTER_MIN_SCORE:-65}
@@ -121,8 +143,8 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       GROQ_API_KEY: ${GROQ_API_KEY:-ollama}
       GROQ_API_BASE: ${GROQ_API_BASE:-http://llm:11434/v1}
-      GROQ_MODEL: ${GROQ_MODEL:-qwen2.5:3b}
-      AI_REQUEST_DELAY_SECONDS: ${AI_REQUEST_DELAY_SECONDS:-40}
+      GROQ_MODEL: ${GROQ_MODEL:-qwen2.5:14b}
+      AI_REQUEST_DELAY_SECONDS: ${AI_REQUEST_DELAY_SECONDS:-5}
       AI_RATE_LIMIT_COOLDOWN_SECONDS: ${AI_RATE_LIMIT_COOLDOWN_SECONDS:-300}
       STOP_AT_FIRST_SEEN_LOT: ${PARSER_STOP_AT_FIRST_SEEN_LOT:-true}
       PROCESS_EXISTING_LOTS: ${PARSER_PROCESS_EXISTING_LOTS:-false}
@@ -157,20 +179,19 @@ services:
       REQUEST_TIMEOUT_SECONDS: ${PARSER_REQUEST_TIMEOUT_SECONDS:-30}
     volumes:
       - parser_downloads:/app/downloads
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
     depends_on:
       postgres:
         condition: service_healthy
       backend:
         condition: service_healthy
+      rag-api:
+        condition: service_healthy
+    logging: *default-logging
 
   llm:
     image: ollama/ollama:latest
     restart: unless-stopped
+    gpus: all
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-24h}
@@ -180,28 +201,68 @@ services:
       - "127.0.0.1:${LLM_PORT:-11434}:11434"
     healthcheck:
       test: ["CMD", "ollama", "list"]
-      interval: 30s
+      interval: 20s
       timeout: 10s
       retries: 20
+      start_period: 20s
+    logging: *default-logging
 
   frontend:
     build:
       context: ./tenderflow-admin
       args:
-        VITE_BACK_API: ${PUBLIC_BACKEND_URL:-http://localhost:8082}
-        VITE_LOCAL_API: ${PUBLIC_BACKEND_URL:-http://localhost:8082}
-        VITE_RAG_API: ${PUBLIC_RAG_URL:-http://localhost:8083}
-        VITE_FETCH_DOCUMENT_PROXY_URL: ${PUBLIC_BACKEND_URL:-http://localhost:8082}/api/v1/fetch-document
+        VITE_BACK_API: ${PUBLIC_BACKEND_URL:-}
+        VITE_LOCAL_API: ${PUBLIC_BACKEND_URL:-}
+        VITE_RAG_API: ${PUBLIC_RAG_URL:-}
+        VITE_FETCH_DOCUMENT_PROXY_URL: ${PUBLIC_FETCH_DOCUMENT_PROXY_URL:-}
     restart: unless-stopped
-    ports:
-      - "80:3000"
-      - "${FRONTEND_PORT:-8080}:3000"
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
     depends_on:
       backend:
         condition: service_healthy
+    logging: *default-logging
+
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "8082:80"
+      - "8083:8083"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+      rag-api:
+        condition: service_healthy
+    logging: *default-logging
 
 volumes:
   tender_postgres_data:
+    external: true
+    name: ${TENDER_POSTGRES_VOLUME:-cloud-user_tender_postgres_data}
   rag_postgres_data:
+    external: true
+    name: ${RAG_POSTGRES_VOLUME:-cloud-user_rag_postgres_data}
   parser_downloads:
+    external: true
+    name: ${PARSER_DOWNLOADS_VOLUME:-cloud-user_parser_downloads}
   ollama_data:
+    external: true
+    name: ${OLLAMA_VOLUME:-cloud-user_ollama_data}

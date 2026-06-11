@@ -159,6 +159,19 @@ export type TenderDocument = {
   downloadLink: string;
 };
 
+export type CloudyCitation = {
+  number: number;
+  source_hint: string;
+  label: string;
+  excerpt: string;
+  score: number;
+};
+
+export type CloudyChatResponse = {
+  answer: string;
+  citations: CloudyCitation[];
+};
+
 export type LotSpecService = {
   name: string;
   category?: string;
@@ -304,24 +317,92 @@ export type TendersListResponse = {
 
 const DEFAULT_API_BASE = "https://tenderai-production-70a1.up.railway.app";
 
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/$/, "");
+}
+
+function isLoopbackHost(value: string): boolean {
+  const host = value.trim().toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function currentOrigin(): string | null {
+  if (typeof window === "undefined" || !window.location?.origin) return null;
+  return trimTrailingSlash(window.location.origin);
+}
+
+function currentHostBase(port: number): string | null {
+  if (typeof window === "undefined" || !window.location?.protocol || !window.location?.hostname) {
+    return null;
+  }
+  return `${window.location.protocol}//${window.location.hostname}:${port}`;
+}
+
+function resolveApiBase(rawBase: unknown, fallback: string): string {
+  const base = typeof rawBase === "string" ? rawBase.trim() : "";
+  const origin = currentOrigin();
+  if (origin && typeof window !== "undefined" && !isLoopbackHost(window.location.hostname)) {
+    return origin;
+  }
+  if (!base || base.startsWith("/")) {
+    return origin || fallback;
+  }
+  return trimTrailingSlash(base);
+}
+
+function resolveRagBase(
+  rawBase: unknown,
+  fallbackPort = 8083,
+  fallback = DEFAULT_LOT_ANALYZE_BASE,
+): string {
+  const base = typeof rawBase === "string" ? rawBase.trim() : "";
+  const hostFallback = currentHostBase(fallbackPort);
+  if (!base || base.startsWith("/")) {
+    return hostFallback || fallback;
+  }
+  if (hostFallback && typeof window !== "undefined" && !isLoopbackHost(window.location.hostname)) {
+    try {
+      if (isLoopbackHost(new URL(base).hostname)) return hostFallback;
+    } catch {
+      if (base.toLowerCase().includes("localhost") || base.includes("127.0.0.1")) {
+        return hostFallback;
+      }
+    }
+  }
+  return trimTrailingSlash(base);
+}
+
+function resolveFetchDocumentProxyUrl(rawUrl: unknown): string | null {
+  const url = typeof rawUrl === "string" ? rawUrl.trim() : "";
+  if (!url) return null;
+  const origin = currentOrigin();
+  if (origin && typeof window !== "undefined" && !isLoopbackHost(window.location.hostname)) {
+    return `${origin}/api/v1/fetch-document`;
+  }
+  return trimTrailingSlash(url);
+}
+
 function getTenderApiBase(): string {
   const fromEnv =
     (typeof import.meta !== "undefined" && import.meta.env?.VITE_BACK_API) ||
     (typeof process !== "undefined" && process.env?.VITE_BACK_API);
-  const base = (typeof fromEnv === "string" && fromEnv.trim()) || DEFAULT_API_BASE;
-  return base.replace(/\/$/, "");
+  return resolveApiBase(fromEnv, DEFAULT_API_BASE);
 }
 
 /** База для локальных эндпоинтов (дашборд, заявки).
- *  Читает VITE_LOCAL_API, иначе падает на VITE_BACK_API, иначе localhost:8082. */
+ *  В браузере предпочитает текущий origin страницы, чтобы не ловить CORS. */
 export function getLocalApiBase(): string {
   if (typeof import.meta !== "undefined" && import.meta.env) {
     const local = import.meta.env.VITE_LOCAL_API;
-    if (typeof local === "string" && local.trim()) return local.trim().replace(/\/$/, "");
+    if (typeof local === "string" && local.trim()) {
+      return resolveApiBase(local, "http://localhost:8082");
+    }
     const back = import.meta.env.VITE_BACK_API;
-    if (typeof back === "string" && back.trim()) return back.trim().replace(/\/$/, "");
+    if (typeof back === "string" && back.trim()) {
+      return resolveApiBase(back, "http://localhost:8082");
+    }
   }
-  return "http://localhost:8082";
+  return currentOrigin() || "http://localhost:8082";
 }
 
 function normalizeInput(input: { page: number; limit?: number }): { page: number; limit: number } {
@@ -633,8 +714,7 @@ function readRagServiceBaseFromEnv(): string | undefined {
 }
 
 export function getRagApiBase(): string {
-  const base = readRagServiceBaseFromEnv() || DEFAULT_LOT_ANALYZE_BASE;
-  return base.replace(/\/$/, "");
+  return resolveRagBase(readRagServiceBaseFromEnv(), 8083, DEFAULT_LOT_ANALYZE_BASE);
 }
 
 /** @deprecated предпочтительно getRagApiBase */
@@ -821,11 +901,13 @@ export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: st
 export function getFetchDocumentProxyUrl(): string {
   if (typeof import.meta !== "undefined" && import.meta.env?.VITE_FETCH_DOCUMENT_PROXY_URL) {
     const u = String(import.meta.env.VITE_FETCH_DOCUMENT_PROXY_URL).trim();
-    if (u) return u;
+    const resolved = resolveFetchDocumentProxyUrl(u);
+    if (resolved) return resolved;
   }
   if (typeof process !== "undefined" && process.env?.VITE_FETCH_DOCUMENT_PROXY_URL) {
     const u = String(process.env.VITE_FETCH_DOCUMENT_PROXY_URL).trim();
-    if (u) return u;
+    const resolved = resolveFetchDocumentProxyUrl(u);
+    if (resolved) return resolved;
   }
   return `${getLocalApiBase()}/api/v1/fetch-document`;
 }
@@ -876,12 +958,23 @@ export async function fetchDocumentBlobViaBackendProxy(remoteUrl: string, option
   return res.blob();
 }
 
-function guessRagDocExtension(name: string, downloadLink: string): "pdf" | "docx" | "doc" | null {
+const CLOUDY_DOCUMENT_EXTENSIONS = [
+  "pdf", "doc", "docx", "xls", "xlsx", "pptx", "odt", "rtf", "txt", "csv",
+  "json", "xml", "html", "htm", "md", "png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp",
+] as const;
+
+type CloudyDocumentExtension = (typeof CLOUDY_DOCUMENT_EXTENSIONS)[number];
+
+function guessRagDocExtension(name: string, downloadLink: string): CloudyDocumentExtension | null {
   const tryOne = (s: string) => {
-    const m = s.match(/\.(pdf|docx|doc)(?:[\s?#]|$)/i);
-    return m ? (m[1].toLowerCase() as "pdf" | "docx" | "doc") : null;
+    const m = s.match(/\.(pdf|docx?|xlsx?|pptx|odt|rtf|txt|csv|json|xml|html?|md|png|jpe?g|tiff?|bmp|webp)(?:[\s?#]|$)/i);
+    return m ? (m[1].toLowerCase() as CloudyDocumentExtension) : null;
   };
   return tryOne(name) ?? tryOne(downloadLink);
+}
+
+export function isCloudySupportedDocument(document: TenderDocument): boolean {
+  return guessRagDocExtension(document.name, document.downloadLink) !== null;
 }
 
 export function pickTenderDocumentForRag(documents: TenderDocument[] | undefined): TenderDocument | null {
@@ -900,17 +993,69 @@ export function tenderDocumentBlobToFile(doc: TenderDocument, blob: Blob): File 
   const ext = guessRagDocExtension(doc.name, doc.downloadLink);
   let fname = doc.name.trim();
   if (!fname) fname = ext ? `document.${ext}` : "document.bin";
+  const knownMime: Partial<Record<CloudyDocumentExtension, string>> = {
+    pdf: "application/pdf",
+    doc: "application/msword",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xls: "application/vnd.ms-excel",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    odt: "application/vnd.oasis.opendocument.text",
+    rtf: "application/rtf",
+    txt: "text/plain",
+    csv: "text/csv",
+    json: "application/json",
+    xml: "application/xml",
+    html: "text/html",
+    htm: "text/html",
+    md: "text/markdown",
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    tif: "image/tiff",
+    tiff: "image/tiff",
+    bmp: "image/bmp",
+    webp: "image/webp",
+  };
   const mime =
     blob.type && blob.type !== "application/octet-stream"
       ? blob.type
-      : ext === "pdf"
-        ? "application/pdf"
-        : ext === "docx"
-          ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          : ext === "doc"
-            ? "application/msword"
-            : "application/octet-stream";
+      : (ext && knownMime[ext]) || "application/octet-stream";
   return new File([blob], fname, { type: mime });
+}
+
+export async function askCloudy(input: {
+  lotId: string;
+  question: string;
+  sourceHints: string[];
+  history: Array<{ role: "user" | "assistant"; content: string }>;
+  timeoutMs?: number;
+}): Promise<CloudyChatResponse> {
+  const controller = new AbortController();
+  const timeoutMs = input.timeoutMs ?? 120_000;
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${getRagApiBase()}/v1/lots/${encodeURIComponent(input.lotId)}/cloudy/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question: input.question,
+        source_hints: input.sourceHints,
+        history: input.history.slice(-10),
+      }),
+      signal: controller.signal,
+    });
+    const rawText = await response.text();
+    if (!response.ok) throw new Error(readBackendJsonError(response.status, rawText));
+    const body = rawText ? JSON.parse(rawText) as CloudyChatResponse : null;
+    if (!body?.answer) throw new Error("Cloudy вернул пустой ответ");
+    return { answer: body.answer, citations: Array.isArray(body.citations) ? body.citations : [] };
+  } catch (error: unknown) {
+    if (controller.signal.aborted) throw new Error("Cloudy не успел ответить за 2 минуты");
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 export type IndexLotDocumentResult = {

@@ -1,0 +1,18 @@
+[Unit]
+Description=Tender production Docker Compose stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/tender/repo
+ExecStart=/usr/bin/docker compose -p tender --env-file /etc/tender/tender.env -f /opt/tender/repo/docker-compose.prod.yml up -d --remove-orphans --wait --wait-timeout 300
+ExecStartPost=/usr/local/sbin/tender-health
+ExecStop=/usr/bin/docker compose -p tender --env-file /etc/tender/tender.env -f /opt/tender/repo/docker-compose.prod.yml stop
+TimeoutStartSec=600
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target
