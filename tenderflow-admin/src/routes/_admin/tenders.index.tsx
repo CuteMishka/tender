@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useLocation, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type ElementType } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { ExternalLink, Filter, CheckCircle2, Trash2 } from "lucide-react";
+import { Banknote, BriefcaseBusiness, CheckCircle2, ExternalLink, FileText, Filter, Search, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
 import {
   fetchTendersList,
   formatTenderAmount,
@@ -317,6 +317,25 @@ function TendersList() {
     if (!isNaN(maxA) && t.cost > maxA) return false;
     return true;
   });
+  const tenderStats = useMemo(() => {
+    const sourceItems = activeTab === "Участвуем" ? participatingItems : (data?.items ?? []);
+    const urgent = sourceItems.filter((item) => {
+      const status = getTenderStatus(item.endDate);
+      return status.color === "red" || status.color === "orange";
+    }).length;
+    const suitable = sourceItems.filter((item) => item.isSuitable).length;
+    const visibleAmount = filteredItems.reduce((sum, item) => sum + (Number.isFinite(item.cost) ? item.cost : 0), 0);
+    const total = Math.max(1, sourceItems.length);
+
+    return {
+      sourceCount: sourceItems.length,
+      suitable,
+      urgent,
+      visibleAmount,
+      suitablePercent: Math.round((suitable / total) * 100),
+      urgentPercent: Math.round((urgent / total) * 100),
+    };
+  }, [activeTab, data?.items, filteredItems, participatingItems]);
   const currentPage = data?.meta.page ?? page;
   const pageCount = Math.max(1, data?.meta.pageCount || 1);
 
@@ -353,78 +372,113 @@ function TendersList() {
     <>
       <PageHeader
         title="Тендеры"
+        description="Лента закупок с AI-оценкой, дедлайнами и быстрым переходом в работу"
         actions={
           <button
             onClick={() => setShowFilters(!showFilters)}
             className={`inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium transition-colors ${showFilters ? "bg-accent text-accent-foreground" : "bg-background hover:bg-accent"}`}
           >
-            <Filter className="h-4 w-4" /> Фильтры
+            <Filter className="h-4 w-4" /> {showFilters ? "Скрыть фильтры" : "Фильтры"}
           </button>
         }
       />
 
-      <div className="p-8">
-        {showFilters && (
-          <div className="mb-6 rounded-xl border border-border bg-card p-5 shadow-sm animate-in slide-in-from-top-2">
-            <h4 className="mb-4 text-sm font-medium">Параметры фильтрации</h4>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <input
-                type="text"
-                placeholder="Поиск по названию, заказчику, виду закупки..."
-                value={searchText}
-                onChange={(e) => {
-                  setSearchText(e.target.value);
+      <div className="bg-muted/20">
+        <div className="mx-auto max-w-[1800px] space-y-5 px-6 py-6 xl:px-8">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <Metric title="В выборке" value={String(filteredItems.length)} hint={`из ${tenderStats.sourceCount} на странице`} icon={FileText} tone="blue" progress={filteredItems.length > 0 ? 100 : 0} />
+            <Metric title="Подходящие" value={String(tenderStats.suitable)} hint="AI отметил релевантными" icon={Sparkles} tone="green" progress={tenderStats.suitablePercent} />
+            <Metric title="Срочные" value={String(tenderStats.urgent)} hint="дедлайн близко" icon={BriefcaseBusiness} tone="amber" progress={tenderStats.urgentPercent} />
+            <Metric title="Сумма" value={`₸ ${formatAmountShort(tenderStats.visibleAmount)}`} hint="по текущей выборке" icon={Banknote} tone="teal" progress={tenderStats.visibleAmount > 0 ? 72 : 0} />
+          </div>
+
+          <section className="rounded-lg border border-border bg-card p-3 shadow-sm">
+            <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <SlidersHorizontal className="h-5 w-5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">Фильтр тендеров</p>
+                  <p className="text-xs text-muted-foreground">
+                    {activeTab}: {filteredItems.length} записей; сумма ₸ {formatAmountShort(tenderStats.visibleAmount)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid w-full gap-2 lg:grid-cols-[minmax(280px,1fr)_180px_180px] 2xl:w-[820px]">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <input
+                    type="text"
+                    placeholder="Поиск по названию, заказчику, виду закупки"
+                    value={searchText}
+                    onChange={(e) => {
+                      setSearchText(e.target.value);
+                      if (page !== 1) {
+                        navigate({ to: "/tenders", search: { page: 1, limit } });
+                      }
+                    }}
+                    className="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
+                  />
+                </div>
+                <input
+                  type="number"
+                  placeholder="Мин. сумма ₸"
+                  value={filterMinAmount}
+                  onChange={(e) => setFilterMinAmount(e.target.value)}
+                  className={`${showFilters ? "block" : "hidden lg:block"} h-10 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10`}
+                />
+                <input
+                  type="number"
+                  placeholder="Макс. сумма ₸"
+                  value={filterMaxAmount}
+                  onChange={(e) => setFilterMaxAmount(e.target.value)}
+                  className={`${showFilters ? "block" : "hidden lg:block"} h-10 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10`}
+                />
+              </div>
+            </div>
+
+            {showFilters && (
+              <div className="mt-3 grid gap-2 border-t border-border pt-3 text-xs text-muted-foreground sm:grid-cols-3">
+                <span className="rounded-lg bg-muted/40 px-3 py-2">Вкладка: {activeTab}</span>
+                <span className="rounded-lg bg-muted/40 px-3 py-2">От: {filterMinAmount ? `₸ ${formatAmountShort(Number(filterMinAmount))}` : "без минимума"}</span>
+                <span className="rounded-lg bg-muted/40 px-3 py-2">До: {filterMaxAmount ? `₸ ${formatAmountShort(Number(filterMaxAmount))}` : "без максимума"}</span>
+              </div>
+            )}
+          </section>
+
+          <div className="flex flex-wrap gap-2">
+            {[
+              { key: "Все", count: data?.items?.length },
+              { key: "Подходящие" },
+              { key: "Активные" },
+              { key: "Истекающие" },
+              { key: "Завершённые" },
+              { key: "Участвуем", count: participatingItems.length, icon: CheckCircle2 },
+            ].map(({ key: tab, count, icon: Icon }) => (
+              <button
+                key={tab}
+                onClick={() => {
+                  setActiveTab(tab);
                   if (page !== 1) {
                     navigate({ to: "/tenders", search: { page: 1, limit } });
                   }
                 }}
-                className="rounded-lg border border-input bg-background px-3 py-2.5 text-sm"
-              />
-              <input
-                type="number"
-                placeholder="Мин. сумма ₸"
-                value={filterMinAmount}
-                onChange={(e) => setFilterMinAmount(e.target.value)}
-                className="rounded-lg border border-input bg-background px-3 py-2.5 text-sm"
-              />
-              <input
-                type="number"
-                placeholder="Макс. сумма ₸"
-                value={filterMaxAmount}
-                onChange={(e) => setFilterMaxAmount(e.target.value)}
-                className="rounded-lg border border-input bg-background px-3 py-2.5 text-sm"
-              />
-            </div>
+                className={`inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-semibold transition ${
+                  activeTab === tab
+                    ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                    : "border-border bg-card text-foreground hover:bg-accent"
+                }`}
+              >
+                {Icon && <Icon className="h-3.5 w-3.5" />}
+                {tab}
+                {count !== undefined && (
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${activeTab === tab ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground"}`}>{count}</span>
+                )}
+              </button>
+            ))}
           </div>
-        )}
-
-        <div className="mb-4 flex flex-wrap gap-2">
-          {[
-            { key: "Все", count: data?.items?.length },
-            { key: "Подходящие" },
-            { key: "Активные" },
-            { key: "Истекающие" },
-            { key: "Завершённые" },
-            { key: "Участвуем", count: participatingItems.length, icon: CheckCircle2 },
-          ].map(({ key: tab, count, icon: Icon }) => (
-            <button
-              key={tab}
-              onClick={() => {
-                setActiveTab(tab);
-                if (page !== 1) {
-                  navigate({ to: "/tenders", search: { page: 1, limit } });
-                }
-              }}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === tab ? "bg-primary text-primary-foreground" : "border border-border bg-card text-foreground hover:bg-accent"}`}
-            >
-              {Icon && <Icon className="h-3.5 w-3.5" />}
-              {tab}
-              {count !== undefined && (
-                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${activeTab === tab ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground"}`}>{count}</span>
-              )}
-            </button>
-          ))}
-        </div>
 
         {error ? (
           <div className="mb-4 rounded-xl border border-destructive/30 bg-destructive/10 px-6 py-4 text-sm text-destructive">
@@ -432,14 +486,14 @@ function TendersList() {
           </div>
         ) : null}
 
-        <div className="overflow-hidden rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
+        <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
           {loading && !data ? (
             <div className="flex items-center justify-center px-6 py-24 text-sm text-muted-foreground">Загрузка…</div>
           ) : data ? (
             <>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1120px] text-sm">
-                  <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+                <table className="w-full min-w-[1240px] text-sm">
+                  <thead className="border-b border-border bg-muted/40 text-xs uppercase text-muted-foreground">
                     <tr>
                       <th className="px-4 py-3 text-left font-medium">ID / закупка</th>
                       <th className="px-4 py-3 text-left font-medium">Лот / источник</th>
@@ -463,7 +517,7 @@ function TendersList() {
                           key={t.id}
                           role="link"
                           tabIndex={0}
-                          className="cursor-pointer border-t border-border transition hover:bg-muted/40"
+                          className="group cursor-pointer bg-card transition hover:bg-muted/30"
                           onClick={() =>
                             navigate({
                               to: "/tenders/$tenderId",
@@ -482,20 +536,29 @@ function TendersList() {
                             }
                           }}
                         >
-                          <td className="px-4 py-4 font-mono text-xs text-muted-foreground">
-                            <div>{t.id}</div>
-                            <div className="mt-0.5 text-[10px] text-muted-foreground/80">buy_id {t.buy_id}</div>
+                          <td className="px-4 py-4 align-top font-mono text-xs text-muted-foreground">
+                            <div className="flex items-start gap-2">
+                              <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                                lotStatusColorKey === "green" ? "bg-green-500" :
+                                lotStatusColorKey === "orange" ? "bg-yellow-500" :
+                                lotStatusColorKey === "red" ? "bg-red-500" : "bg-muted-foreground"
+                              }`} />
+                              <div>
+                                <div>{t.id}</div>
+                                <div className="mt-0.5 text-[10px] text-muted-foreground/80">buy_id {t.buy_id}</div>
+                              </div>
+                            </div>
                           </td>
-                          <td className="px-4 py-4 font-mono text-xs text-foreground">
+                          <td className="px-4 py-4 align-top font-mono text-xs text-foreground">
                             <div>{t.lot}</div>
                             <span className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${sourceBadgeClass(t.source)}`}>
                               {sourceLabel}
                             </span>
                             <div className="mt-0.5 text-[10px] text-muted-foreground">{t.lot_source_id || "—"}</div>
                           </td>
-                          <td className="px-4 py-4">
-                            <div className="flex items-center gap-2">
-                              <span className="max-w-sm font-medium text-foreground">{truncate(t.title, 100)}</span>
+                          <td className="max-w-[430px] px-4 py-4 align-top">
+                            <div className="flex items-start gap-2">
+                              <p className="line-clamp-2 max-w-sm font-semibold leading-5 text-foreground group-hover:text-primary">{truncate(t.title, 120)}</p>
                               {viewedIds.has(t.id) && (() => {
                                 const vi = viewInfoMap[String(t.id)];
                                 return (
@@ -511,7 +574,7 @@ function TendersList() {
                                 );
                               })()}
                             </div>
-                            <div className="mt-1 max-w-sm text-xs font-medium text-foreground/80">
+                            <div className="mt-2 line-clamp-2 max-w-sm text-xs font-medium leading-4 text-foreground/80">
                               {companyName || "Компания не указана"}
                             </div>
                             {t.isSuitable && t.matchedKeyword && (
@@ -519,9 +582,9 @@ function TendersList() {
                                 Подходит: {t.matchedKeyword}
                               </div>
                             )}
-                            <div className="mt-1 max-w-sm text-xs text-muted-foreground">{truncate(t.description, 120)}</div>
+                            <div className="mt-1 line-clamp-1 max-w-sm text-xs text-muted-foreground">{truncate(t.description, 130)}</div>
                           </td>
-                          <td className="px-4 py-4">
+                          <td className="px-4 py-4 align-top">
                             {typeof t.aiScore === "number" ? (
                               <div className="min-w-28">
                                 <div className="mb-1 flex items-center justify-between gap-2">
@@ -542,8 +605,8 @@ function TendersList() {
                               <span className="text-xs text-muted-foreground">ожидает AI</span>
                             )}
                           </td>
-                          <td className="px-4 py-4 text-right font-semibold tabular-nums">{formatTenderAmount(t.cost)}</td>
-                          <td className="px-4 py-4 text-xs text-muted-foreground">
+                          <td className="px-4 py-4 text-right align-top font-semibold tabular-nums">{formatTenderAmount(t.cost)}</td>
+                          <td className="px-4 py-4 align-top text-xs text-muted-foreground">
                             {t.endDate ? (
                               <div className="flex min-w-[128px] flex-col gap-1">
                                 <span className="font-medium text-foreground">{formatDate(t.endDate)}</span>
@@ -555,7 +618,7 @@ function TendersList() {
                               <span className="text-muted-foreground/60">—</span>
                             )}
                           </td>
-                          <td className="px-4 py-4">
+                          <td className="px-4 py-4 align-top">
                             <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${statusColorMap[lotStatusColorKey]}`}>
                               <span className={`h-1.5 w-1.5 rounded-full ${
                                 lotStatusColorKey === "green" ? "bg-green-500" :
@@ -565,13 +628,13 @@ function TendersList() {
                               {lotStatusLabel(t.status)}
                             </span>
                           </td>
-                          <td className="px-4 py-4 text-center">
+                          <td className="px-4 py-4 text-center align-top">
                             <div className="flex items-center justify-center gap-1">
                             {activeTab === "Подходящие" && (
                               <button
                                 type="button"
                                 disabled={removingSuitableIds.has(t.id)}
-                                className="inline-flex rounded-md p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition hover:border-red-200 hover:bg-red-50 hover:text-red-700 disabled:opacity-50"
                                 title="Удалить из Подходящих"
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -585,7 +648,7 @@ function TendersList() {
                               href={t.partnerLink}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="inline-flex rounded-md p-2 text-primary hover:bg-accent"
+                              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border text-primary transition hover:bg-accent"
                               title="Открыть на площадке"
                               onClick={(e) => e.stopPropagation()}
                             >
@@ -608,7 +671,7 @@ function TendersList() {
                   </tbody>
                 </table>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-6 py-3 text-sm text-muted-foreground">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-muted/20 px-6 py-3 text-sm text-muted-foreground">
                 <span>
                   Стр. {currentPage} из {pageCount} · записей: {filteredItems.length} · всего: {data.meta.totalCount}
                   {loading ? " · обновление…" : ""}
@@ -625,7 +688,7 @@ function TendersList() {
                           search: { page: 1, limit: normalizePageLimit(e.target.value) },
                         })
                       }
-                      className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
+                      className="rounded-lg border border-border bg-background px-2 py-1 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
                     >
                       {PAGE_LIMIT_OPTIONS.map((value) => (
                         <option key={value} value={value}>{value}</option>
@@ -636,7 +699,7 @@ function TendersList() {
                   <Link
                     to="/tenders"
                     search={{ page: Math.max(1, currentPage - 1), limit }}
-                    className={`rounded-md border border-border px-3 py-1 hover:bg-accent ${currentPage <= 1 ? "pointer-events-none opacity-40" : ""}`}
+                    className={`rounded-lg border border-border bg-background px-3 py-1 hover:bg-accent ${currentPage <= 1 ? "pointer-events-none opacity-40" : ""}`}
                   >
                     ←
                   </Link>
@@ -646,18 +709,18 @@ function TendersList() {
                         key={entry}
                         to="/tenders"
                         search={{ page: entry, limit }}
-                        className={`rounded-md px-3 py-1 ${entry === currentPage ? "bg-primary text-primary-foreground" : "border border-border hover:bg-accent"}`}
+                        className={`rounded-lg px-3 py-1 ${entry === currentPage ? "bg-primary text-primary-foreground" : "border border-border bg-background hover:bg-accent"}`}
                       >
                         {entry}
                       </Link>
                     ) : (
-                      <span key={entry} className="rounded-md px-2 py-1 text-muted-foreground">...</span>
+                      <span key={entry} className="rounded-lg px-2 py-1 text-muted-foreground">...</span>
                     )
                   ))}
                   <Link
                     to="/tenders"
                     search={{ page: Math.min(pageCount, currentPage + 1), limit }}
-                    className={`rounded-md border border-border px-3 py-1 hover:bg-accent ${currentPage >= pageCount ? "pointer-events-none opacity-40" : ""}`}
+                    className={`rounded-lg border border-border bg-background px-3 py-1 hover:bg-accent ${currentPage >= pageCount ? "pointer-events-none opacity-40" : ""}`}
                   >
                     →
                   </Link>
@@ -668,6 +731,59 @@ function TendersList() {
           ) : null}
         </div>
       </div>
+      </div>
     </>
   );
+}
+
+type MetricTone = "blue" | "green" | "amber" | "teal";
+
+const metricTone: Record<MetricTone, { shell: string; icon: string; bar: string }> = {
+  blue: { shell: "border-blue-100 bg-blue-50/70", icon: "bg-blue-100 text-blue-700", bar: "bg-blue-500" },
+  green: { shell: "border-emerald-100 bg-emerald-50/80", icon: "bg-emerald-100 text-emerald-700", bar: "bg-emerald-500" },
+  amber: { shell: "border-amber-100 bg-amber-50/80", icon: "bg-amber-100 text-amber-800", bar: "bg-amber-500" },
+  teal: { shell: "border-teal-100 bg-teal-50/80", icon: "bg-teal-100 text-teal-700", bar: "bg-teal-500" },
+};
+
+function Metric({
+  title,
+  value,
+  hint,
+  icon: Icon,
+  tone,
+  progress,
+}: {
+  title: string;
+  value: string;
+  hint: string;
+  icon: ElementType;
+  tone: MetricTone;
+  progress: number;
+}) {
+  const cls = metricTone[tone];
+  return (
+    <div className={`overflow-hidden rounded-lg border p-4 shadow-sm ${cls.shell}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-muted-foreground">{title}</p>
+          <p className="mt-1 truncate text-2xl font-bold text-foreground">{value}</p>
+          <p className="mt-1 truncate text-xs text-muted-foreground">{hint}</p>
+        </div>
+        <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${cls.icon}`}>
+          <Icon className="h-5 w-5" />
+        </span>
+      </div>
+      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-background/80">
+        <div className={`h-full rounded-full ${cls.bar}`} style={{ width: `${Math.max(4, Math.min(100, progress))}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function formatAmountShort(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} млрд`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} млн`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(0)} тыс`;
+  return new Intl.NumberFormat("ru-RU").format(Math.round(value));
 }
