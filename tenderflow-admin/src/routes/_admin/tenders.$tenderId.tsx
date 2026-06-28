@@ -151,11 +151,11 @@ function DetailMetric({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-medium text-muted-foreground">{label}</p>
-          <p className={`mt-1 truncate text-xl font-bold text-foreground ${tone === "red" ? cls.text : ""}`}>{value}</p>
-          <p className="mt-1 truncate text-xs text-muted-foreground">{hint}</p>
+          <p className={`mt-1 line-clamp-2 text-lg font-bold leading-tight text-foreground ${tone === "red" ? cls.text : ""}`}>{value}</p>
+          <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{hint}</p>
         </div>
         <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${cls.icon}`}>
-          <Icon className="h-4.5 w-4.5" />
+          <Icon className="h-4 w-4" />
         </span>
       </div>
       <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-background/80">
@@ -745,7 +745,7 @@ function TenderDetail() {
       ? "Участвуем"
       : viewInfo?.decision === "rejected"
         ? "Отклонён"
-        : "Ожидает решения";
+        : "На оценке";
 
   return (
     <>
@@ -828,7 +828,7 @@ function TenderDetail() {
                 />
                 <DetailMetric
                   label="Срок подачи"
-                  value={tender.endDate ? formatDate(tender.endDate) : "—"}
+                  value={tender.endDate ? formatShortDateTime(tender.endDate) : "—"}
                   hint={`Осталось: ${deadlineLabel(daysLeft)}`}
                   icon={Clock}
                   tone={deadlineTone(statusInfo?.color)}
