@@ -21,10 +21,13 @@ if [ -n "${GHCR_TOKEN:-}" ]; then
   echo "$GHCR_TOKEN" | sudo docker login ghcr.io -u "${GHCR_USERNAME:-github-actions}" --password-stdin >/dev/null
 fi
 
-if command -v docker-compose >/dev/null 2>&1; then
+if docker compose version >/dev/null 2>&1; then
+  compose_cmd=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
   compose_cmd=(docker-compose)
 else
-  compose_cmd=(docker compose)
+  echo "Docker Compose is not installed"
+  exit 1
 fi
 
 compose=(
@@ -41,10 +44,10 @@ echo "Pulling application images from $GHCR_IMAGE_PREFIX with tag $IMAGE_TAG"
 "${compose[@]}" pull backend parser rag-api frontend
 
 echo "Ensuring base services are running..."
-"${compose[@]}" up -d --no-build postgres rag-db llm
+"${compose[@]}" up -d --no-build --remove-orphans postgres rag-db llm
 
 echo "Starting application services from pulled images..."
-"${compose[@]}" up -d --no-build backend rag-api frontend parser
+"${compose[@]}" up -d --no-build --remove-orphans backend rag-api frontend parser
 
 echo "Waiting for backend health..."
 for _ in $(seq 1 40); do
