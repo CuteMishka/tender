@@ -43,6 +43,9 @@ compose=(
 echo "Pulling application images from $GHCR_IMAGE_PREFIX with tag $IMAGE_TAG"
 "${compose[@]}" pull backend parser rag-api frontend
 
+echo "Removing stale service containers without deleting volumes..."
+"${compose[@]}" rm -sf postgres rag-db llm backend rag-api frontend parser || true
+
 echo "Ensuring base services are running..."
 "${compose[@]}" up -d --no-build --remove-orphans postgres rag-db llm
 
