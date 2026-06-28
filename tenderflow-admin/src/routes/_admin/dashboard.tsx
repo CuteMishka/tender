@@ -1,8 +1,8 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { Gavel, FileText, Building2, DollarSign, Download, ArrowRight, ChevronRight, Bell, Clock } from "lucide-react";
-import { getLocalApiBase, formatTenderAmount } from "@/lib/tenders-api";
+import { Gavel, FileText, Building2, DollarSign, Download, ArrowRight, ChevronRight, Bell } from "lucide-react";
+import { getLocalApiBase, formatTenderAmount, formatDate, getTenderStatus } from "@/lib/tenders-api";
 import { useNotifications } from "@/hooks/use-notifications";
 
 export const Route = createFileRoute("/_admin/dashboard")({
@@ -23,21 +23,10 @@ interface SavedLot {
   updated_at: string;
 }
 
-interface ParserStatus {
-  configured: boolean;
-  intervalSeconds: number;
-  nextRunAt?: string;
-  lastRun?: {
-    id: number;
-    startedAt: string;
-    finishedAt?: string;
-    status: string;
-    platforms: string[];
-    keywords: string[];
-    lotsFound: number;
-    lotsChanged: number;
-    errors: Array<Record<string, unknown>>;
-  };
+interface DashboardDynamicsPoint {
+  date: string;
+  label: string;
+  count: number;
 }
 
 const STATUS_RU: Record<string, { label: string; cls: string }> = {
@@ -46,25 +35,12 @@ const STATUS_RU: Record<string, { label: string; cls: string }> = {
   rejected:      { label: "Отклонён",   cls: "bg-red-100 text-red-600" },
 };
 
-function formatDateTime(value?: string) {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleString("ru-KZ", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-function formatSince(value?: string) {
-  if (!value) return "нет запусков";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "нет запусков";
-  const diff = Math.max(0, Date.now() - date.getTime());
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 1) return "только что";
-  if (minutes < 60) return `${minutes} мин. назад`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return `${hours} ч. ${rest} мин. назад`;
-}
+const deadlineClass: Record<string, string> = {
+  green: "border-green-200 bg-green-50 text-green-700",
+  orange: "border-yellow-200 bg-yellow-50 text-yellow-800",
+  red: "border-red-200 bg-red-50 text-red-700",
+  gray: "border-border bg-muted text-muted-foreground",
+};
 
 function Dashboard() {
   const navigate = useNavigate();
@@ -73,25 +49,20 @@ function Dashboard() {
     active_count: 0, participating_count: 0, total_amount: 0, participating_amount: 0,
   });
   const [savedLots, setSavedLots] = useState<SavedLot[]>([]);
-  const [parserStatus, setParserStatus] = useState<ParserStatus | null>(null);
+  const [dynamics, setDynamics] = useState<DashboardDynamicsPoint[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const base = getLocalApiBase();
-    const loadParserStatus = () => {
-      fetch(`${base}/api/v1/parser/status`).then((r) => r.json()).then((body) => setParserStatus(body)).catch(() => setParserStatus(null));
-    };
     Promise.all([
       fetch(`${base}/api/v1/dashboard`).then((r) => r.json()).catch(() => null),
+      fetch(`${base}/api/v1/dashboard/dynamics?range=all`).then((r) => r.json()).catch(() => []),
       fetch(`${base}/api/v1/lots/saved`).then((r) => r.json()).catch(() => []),
-      fetch(`${base}/api/v1/parser/status`).then((r) => r.json()).catch(() => null),
-    ]).then(([stats, lots, parser]) => {
+    ]).then(([stats, dynamicsRows, lots]) => {
       if (stats && !stats.error) setDbStats(stats);
+      if (Array.isArray(dynamicsRows)) setDynamics(dynamicsRows);
       if (Array.isArray(lots)) setSavedLots(lots);
-      if (parser && !parser.error) setParserStatus(parser);
     }).finally(() => setLoading(false));
-    const timer = window.setInterval(loadParserStatus, 30_000);
-    return () => window.clearInterval(timer);
   }, []);
 
   const stats = [
@@ -114,7 +85,7 @@ function Dashboard() {
       link: "/bids",
     },
     {
-      label: "Объём участвуем",
+      label: "Валидация лота",
       value: dbStats.participating_amount,
       display: `₸ ${(dbStats.participating_amount / 1_000_000).toFixed(1)}М`,
       icon: Building2,
@@ -142,25 +113,28 @@ function Dashboard() {
     },
   ];
 
-  const last7Days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    d.setHours(0, 0, 0, 0);
-    return d;
-  });
-  const dayCounts = last7Days.map((day) => {
-    const nextDay = new Date(day);
-    nextDay.setDate(nextDay.getDate() + 1);
-    return savedLots.filter((lot) => {
-      const d = new Date(lot.created_at);
-      return d >= day && d < nextDay;
-    }).length;
-  });
-  const maxCount = Math.max(...dayCounts, 1);
-  const chartData = dayCounts.map((count, i) => ({
-    count,
-    height: count === 0 ? 4 : (count / maxCount) * 100,
-    label: last7Days[i].toLocaleDateString("ru-RU", { weekday: "short" }).replace(".", ""),
+  const fallbackChartData = Object.entries(
+    savedLots.reduce<Record<string, number>>((acc, lot) => {
+      const date = new Date(lot.created_at || lot.updated_at);
+      if (Number.isNaN(date.getTime())) return acc;
+      const key = date.toISOString().slice(0, 10);
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {}),
+  )
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, count]) => ({
+      count,
+      label: new Date(`${date}T00:00:00`).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }),
+    }));
+  const rawChartData = dynamics.length > 0 ? dynamics.map((item) => ({
+    count: Number(item.count) || 0,
+    label: item.label,
+  })) : fallbackChartData;
+  const maxCount = Math.max(...rawChartData.map((item) => item.count), 1);
+  const chartData = rawChartData.map((item) => ({
+    ...item,
+    height: item.count === 0 ? 4 : (item.count / maxCount) * 100,
   }));
 
   return (
@@ -176,42 +150,8 @@ function Dashboard() {
       />
 
       <div className="space-y-6 p-8">
-        <div className="rounded-xl border border-border bg-card p-5" style={{ boxShadow: "var(--shadow-sm)" }}>
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
-                <Clock className="h-5 w-5" />
-              </div>
-              <div>
-                  <h3 className="text-base font-semibold">Источник лотов TenderPlus API</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Проверка: {formatSince(parserStatus?.lastRun?.startedAt)}
-                  </p>
-              </div>
-            </div>
-            <div className="grid gap-3 text-sm sm:grid-cols-4">
-              <div>
-                <p className="text-xs text-muted-foreground">Статус</p>
-                <p className="font-medium">{parserStatus?.lastRun?.status || (parserStatus?.configured ? "подключён" : "нет данных")}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Время</p>
-                <p className="font-medium">{formatDateTime(parserStatus?.lastRun?.startedAt)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Режим</p>
-                <p className="font-medium">TenderPlus API</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Обновление</p>
-                <p className="font-medium">по запросу</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
         {/* Карточки статистики */}
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           {stats.map((s) => {
             const Icon = s.icon;
             return (
@@ -241,7 +181,7 @@ function Dashboard() {
           <div className="mb-5 flex items-center justify-between">
             <div>
               <h3 className="text-base font-semibold">Динамика заявок</h3>
-              <p className="text-xs text-muted-foreground">Последние 7 дней</p>
+              <p className="text-xs text-muted-foreground">За все время</p>
             </div>
             <Link
               to="/bids"
@@ -250,19 +190,24 @@ function Dashboard() {
               Все заявки <ArrowRight className="h-3 w-3" />
             </Link>
           </div>
-          <div className="flex h-48 items-end gap-2">
-            {chartData.map((d, i) => (
-              <div key={i} className="group flex flex-1 flex-col items-center gap-2">
-                <span className="invisible text-xs font-medium text-foreground group-hover:visible">
-                  {d.count}
-                </span>
-                <div
-                  className="w-full rounded-t-md transition-all duration-300 hover:opacity-75"
-                  style={{ height: `${d.height}%`, background: "var(--gradient-primary, #16a34a)" }}
-                />
-                <span className="text-xs uppercase tracking-wider text-muted-foreground">{d.label}</span>
-              </div>
-            ))}
+          <div className="overflow-x-auto pb-2">
+            <div
+              className="flex h-48 items-end gap-2"
+              style={{ minWidth: `${Math.max(chartData.length, 7) * 56}px` }}
+            >
+              {chartData.map((d, i) => (
+                <div key={`${d.label}-${i}`} className="group flex flex-1 flex-col items-center gap-2">
+                  <span className="invisible text-xs font-medium text-foreground group-hover:visible">
+                    {d.count}
+                  </span>
+                  <div
+                    className="w-full rounded-t-md transition-all duration-300 hover:opacity-75"
+                    style={{ height: `${d.height}%`, background: "var(--gradient-primary, #16a34a)" }}
+                  />
+                  <span className="text-xs uppercase tracking-wider text-muted-foreground">{d.label}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -316,9 +261,9 @@ function Dashboard() {
                 </thead>
                 <tbody>
                   {savedLots.slice(0, 8).map((t) => {
-                    const deadlineDate = new Date(t.deadline);
-                    const diffDays = Math.ceil((deadlineDate.getTime() - Date.now()) / 86_400_000);
-                    const isExpiring = diffDays > 0 && diffDays <= 3;
+                    const deadlineValue = t.deadline || t.end_date;
+                    const deadlineInfo = getTenderStatus(deadlineValue);
+                    const isExpiring = deadlineInfo.color === "red" || deadlineInfo.color === "orange";
                     const s = STATUS_RU[t.status] ?? { label: t.status, cls: "bg-muted/40 text-muted-foreground" };
 
                     return (
@@ -336,13 +281,15 @@ function Dashboard() {
                           ₸ {formatTenderAmount(t.amount)}
                         </td>
                         <td className="px-6 py-4">
-                          <span className={`text-xs ${isExpiring ? "font-semibold text-red-600" : "text-muted-foreground"}`}>
-                            {deadlineDate.toLocaleDateString("ru-KZ")}
-                          </span>
-                          {isExpiring && (
-                            <span className="ml-1.5 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">
-                              {diffDays} дн.
-                            </span>
+                          {deadlineValue ? (
+                            <div className="flex flex-col gap-1">
+                              <span className="text-xs font-medium text-foreground">{formatDate(deadlineValue)}</span>
+                              <span className={`w-fit rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${deadlineClass[deadlineInfo.color]}`}>
+                                {deadlineInfo.daysLeft === null ? "—" : deadlineInfo.daysLeft < 0 ? "истёк" : deadlineInfo.daysLeft === 0 ? "сегодня" : `${deadlineInfo.daysLeft} дн.`}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
                           )}
                         </td>
                         <td className="px-6 py-4">

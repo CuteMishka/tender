@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"unicode"
 
 	"github.com/dauren/tender/internal/domain"
 	"github.com/dauren/tender/internal/repository"
@@ -54,6 +55,9 @@ func (s *UserService) CreateRegistrationRequest(ctx context.Context, req *domain
 	if req.Email == "" || req.Name == "" || strings.TrimSpace(req.Password) == "" {
 		return errors.New("name, email and password are required")
 	}
+	if !isStrongPassword(req.Password) {
+		return errors.New("password must be at least 12 characters and include upper, lower, digit and symbol")
+	}
 	if _, err := s.repo.GetByEmail(ctx, req.Email); err == nil {
 		return errors.New("user already exists")
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -67,6 +71,26 @@ func (s *UserService) CreateRegistrationRequest(ctx context.Context, req *domain
 	req.Status = "pending"
 	req.Role = ""
 	return s.repo.CreateRegistrationRequest(ctx, req)
+}
+
+func isStrongPassword(password string) bool {
+	var hasUpper, hasLower, hasDigit, hasSymbol bool
+	if len([]rune(password)) < 12 {
+		return false
+	}
+	for _, r := range password {
+		switch {
+		case unicode.IsUpper(r):
+			hasUpper = true
+		case unicode.IsLower(r):
+			hasLower = true
+		case unicode.IsDigit(r):
+			hasDigit = true
+		default:
+			hasSymbol = true
+		}
+	}
+	return hasUpper && hasLower && hasDigit && hasSymbol
 }
 
 func (s *UserService) ListRegistrationRequests(ctx context.Context, status string) ([]domain.RegistrationRequest, error) {

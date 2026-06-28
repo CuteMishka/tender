@@ -14,16 +14,16 @@ if ! grep -q '^TENDERPLUS_TOKEN=' .env || grep -q '^TENDERPLUS_TOKEN=$' .env; th
 fi
 
 echo "Stopping old project containers..."
-sudo docker rm -f direct_parser cloud-user_parser_1 tender-parser parser 2>/dev/null || true
+sudo docker rm -f direct_parser tender_parser_1 tender-parser parser 2>/dev/null || true
 sudo docker ps -a --format '{{.Names}}' | grep -Ei 'parser' | xargs -r sudo docker rm -f || true
 
 echo "Removing old parser source directory..."
 sudo rm -rf /home/cloud-user/parser
 
 echo "Building fresh images..."
-sudo docker build --no-cache -t cloud-user_backend:latest ./tenderai
-sudo docker build --no-cache -t cloud-user_rag-api:latest ./tender-rag
-sudo docker build --no-cache -t cloud-user_frontend:latest ./tenderflow-admin
+sudo docker build --no-cache -t tender_backend:latest ./tenderai
+sudo docker build --no-cache -t tender_rag-api:latest ./tender-rag
+sudo docker build --no-cache -t tender_frontend:latest ./tenderflow-admin
 
 echo "Recreating only the required services..."
 sudo docker-compose -f docker-compose.prod.yml --env-file .env down --remove-orphans

@@ -1,0 +1,9 @@
+.env
+.env.*
+.git
+.cache/
+.pytest_cache/
+.venv/
+__pycache__/
+*.py[cod]
+downloads/

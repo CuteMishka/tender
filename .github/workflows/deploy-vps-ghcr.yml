@@ -1,0 +1,213 @@
+name: Deploy VPS via GHCR
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - ".github/workflows/deploy-vps-ghcr.yml"
+      - "docker-compose.prod.yml"
+      - "docker-compose.ghcr.yml"
+      - "scripts/deploy_ghcr_vm.sh"
+      - "tenderai/**"
+      - "parser/**"
+      - "tender-rag/**"
+      - "tenderflow-admin/**"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker tag to deploy. Empty means current commit SHA."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: vps-production
+  cancel-in-progress: true
+
+env:
+  APP_DIR: /home/cloud-user/tender1
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: tenderai/go.sum
+
+      - name: Test backend
+        working-directory: tenderai
+        run: go test ./...
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check Python syntax
+        run: python -m compileall -q parser tender-rag/app
+
+  build:
+    name: Build and push images
+    runs-on: ubuntu-latest
+    needs: test
+    outputs:
+      image_prefix: ${{ steps.meta.outputs.image_prefix }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare image metadata
+        id: meta
+        env:
+          INPUT_IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+          PUBLIC_BACKEND_URL: ${{ vars.PUBLIC_BACKEND_URL }}
+          PUBLIC_RAG_URL: ${{ vars.PUBLIC_RAG_URL }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          repo="$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          tag="${INPUT_IMAGE_TAG:-$GITHUB_SHA}"
+          backend_url="${PUBLIC_BACKEND_URL:-}"
+          rag_url="${PUBLIC_RAG_URL:-}"
+          if [ -z "$backend_url" ] && [ -n "$VPS_HOST" ]; then
+            backend_url="http://$VPS_HOST:8082"
+          fi
+          if [ -z "$rag_url" ] && [ -n "$VPS_HOST" ]; then
+            rag_url="http://$VPS_HOST:8083"
+          fi
+          echo "image_prefix=ghcr.io/$repo" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "public_backend_url=${backend_url:-http://localhost:8082}" >> "$GITHUB_OUTPUT"
+          echo "public_rag_url=${rag_url:-http://localhost:8083}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./tenderai
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_prefix }}/backend:${{ steps.meta.outputs.image_tag }}
+            ${{ steps.meta.outputs.image_prefix }}/backend:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Build parser
+        uses: docker/build-push-action@v6
+        with:
+          context: ./parser
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_prefix }}/parser:${{ steps.meta.outputs.image_tag }}
+            ${{ steps.meta.outputs.image_prefix }}/parser:latest
+          cache-from: type=gha,scope=parser
+          cache-to: type=gha,scope=parser,mode=max
+
+      - name: Build RAG API
+        uses: docker/build-push-action@v6
+        with:
+          context: ./tender-rag
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_prefix }}/rag-api:${{ steps.meta.outputs.image_tag }}
+            ${{ steps.meta.outputs.image_prefix }}/rag-api:latest
+          cache-from: type=gha,scope=rag-api
+          cache-to: type=gha,scope=rag-api,mode=max
+
+      - name: Build frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./tenderflow-admin
+          push: true
+          build-args: |
+            VITE_BACK_API=${{ steps.meta.outputs.public_backend_url }}
+            VITE_LOCAL_API=${{ steps.meta.outputs.public_backend_url }}
+            VITE_RAG_API=${{ steps.meta.outputs.public_rag_url }}
+            VITE_FETCH_DOCUMENT_PROXY_URL=${{ steps.meta.outputs.public_backend_url }}/api/v1/fetch-document
+          tags: |
+            ${{ steps.meta.outputs.image_prefix }}/frontend:${{ steps.meta.outputs.image_tag }}
+            ${{ steps.meta.outputs.image_prefix }}/frontend:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
+
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install SSH key
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          test -n "$VPS_HOST"
+          test -n "$VPS_SSH_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Upload compose files and deploy script
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          APP_DIR: ${{ env.APP_DIR }}
+        run: |
+          user="${VPS_USER:-cloud-user}"
+          ssh "$user@$VPS_HOST" "mkdir -p '$APP_DIR/scripts' '$APP_DIR/tender-rag/db' '$APP_DIR/tender-rag/files'"
+          scp docker-compose.prod.yml docker-compose.ghcr.yml "$user@$VPS_HOST:$APP_DIR/"
+          scp scripts/deploy_ghcr_vm.sh "$user@$VPS_HOST:$APP_DIR/scripts/deploy_ghcr_vm.sh"
+          scp tender-rag/db/init.sql "$user@$VPS_HOST:$APP_DIR/tender-rag/db/init.sql"
+          if [ -f tender-rag/files/company_profile.txt ]; then
+            scp tender-rag/files/company_profile.txt "$user@$VPS_HOST:$APP_DIR/tender-rag/files/company_profile.txt"
+          fi
+          ssh "$user@$VPS_HOST" "chmod +x '$APP_DIR/scripts/deploy_ghcr_vm.sh'"
+
+      - name: Pull images and restart services
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          APP_DIR: ${{ env.APP_DIR }}
+          GHCR_IMAGE_PREFIX: ${{ needs.build.outputs.image_prefix }}
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          user="${VPS_USER:-cloud-user}"
+          token_b64="$(printf '%s' "$GHCR_TOKEN" | base64 -w0)"
+          ssh "$user@$VPS_HOST" "
+            set -euo pipefail
+            export APP_DIR='$APP_DIR'
+            export GHCR_IMAGE_PREFIX='$GHCR_IMAGE_PREFIX'
+            export IMAGE_TAG='$IMAGE_TAG'
+            export GHCR_USERNAME='$GHCR_USERNAME'
+            export GHCR_TOKEN=\$(printf '%s' '$token_b64' | base64 -d)
+            bash '$APP_DIR/scripts/deploy_ghcr_vm.sh'
+          "

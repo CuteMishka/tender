@@ -96,7 +96,7 @@ func applyLotFilters(q *gorm.DB, r *http.Request) *gorm.DB {
 
 // POST /api/v1/analytics/sync
 func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
-	if h.TP == nil {
+	if h.TP == nil || !h.TP.Configured() {
 		writeError(w, http.StatusServiceUnavailable, "TenderPlus не настроен")
 		return
 	}

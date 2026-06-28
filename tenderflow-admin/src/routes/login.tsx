@@ -1,11 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
-import { AlertCircle, Building2, Cloud, Lock, MessageSquare, Send, User } from "lucide-react";
+import { AlertCircle, Building2, Gavel, Lock, MessageSquare, Send, User } from "lucide-react";
 import { login, submitRegistrationRequest } from "@/lib/auth";
 
 export const Route = createFileRoute("/login")({
   head: () => ({
-    meta: [{ title: "Вход — Freedom Cloud Админ" }],
+    meta: [{ title: "Вход — Tender Админ" }],
   }),
   component: LoginPage,
 });
@@ -89,9 +89,9 @@ function LoginPage() {
             className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl text-primary-foreground"
             style={{ background: "var(--gradient-primary)", boxShadow: "var(--shadow-glow)" }}
           >
-            <Cloud className="h-8 w-8" />
+            <Gavel className="h-8 w-8" />
           </div>
-          <h1 className="text-3xl font-bold text-white">Freedom Cloud</h1>
+          <h1 className="text-3xl font-bold text-white">Tender</h1>
           <p className="mt-2 text-sm text-white/70">Панель администратора</p>
         </div>
 
@@ -230,7 +230,7 @@ function LoginPage() {
         </div>
 
         <p className="mt-6 text-center text-xs text-white/60">
-          © 2026 Freedom Cloud. Все права защищены.
+          © 2026 Tender. Все права защищены.
         </p>
       </div>
     </div>

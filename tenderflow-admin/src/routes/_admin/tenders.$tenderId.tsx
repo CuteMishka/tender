@@ -1,19 +1,25 @@
 import { createFileRoute, Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
+import { TenderAssistantChat } from "@/components/admin/TenderAssistantChat";
 import {
   ArrowLeft, ExternalLink, FileText, Sparkles,
   ThumbsUp, ThumbsDown, Calendar, Building2, MapPin,
-  Hash, DollarSign, Clock, Download, History,
+  Hash, DollarSign, Clock, Download, History, Loader2,
+  UploadCloud, Send, MessageSquare, ListTodo, Plus, CheckCircle2, Circle,
 } from "lucide-react";
 import { analyticsApi, fmtDate, fmtM, type HistoricalLot } from "@/lib/analytics-api";
 import {
+  autoExtractTenderSpecSummary,
   buildLotText,
+  createTenderComment,
+  createTenderTask,
   fetchDocumentBlobViaBackendProxy,
   fetchLotAnalyze,
-  fetchLotSpecSummary,
+  fetchTenderActivity,
   fetchTenderById,
-  indexLotDocument,
+  fetchTenderComments,
+  fetchTenderTasks,
   formatDate,
   formatTenderAmount,
   getLocalApiBase,
@@ -24,18 +30,23 @@ import {
   getTenderViewInfo,
   pickTenderDocumentForRag,
   saveTenderSpecCache,
+  savedLotStatusLabels,
   sanitizeApiText,
   sanitizeApiTextMultiline,
   tenderCompanyName,
-  tenderDocumentBlobToFile,
   tenderSourceLabel,
+  updateTenderTask,
   type LotAnalyzeResult,
   type LotSpecService,
   type LotSpecSummary,
+  type TenderActivity,
+  type TenderComment,
   type TenderItem,
+  type TenderTask,
   type TenderViewInfo,
 } from "@/lib/tenders-api";
 import { pushNotification } from "@/hooks/use-notifications";
+import { getCurrentUser } from "@/lib/auth";
 
 export const Route = createFileRoute("/_admin/tenders/$tenderId")({
   ssr: false,
@@ -95,7 +106,7 @@ function InfoRow({ label, value, icon: Icon }: { label: string; value: React.Rea
 
 function scoreTone(score: number) {
   if (score >= 75) return { label: "Высокое соответствие", color: "bg-green-500", text: "text-green-700", border: "border-green-200", bg: "bg-green-50" };
-  if (score >= 45) return { label: "Среднее соответствие", color: "bg-amber-500", text: "text-amber-700", border: "border-amber-200", bg: "bg-amber-50" };
+  if (score > 50) return { label: "Среднее соответствие", color: "bg-amber-500", text: "text-amber-700", border: "border-amber-200", bg: "bg-amber-50" };
   return { label: "Низкое соответствие", color: "bg-red-500", text: "text-red-700", border: "border-red-200", bg: "bg-red-50" };
 }
 
@@ -124,6 +135,21 @@ function buildLotTextWithSpec(tender: TenderItem, spec: string, summary: LotSpec
     parts.push("", "Извлечённый текст технической спецификации:", truncateForAi(spec, 12000));
   }
   return parts.join("\n");
+}
+
+function savedAnalysisFromTender(tender: TenderItem | null): LotAnalyzeResult | null {
+  if (!tender || typeof tender.aiScore !== "number") return null;
+  const score = Math.max(0, Math.min(100, Math.round(tender.aiScore)));
+  const savedReason = specText(tender.ai_analysis);
+  const fit = tender.isSuitable || score > 50 ? "подходит" : score >= 35 ? "требует проверки" : "не подходит";
+  const services = tender.requiredServices?.length ? ` Найденные услуги по ТС: ${tender.requiredServices.join("; ")}.` : "";
+  return {
+    score,
+    fit,
+    summary: score > 50 ? "Лот прошёл анализ по услугам из ТС." : score >= 35 ? "Лот требует ручной проверки по ТС." : "Лот не подходит по составу услуг из ТС.",
+    reason: savedReason || `AI оценил лот на ${score}%.${services}`,
+    checks: null,
+  };
 }
 
 function stringsFromUnknown(value: unknown): string[] {
@@ -155,8 +181,18 @@ function normalizeSpecService(item: unknown): LotSpecService | null {
 }
 
 function getSpecServices(summary: LotSpecSummary | null): LotSpecService[] {
-  const raw = summary?.services;
-  if (!Array.isArray(raw)) return [];
+  const raw =
+    Array.isArray(summary?.services)
+      ? summary.services
+      : Array.isArray(summary?.required_services)
+        ? summary.required_services
+        : Array.isArray(summary?.requiredServices)
+          ? summary.requiredServices
+          : Array.isArray(summary?.service_names)
+            ? summary.service_names
+            : Array.isArray(summary?.items)
+              ? summary.items
+              : [];
   const seen = new Set<string>();
   const services: LotSpecService[] = [];
   for (const item of raw) {
@@ -170,6 +206,21 @@ function getSpecServices(summary: LotSpecSummary | null): LotSpecService[] {
   return services;
 }
 
+function mergeServiceNames(...groups: Array<Array<string | undefined>>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const group of groups) {
+    for (const value of group) {
+      const name = sanitizeApiText(String(value || ""));
+      const key = name.toLowerCase();
+      if (!name || seen.has(key)) continue;
+      seen.add(key);
+      result.push(name);
+    }
+  }
+  return result.slice(0, 16);
+}
+
 function serviceSearchText(service: LotSpecService): string {
   return [
     service.name,
@@ -178,6 +229,20 @@ function serviceSearchText(service: LotSpecService): string {
     service.evidence,
     ...(service.requirements ?? []),
   ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function specAutoErrorMessage(message: string): string {
+  const text = sanitizeApiText(message);
+  if (!text || text.toLowerCase() === "failed to fetch") {
+    return "Не удалось автоматически разобрать ТС. Сервер не смог получить документ или ответ AI.";
+  }
+  if (text.includes("нет PDF/DOCX")) {
+    return "В документах лота не найден PDF/DOCX для автоматического разбора ТС.";
+  }
+  if (text.includes("GROQ_API_KEY") || text.includes("GEMINI_API_KEY")) {
+    return "AI-разбор ТС сейчас недоступен: на сервере не настроен ключ AI.";
+  }
+  return text;
 }
 
 function tokenizeSimilarity(text: string): Set<string> {
@@ -205,6 +270,14 @@ function similarScore(tender: TenderItem, lot: HistoricalLot): number {
     score += ratio * 5;
   }
   return score;
+}
+
+function ragLotIdForTender(tender: TenderItem): string {
+  return sanitizeApiText(
+    tender.lot_source_id ||
+    tender.lot ||
+    `${tender.source || "tender"}:${tender.id}`,
+  );
 }
 
 function LotAnalysisCard({ analysis }: { analysis: LotAnalyzeResult }) {
@@ -287,10 +360,9 @@ function TenderDetail() {
   const [ragSpecSummary, setRagSpecSummary] = useState<LotSpecSummary | null>(null);
   const [specAutoAnalyzeLoading, setSpecAutoAnalyzeLoading] = useState(false);
   const [specAutoAnalyzeMessage, setSpecAutoAnalyzeMessage] = useState<string | null>(null);
-  const [serviceSearch, setServiceSearch] = useState("");
   const [specDownloadLoading, setSpecDownloadLoading] = useState(false);
 
-  const [actionLoading, setActionLoading] = useState<"participating" | "rejected" | null>(null);
+  const [actionLoading, setActionLoading] = useState<"participating" | "rejected" | "assignment_requested" | null>(null);
   const [viewInfo, setViewInfo] = useState<TenderViewInfo | null>(null);
   const [similarLots, setSimilarLots] = useState<HistoricalLot[]>([]);
   const [similarLotsLoading, setSimilarLotsLoading] = useState(false);
@@ -314,6 +386,10 @@ function TenderDetail() {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setTender(null);
+    setLotAnalysis(null);
+    setLotAnalysisError(null);
+    setLotAnalysisLoading(false);
     fetchTenderById(id)
       .then((t) => { if (!cancelled) { setTender(t); markTenderViewed(id); setViewInfo(getTenderViewInfo(id)); } })
       .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
@@ -327,7 +403,6 @@ function TenderDetail() {
     setSpecDownloadLoading(false);
     setSpecAutoAnalyzeLoading(false);
     setSpecAutoAnalyzeMessage(null);
-    setServiceSearch("");
     const cached = Number.isFinite(id) && id > 0 ? getTenderSpecCache(id) : null;
     setRagExtractedOverride(typeof cached?.extractedText === "string" ? cached.extractedText : null);
     setRagSpecSummary(
@@ -337,82 +412,73 @@ function TenderDetail() {
     );
   }, [id]);
 
+  const displayTechnicalSpec =
+    specText(ragExtractedOverride ?? undefined) || specText(tender?.technical_specification);
+
   useEffect(() => {
-    if (!tender?.lot_source_id || ragSpecSummary) return;
-    const ragLotId = tender.lot_source_id;
-    if (attemptedLazySpecLots.current.has(ragLotId)) return;
+    if (!tender || ragSpecSummary) return;
+    const ragLotId = ragLotIdForTender(tender);
+    if (!ragLotId) return;
+    const availableSpecText = specText(ragExtractedOverride ?? undefined) || specText(tender.technical_specification);
+    const attemptKey = `${ragLotId}:backend-auto`;
+    if (attemptedLazySpecLots.current.has(attemptKey)) return;
+    attemptedLazySpecLots.current.add(attemptKey);
+
     let cancelled = false;
+    setSpecAutoAnalyzeLoading(true);
+    setSpecAutoAnalyzeMessage("Ищу готовый разбор ТС или запускаю извлечение услуг…");
+    setRagUploadError(null);
+    setRagUploadOk(null);
+
+    const acceptSummary = (summary: LotSpecSummary, extractedText?: string) => {
+      if (extractedText) setRagExtractedOverride(extractedText);
+      setRagSpecSummary(summary);
+      saveTenderSpecCache(tender.id, {
+        extractedText: extractedText ?? ragExtractedOverride ?? undefined,
+        specSummary: summary,
+        uploadStatus: "AI-услуги из ТС получены автоматически при открытии лота",
+      });
+      setSpecAutoAnalyzeMessage(null);
+      setRagUploadOk("AI-выжимка ТС получена автоматически.");
+    };
+
     (async () => {
       try {
-        const saved = await fetchLotSpecSummary(ragLotId);
+        const result = await autoExtractTenderSpecSummary(tender.id, { timeoutMs: 180_000 });
         if (cancelled) return;
-        if (saved && Object.keys(saved).length > 0) {
-          setRagSpecSummary(saved);
-          saveTenderSpecCache(tender.id, {
-            extractedText: ragExtractedOverride ?? undefined,
-            specSummary: saved,
-            uploadStatus: "AI-услуги из ТС получены через RAG",
-          });
+        if (result.spec_summary && Object.keys(result.spec_summary).length > 0) {
+          acceptSummary(result.spec_summary, result.extractedText || availableSpecText || undefined);
+          setRagUploadOk(
+            result.source === "cached"
+              ? "Готовые услуги из ТС загружены."
+              : "AI извлёк услуги из ТС автоматически.",
+          );
           return;
         }
+        setRagUploadOk("ТС обработана, но AI не выделил отдельные услуги. Проверьте документ вручную.");
       } catch (e: unknown) {
         if (cancelled) return;
-        const message = e instanceof Error ? e.message : String(e);
-        if (!message.includes("404")) setRagUploadError(message);
-      }
-      if (cancelled) return;
-      attemptedLazySpecLots.current.add(ragLotId);
-      const picked = pickTenderDocumentForRag(tender.documents);
-      if (!picked) {
-        setRagUploadOk("Поддерживаемая ТС для авторазбора не найдена (нужен PDF или DOCX).");
-        return;
-      }
-      setSpecAutoAnalyzeLoading(true);
-      setSpecAutoAnalyzeMessage("Скачиваю файл ТС через proxy…");
-      setRagUploadError(null);
-        setRagUploadOk("ТС ещё не была разобрана RAG — сначала скачиваю документ из TenderPlus.");
-      try {
-        const blob = await fetchDocumentBlobViaBackendProxy(picked.downloadLink, { timeoutMs: 45_000 });
-        if (cancelled) return;
-        setSpecAutoAnalyzeMessage("Файл ТС скачан, отправляю документ в Groq/RAG…");
-        const file = tenderDocumentBlobToFile(picked, blob);
-        const indexed = await indexLotDocument(ragLotId, file, {
-          sourceHint: `${tender.source || "tender"};frontend_lazy_spec;${picked.name || "document"}`,
-          extractSpecPoints: true,
-          includeExtractedText: false,
-        });
-        if (cancelled) return;
-        if (indexed.spec_summary && Object.keys(indexed.spec_summary).length > 0) {
-          setRagSpecSummary(indexed.spec_summary);
-          saveTenderSpecCache(tender.id, {
-            extractedText: ragExtractedOverride ?? undefined,
-            specSummary: indexed.spec_summary,
-            uploadStatus: "AI-услуги из ТС получены автоматически при открытии лота",
-          });
-          setSpecAutoAnalyzeMessage(null);
-          setRagUploadOk("AI-услуги из ТС извлечены автоматически через Groq.");
-        }
-      } catch (e: unknown) {
-        if (!cancelled) {
-          const message = e instanceof Error ? e.message : String(e);
-          const isProxyTimeout = message.includes("Прокси документа (504)") || message.includes("не отдала файл");
-          setSpecAutoAnalyzeMessage(null);
-          setRagUploadOk(null);
-          setRagUploadError(
-            isProxyTimeout
-                ? "Не удалось скачать файл ТС: площадка не ответила через proxy за 45 секунд. Groq не запускался; попробуйте скачать оригинал позже."
-              : message,
-          );
-        }
+        setRagUploadOk(null);
+        setRagUploadError(specAutoErrorMessage(e instanceof Error ? e.message : String(e)));
       } finally {
-        if (!cancelled) setSpecAutoAnalyzeLoading(false);
+        if (!cancelled) {
+          setSpecAutoAnalyzeMessage(null);
+          setSpecAutoAnalyzeLoading(false);
+        }
       }
     })();
+
     return () => { cancelled = true; };
   }, [ragExtractedOverride, ragSpecSummary, tender]);
 
-  const displayTechnicalSpec =
-    specText(ragExtractedOverride ?? undefined) || specText(tender?.technical_specification);
+  useEffect(() => {
+    const saved = savedAnalysisFromTender(tender);
+    if (saved) {
+      setLotAnalysis(saved);
+      setLotAnalysisError(null);
+      setLotAnalysisLoading(false);
+    }
+  }, [tender]);
 
   useEffect(() => {
     if (!tender) return;
@@ -451,7 +517,7 @@ function TenderDetail() {
     setLotAnalysisLoading(true);
     setLotAnalysisError(null);
     try {
-      const result = await fetchLotAnalyze(lotText, { cacheKey: `tender-${tender.id}-${displayTechnicalSpec ? "with-spec" : "card-only"}` });
+      const result = await fetchLotAnalyze(lotText, { cacheKey: `tender-${tender.id}-${displayTechnicalSpec ? "with-spec" : "card-only"}`, timeoutMs: 60_000 });
       setLotAnalysis(result);
     } catch (e: unknown) {
       setLotAnalysisError(e instanceof Error ? e.message : String(e));
@@ -459,6 +525,14 @@ function TenderDetail() {
       setLotAnalysisLoading(false);
     }
   }, [displayTechnicalSpec, ragSpecSummary, tender, lotAnalysisLoading]);
+
+  useEffect(() => {
+    if (!tender || lotAnalysis || lotAnalysisLoading || lotAnalysisError) return;
+    const hasDocuments = Boolean(tender.documents?.length);
+    const hasSpecContext = Boolean(displayTechnicalSpec || ragSpecSummary);
+    if (hasDocuments && !hasSpecContext && !ragUploadError && !ragUploadOk) return;
+    void handleLotAnalyze();
+  }, [displayTechnicalSpec, handleLotAnalyze, lotAnalysis, lotAnalysisError, lotAnalysisLoading, ragSpecSummary, ragUploadError, ragUploadOk, tender]);
 
   async function handleDownloadOriginalSpec() {
     if (!tender || specDownloadLoading) return;
@@ -480,16 +554,49 @@ function TenderDetail() {
     }
   }
 
-  const handleDecision = async (status: "participating" | "rejected") => {
+  async function handleSaveSpecToKnowledgeBase() {
+    if (!tender || specAutoAnalyzeLoading) return;
+    setSpecAutoAnalyzeLoading(true);
+    setSpecAutoAnalyzeMessage("Сохраняю ТС в базу знаний и извлекаю услуги…");
+    setRagUploadError(null);
+    setRagUploadOk(null);
+    try {
+      const result = await autoExtractTenderSpecSummary(tender.id, { timeoutMs: 180_000 });
+      const summary = result.spec_summary && Object.keys(result.spec_summary).length > 0 ? result.spec_summary : null;
+      if (summary) {
+        setRagSpecSummary(summary);
+        if (result.extractedText) setRagExtractedOverride(result.extractedText);
+        saveTenderSpecCache(tender.id, {
+          extractedText: result.extractedText || displayTechnicalSpec || undefined,
+          specSummary: summary,
+          uploadStatus: "ТС сохранена в базу знаний",
+        });
+        setRagUploadOk("ТС сохранена в базу знаний, услуги извлечены.");
+      } else {
+        setRagUploadOk("ТС обработана и сохранена, но услуги не выделены автоматически.");
+      }
+    } catch (err: unknown) {
+      setRagUploadError(specAutoErrorMessage(err instanceof Error ? err.message : String(err)));
+    } finally {
+      setSpecAutoAnalyzeMessage(null);
+      setSpecAutoAnalyzeLoading(false);
+    }
+  }
+
+  const handleDecision = async (status: "participating" | "rejected" | "assignment_requested") => {
     if (!tender) return;
     setActionLoading(status);
     try {
+      const currentUser = getCurrentUser();
+      const currentName = currentUser?.name || currentUser?.email || "";
       const deadline = tender.endDate
         ? new Date(tender.endDate).toISOString()
         : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
       const payload = {
         id: tender.id,
+        external_id: tender.lot_source_id || "",
+        source: tender.source || "tenderplus",
         title: tender.title || "Без названия",
         description: tender.description || "",
         amount: tender.cost || 0,
@@ -500,6 +607,9 @@ function TenderDetail() {
         purchase_type: tender.purchaseType || "—",
         organizer_name: tenderCompanyName(tender),
         partner_link: tender.partnerLink || "",
+        reviewer: status === "assignment_requested" ? currentName : "",
+        assigned_to: status === "participating" ? currentName : "",
+        comment: status === "assignment_requested" ? "Специалист запросил возможность взять тендер в работу" : "",
       };
 
       const res = await fetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
@@ -510,10 +620,16 @@ function TenderDetail() {
       if (!res.ok) throw new Error("Ошибка при сохранении");
 
       const title = blockText(tender.title).slice(0, 60);
-      markTenderDecision(tender.id, status);
+      if (status !== "assignment_requested") {
+        markTenderDecision(tender.id, status);
+      }
       if (status === "participating") {
+        void autoExtractTenderSpecSummary(tender.id, { timeoutMs: 180_000 }).catch(() => {});
         pushNotification("success", "Участвуем", `Тендер «${title}» добавлен в заявки.`, "/bids");
         navigate({ to: "/bids" });
+      } else if (status === "assignment_requested") {
+        pushNotification("info", "Запрос отправлен", `Запрос по тендеру «${title}» ушёл директору.`, "/cabinet");
+        navigate({ to: "/cabinet" });
       } else {
         pushNotification("info", "Не подходит", `Тендер «${title}» отклонён.`);
         navigate({ to: "/tenders", search: { page: returnPage } });
@@ -526,15 +642,16 @@ function TenderDetail() {
   };
 
   const pickedSpecDocument = tender ? pickTenderDocumentForRag(tender.documents) : null;
-  const specServices = getSpecServices(ragSpecSummary);
-  const serviceQuery = sanitizeApiText(serviceSearch).toLowerCase();
-  const filteredSpecServices = serviceQuery
-    ? specServices.filter((service) => serviceSearchText(service).includes(serviceQuery))
-    : specServices;
-
   const statusInfo = tender ? getTenderStatus(tender.endDate) : null;
   const companyName = tender ? tenderCompanyName(tender) : "";
   const sourceLabel = tender ? tenderSourceLabel(tender) : "";
+  const summaryServices = getSpecServices(ragSpecSummary);
+  const requiredServiceNames = mergeServiceNames(
+    tender?.requiredServices ?? [],
+    summaryServices.map((service) => service.name),
+  );
+  const currentUser = getCurrentUser();
+  const canRequestAssignment = currentUser?.role === "tender_specialist";
 
   return (
     <>
@@ -567,6 +684,52 @@ function TenderDetail() {
 
         {tender && (
           <div className="space-y-4">
+
+            {/* ТС и база знаний */}
+            <div className="rounded-xl border border-primary/20 bg-primary/5 p-5" style={{ boxShadow: "var(--shadow-sm)" }}>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div className="min-w-0">
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-primary">Техническая спецификация</p>
+                  <h3 className="text-base font-semibold text-foreground">ТС и база знаний</h3>
+                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                    {pickedSpecDocument
+                      ? `Найден документ: ${blockText(pickedSpecDocument.name)}`
+                      : "ТС в документах не найдена. Проверьте список файлов справа."}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDownloadOriginalSpec}
+                    disabled={!pickedSpecDocument || specDownloadLoading}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+                  >
+                    <Download className="h-4 w-4" />
+                    {specDownloadLoading ? "Скачивание…" : "Скачать ТС"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveSpecToKnowledgeBase}
+                    disabled={specAutoAnalyzeLoading || !tender.documents?.length}
+                    className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                  >
+                    {specAutoAnalyzeLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+                    Сохранить в базу знаний
+                  </button>
+                </div>
+              </div>
+              {(ragUploadOk || ragUploadError || specAutoAnalyzeMessage) && (
+                <div className="mt-3 rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                  {specAutoAnalyzeMessage ? (
+                    <span className="text-muted-foreground">{specAutoAnalyzeMessage}</span>
+                  ) : ragUploadError ? (
+                    <span className="text-amber-800">{ragUploadError}</span>
+                  ) : (
+                    <span className="text-muted-foreground">{ragUploadOk}</span>
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* Блок решения об участии */}
             <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: "var(--shadow-sm)" }}>
@@ -615,6 +778,16 @@ function TenderDetail() {
                   <ThumbsDown className="h-4 w-4" />
                   {actionLoading === "rejected" ? "Сохранение…" : "Не подходит"}
                 </button>
+                {canRequestAssignment && (
+                  <button
+                    onClick={() => handleDecision("assignment_requested")}
+                    disabled={actionLoading !== null}
+                    className="inline-flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-5 py-2.5 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-50"
+                  >
+                    <Send className="h-4 w-4" />
+                    {actionLoading === "assignment_requested" ? "Отправка…" : "Запросить взять в работу"}
+                  </button>
+                )}
                 <a
                   href={tender.partnerLink}
                   target="_blank"
@@ -625,6 +798,8 @@ function TenderDetail() {
                 </a>
               </div>
             </div>
+
+            <TenderWorkspacePanel lotId={tender.id} />
 
             {/* Основной блок: Описание + Детали */}
             <div className="grid gap-4 lg:grid-cols-3">
@@ -724,155 +899,38 @@ function TenderDetail() {
                   </div>
                   <div className="px-4 py-3">
                     {tender.documents && tender.documents.length > 0 ? (
-                      <ul className="space-y-1">
+                      <ul className="space-y-2">
                         {tender.documents.map((doc, i) => (
                           <li key={`${doc.downloadLink}-${i}`}>
                             <a
                               href={doc.downloadLink}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition hover:bg-muted/60"
+                              download
+                              className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 text-sm transition hover:border-primary/30 hover:bg-muted/40"
                             >
-                              <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                              <FileText className="h-4 w-4 shrink-0 text-primary" />
                               <span className="min-w-0 flex-1 truncate font-medium text-primary hover:underline">
                                 {blockText(doc.name)}
                               </span>
-                              <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                              <span className="hidden rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground sm:inline-flex">
+                                DIRECT
+                              </span>
+                              <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                             </a>
                           </li>
                         ))}
                       </ul>
                     ) : (
-                      <p className="py-2 text-sm text-muted-foreground">Файлов нет.</p>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
-              <div className="flex flex-col gap-3 border-b border-border px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                    <FileText className="h-4 w-4 text-primary" /> Услуги из ТС
-                  </h3>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Groq читает техническую спецификацию и выделяет отдельные услуги/работы для быстрой оценки лота.
-                  </p>
-                </div>
-                <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                  {specServices.length} услуг
-                </span>
-              </div>
-              <div className="space-y-4 px-6 py-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-                  <input
-                    type="search"
-                    value={serviceSearch}
-                    onChange={(e) => setServiceSearch(e.target.value)}
-                    placeholder="Поиск по услугам..."
-                    className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition focus:border-primary"
-                  />
-                </div>
-                {specAutoAnalyzeLoading && (
-                  <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Sparkles className="h-4 w-4 animate-spin" />
-                    {specAutoAnalyzeMessage || "Автоматический разбор ТС…"}
-                  </p>
-                )}
-
-                {ragSpecSummary?.overview && (
-                  <p className="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
-                    {sanitizeApiText(String(ragSpecSummary.overview))}
-                  </p>
-                )}
-
-                {filteredSpecServices.length > 0 ? (
-                  <div className="flex flex-wrap gap-2">
-                    {filteredSpecServices.map((service, index) => {
-                      const details = [
-                        service.category,
-                        service.quantity,
-                        ...(service.requirements ?? []),
-                        service.evidence,
-                      ].filter(Boolean).join(" · ");
-                      return (
-                        <span
-                          key={`${service.name}-${index}`}
-                          title={details || service.name}
-                          className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700"
-                        >
-                          <span className="truncate">{service.name}</span>
-                          {service.quantity && (
-                            <span className="rounded-full bg-white/80 px-1.5 py-0.5 text-[10px] text-blue-600">
-                              {service.quantity}
-                            </span>
-                          )}
-                        </span>
-                      );
-                    })}
-                  </div>
-                ) : specServices.length > 0 ? (
-                  <p className="text-sm text-muted-foreground">По этому запросу услуги не найдены.</p>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    {specAutoAnalyzeLoading
-                      ? specAutoAnalyzeMessage || "Автоматический разбор ТС…"
-                      : "Услуги ещё не извлечены. Если у лота есть PDF/DOCX ТС, анализ запустится автоматически при открытии страницы."}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {/* AI Анализ */}
-            <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
-              <div className="border-b border-border px-6 py-4">
-                <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                  <Sparkles className="h-4 w-4 text-primary" /> AI Анализ
-                </h3>
-              </div>
-              <div className="px-6 py-4">
-                <div className="mb-4">
-                  <button
-                    type="button"
-                    onClick={handleLotAnalyze}
-                    disabled={lotAnalysisLoading || Boolean(lotAnalysis)}
-                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-                  >
-                    <Sparkles className="h-4 w-4" />
-                    {lotAnalysisLoading ? "Анализирую…" : lotAnalysis ? "Анализ выполнен" : "Запустить AI-анализ"}
-                  </button>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Запрос к AI выполняется только вручную. Повторный одинаковый результат может вернуться из локального кэша без расхода лимита.
-                  </p>
-                </div>
-                {lotAnalysisLoading ? (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted border-t-primary" />
-                    Анализирую…
-                  </div>
-                ) : lotAnalysis ? (
-                  <LotAnalysisCard analysis={lotAnalysis} />
-                ) : lotAnalysisError ? (
-                  <div className="space-y-3">
-                    <p className="text-sm text-destructive">{lotAnalysisError}</p>
-                    {specText(tender.ai_analysis) && (
-                      <div className="max-h-[min(24rem,50vh)] overflow-y-auto rounded-lg border border-border bg-muted/30 px-4 py-3">
-                        <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-foreground">
-                          {specText(tender.ai_analysis)}
-                        </pre>
+                      <div className="space-y-1 py-2">
+                        <p className="text-sm text-muted-foreground">Файлов нет.</p>
+                        {tender.documentsDebug && (
+                          <p className="text-xs text-amber-700">{tender.documentsDebug}</p>
+                        )}
                       </div>
                     )}
                   </div>
-                ) : specText(tender.ai_analysis) ? (
-                  <div className="max-h-[min(32rem,70vh)] overflow-y-auto rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
-                    <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-foreground">
-                      {specText(tender.ai_analysis)}
-                    </pre>
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">Ответ анализа пуст или RAG-сервис недоступен.</p>
-                )}
+                </div>
               </div>
             </div>
 
@@ -943,21 +1001,35 @@ function TenderDetail() {
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    Похожих выполненных заказов пока не найдено. Они появятся после заполнения истории в аналитике.
+                    Похожих выполненных заказов пока не найдено. Они появятся после накопления истории выполненных заказов.
                   </p>
                 )}
               </div>
             </div>
 
-            {/* Техническая спецификация / RAG */}
-            <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
-              <div className="border-b border-border px-6 py-4">
-                <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Техническая спецификация</h3>
-                <p className="mt-1 text-xs text-muted-foreground">
-                    Документы приходят из TenderPlus API; RAG индексирует ТС и сохраняет AI-выжимку услуг.
-                </p>
+            {/* Услуги по ТС */}
+            <div className="overflow-hidden rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
+              <div className="border-b border-border bg-muted/20 px-6 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <Sparkles className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Услуги по ТС</h3>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        AI извлекает из документа именно те услуги и требования, которые закупаются в этом лоте.
+                      </p>
+                    </div>
+                  </div>
+                  {requiredServiceNames.length > 0 && (
+                    <span className="rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+                      {requiredServiceNames.length} услуг
+                    </span>
+                  )}
+                </div>
               </div>
-              <div className="px-6 py-4 space-y-4">
+              <div className="space-y-4 px-6 py-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
@@ -971,45 +1043,110 @@ function TenderDetail() {
                   {displayTechnicalSpec && (
                     <button
                       type="button"
-                      onClick={() => downloadTextFile(`tender-${tender.id}-technical-specification.txt`, displayTechnicalSpec)}
+                      onClick={() => downloadTextFile(`tender-${tender.id}-spec-text.txt`, displayTechnicalSpec)}
                       className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
                     >
-                      <Download className="h-4 w-4" /> Скачать текст
+                      <Download className="h-4 w-4" /> Скачать извлечённый текст
                     </button>
                   )}
                 </div>
                 {pickedSpecDocument && (
-                  <p className="text-xs text-muted-foreground">
-                    Найден файл ТС: <span className="font-medium text-foreground">{blockText(pickedSpecDocument.name)}</span>
-                  </p>
+                  <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+                    <FileText className="h-4 w-4 text-primary" />
+                    <span>Документ:</span>
+                    <span className="font-medium text-foreground">{blockText(pickedSpecDocument.name)}</span>
+                  </div>
                 )}
-                {ragUploadError && <p className="text-sm text-destructive">{ragUploadError}</p>}
+                {ragUploadError && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    {ragUploadError}
+                  </div>
+                )}
                 {ragUploadOk && <p className="text-sm text-muted-foreground">{ragUploadOk}</p>}
-
-                {ragSpecSummary && Object.keys(ragSpecSummary).length > 0 && (
-                  <div>
-                    <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Выжимка ТЗ (RAG)</h4>
-                    <div className="max-h-80 overflow-y-auto rounded-lg border border-border bg-muted/20 px-4 py-3">
-                      <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground">
-                        {JSON.stringify(ragSpecSummary, null, 2)}
-                      </pre>
+                {specAutoAnalyzeLoading && (
+                  <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">AI разбирает ТС и извлекает услуги</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {specAutoAnalyzeMessage || "Анализирую документ лота…"}
+                        </p>
+                      </div>
                     </div>
                   </div>
                 )}
 
-                {displayTechnicalSpec ? (
-                  <div>
-                    <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Извлечённый текст</h4>
-                    <div className="max-h-[min(32rem,70vh)] overflow-y-auto rounded-lg border border-border bg-muted/20 px-4 py-3">
-                      <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-foreground">
-                        {displayTechnicalSpec}
-                      </pre>
-                    </div>
+                {requiredServiceNames.length > 0 || summaryServices.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {requiredServiceNames.map((name) => {
+                      const service = summaryServices.find((item) => item.name.toLowerCase() === name.toLowerCase());
+                      return (
+                        <span
+                          key={name}
+                          title={serviceSearchText(service || { name }) || name}
+                          className="inline-flex max-w-full items-center rounded-md border border-primary/25 bg-primary/5 px-3 py-1.5 text-xs font-medium leading-5 text-primary"
+                        >
+                          <span className="truncate">{name}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                ) : specAutoAnalyzeLoading ? null : (
+                  <p className="text-sm text-muted-foreground">
+                    AI-разбор ТС запускается автоматически при открытии лота. Если услуги не появились, попробуйте обновить страницу или скачать документ вручную.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* AI Анализ */}
+            <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
+              <div className="border-b border-border px-6 py-4">
+                <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                  <Sparkles className="h-4 w-4 text-primary" /> AI Анализ
+                </h3>
+              </div>
+              <div className="px-6 py-4">
+                <div className="mb-4">
+                  <button
+                    type="button"
+                    onClick={handleLotAnalyze}
+                    disabled={lotAnalysisLoading || Boolean(lotAnalysis)}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    {lotAnalysisLoading ? "Анализирую…" : lotAnalysis ? "Анализ выполнен" : "Запустить AI-анализ"}
+                  </button>
+                </div>
+                {lotAnalysisLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted border-t-primary" />
+                    Анализирую…
+                  </div>
+                ) : lotAnalysis ? (
+                  <LotAnalysisCard analysis={lotAnalysis} />
+                ) : lotAnalysisError ? (
+                  <div className="space-y-3">
+                    <p className="text-sm text-destructive">{lotAnalysisError}</p>
+                    {specText(tender.ai_analysis) && (
+                      <div className="max-h-[min(24rem,50vh)] overflow-y-auto rounded-lg border border-border bg-muted/30 px-4 py-3">
+                        <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-foreground">
+                          {specText(tender.ai_analysis)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                ) : specText(tender.ai_analysis) ? (
+                  <div className="max-h-[min(32rem,70vh)] overflow-y-auto rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
+                    <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-foreground">
+                      {specText(tender.ai_analysis)}
+                    </pre>
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">
-                      Текст ТС не хранится в браузере. RAG индексирует документ из TenderPlus и сохраняет структурированную выжимку услуг.
-                  </p>
+                  <p className="text-sm text-muted-foreground">Ответ анализа пуст или AI-сервис недоступен.</p>
                 )}
               </div>
             </div>
@@ -1017,6 +1154,269 @@ function TenderDetail() {
           </div>
         )}
       </div>
+      {tender && (
+        <TenderAssistantChat
+          tenderId={tender.id}
+          tenderTitle={blockText(tender.title)}
+          documents={tender.documents ?? []}
+          requiredServices={tender.requiredServices ?? []}
+        />
+      )}
     </>
   );
+}
+
+function TenderWorkspacePanel({ lotId }: { lotId: number }) {
+  const [tasks, setTasks] = useState<TenderTask[]>([]);
+  const [comments, setComments] = useState<TenderComment[]>([]);
+  const [activity, setActivity] = useState<TenderActivity[]>([]);
+  const [taskTitle, setTaskTitle] = useState("");
+  const [commentText, setCommentText] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<"task" | "comment" | "task-toggle" | null>(null);
+  const currentUser = getCurrentUser();
+  const currentName = currentUser?.name || currentUser?.email || "Пользователь";
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [nextTasks, nextComments, nextActivity] = await Promise.all([
+        fetchTenderTasks(lotId).catch(() => []),
+        fetchTenderComments(lotId).catch(() => []),
+        fetchTenderActivity(lotId).catch(() => []),
+      ]);
+      setTasks(nextTasks);
+      setComments(nextComments);
+      setActivity(nextActivity);
+    } finally {
+      setLoading(false);
+    }
+  }, [lotId]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  const addTask = async () => {
+    const title = taskTitle.trim();
+    if (!title) return;
+    setSaving("task");
+    try {
+      const created = await createTenderTask(lotId, {
+        title,
+        assignee: currentName,
+        priority: "normal",
+      });
+      setTasks((items) => [created, ...items]);
+      setTaskTitle("");
+      const nextActivity = await fetchTenderActivity(lotId).catch(() => activity);
+      setActivity(nextActivity);
+    } catch (err) {
+      pushNotification("error", "Задача не сохранена", err instanceof Error ? err.message : "Ошибка сохранения задачи");
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const addComment = async () => {
+    const body = commentText.trim();
+    if (!body) return;
+    setSaving("comment");
+    try {
+      const created = await createTenderComment(lotId, { author: currentName, body });
+      setComments((items) => [created, ...items]);
+      setCommentText("");
+      const nextActivity = await fetchTenderActivity(lotId).catch(() => activity);
+      setActivity(nextActivity);
+    } catch (err) {
+      pushNotification("error", "Комментарий не сохранен", err instanceof Error ? err.message : "Ошибка сохранения комментария");
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const toggleTask = async (task: TenderTask) => {
+    setSaving("task-toggle");
+    try {
+      const nextStatus = task.status === "done" ? "open" : "done";
+      const updated = await updateTenderTask(lotId, task.id, { status: nextStatus });
+      setTasks((items) => items.map((item) => item.id === task.id ? updated : item));
+      const nextActivity = await fetchTenderActivity(lotId).catch(() => activity);
+      setActivity(nextActivity);
+    } catch (err) {
+      pushNotification("error", "Задача не обновлена", err instanceof Error ? err.message : "Ошибка обновления задачи");
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const openTasks = tasks.filter((task) => task.status !== "done").length;
+
+  return (
+    <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
+      <div className="border-b border-border px-6 py-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Рабочий блок</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Задачи, комментарии и история действий по этому тендеру.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="rounded-full bg-muted px-2.5 py-1 text-muted-foreground">{openTasks} открытых задач</span>
+            <span className="rounded-full bg-muted px-2.5 py-1 text-muted-foreground">{comments.length} комментариев</span>
+          </div>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="px-6 py-10 text-sm text-muted-foreground">Загружаю рабочий контекст...</div>
+      ) : (
+        <div className="grid gap-4 p-6 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.8fr)]">
+          <section className="space-y-4">
+            <div className="flex items-center gap-2">
+              <ListTodo className="h-4 w-4 text-primary" />
+              <h4 className="text-sm font-semibold">Чеклист подготовки</h4>
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={taskTitle}
+                onChange={(event) => setTaskTitle(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void addTask();
+                }}
+                placeholder="Например: проверить сертификаты и сроки поставки"
+                className="h-10 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-primary"
+              />
+              <button
+                onClick={addTask}
+                disabled={saving === "task" || !taskTitle.trim()}
+                className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+              >
+                <Plus className="h-4 w-4" />
+                Добавить
+              </button>
+            </div>
+            <div className="space-y-2">
+              {tasks.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground">
+                  Задач пока нет
+                </div>
+              ) : tasks.map((task) => (
+                <button
+                  key={task.id}
+                  onClick={() => void toggleTask(task)}
+                  disabled={saving === "task-toggle"}
+                  className={`flex w-full items-start gap-3 rounded-lg border px-3 py-3 text-left transition hover:bg-muted/30 disabled:opacity-60 ${
+                    task.status === "done" ? "border-green-200 bg-green-50/60" : "border-border bg-background"
+                  }`}
+                >
+                  {task.status === "done"
+                    ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
+                    : <Circle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
+                  <span className="min-w-0 flex-1">
+                    <span className={`block text-sm font-medium ${task.status === "done" ? "text-green-800 line-through" : "text-foreground"}`}>
+                      {task.title}
+                    </span>
+                    <span className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                      {task.assignee && <span>Ответственный: {task.assignee}</span>}
+                      {task.due_date && <span>Срок: {formatShortDate(task.due_date)}</span>}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="space-y-4">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-primary" />
+              <h4 className="text-sm font-semibold">Комментарии</h4>
+            </div>
+            <textarea
+              value={commentText}
+              onChange={(event) => setCommentText(event.target.value)}
+              placeholder="Оставьте заметку для команды..."
+              className="min-h-[92px] w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+            />
+            <button
+              onClick={addComment}
+              disabled={saving === "comment" || !commentText.trim()}
+              className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              <Send className="h-4 w-4" />
+              Отправить
+            </button>
+            <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+              {comments.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground">
+                  Комментариев пока нет
+                </div>
+              ) : comments.map((comment) => (
+                <div key={comment.id} className="rounded-lg border border-border bg-background p-3">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-foreground">{comment.author || "Пользователь"}</span>
+                    <span className="text-[11px] text-muted-foreground">{formatShortDateTime(comment.created_at)}</span>
+                  </div>
+                  <p className="text-sm leading-5 text-muted-foreground">{comment.body}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="xl:col-span-2">
+            <div className="mb-3 flex items-center gap-2">
+              <History className="h-4 w-4 text-primary" />
+              <h4 className="text-sm font-semibold">История действий</h4>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+              {activity.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground">
+                  История появится после первого действия
+                </div>
+              ) : activity.slice(0, 9).map((item) => (
+                <div key={item.id} className="rounded-lg border border-border bg-background p-3">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                      {activityLabel(item.action, item.status)}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">{formatShortDateTime(item.created_at)}</span>
+                  </div>
+                  {item.message && <p className="line-clamp-2 text-sm text-foreground">{item.message}</p>}
+                  {item.actor && <p className="mt-1 text-[11px] text-muted-foreground">Автор: {item.actor}</p>}
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatShortDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+}
+
+function formatShortDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function activityLabel(action: string, status?: string): string {
+  switch (action) {
+    case "status_changed":
+      return status ? `Статус: ${savedLotStatusLabels[status] || status}` : "Статус изменен";
+    case "comment_added":
+      return "Комментарий";
+    case "task_created":
+      return "Задача создана";
+    case "task_updated":
+      return "Задача обновлена";
+    default:
+      return action || "Действие";
+  }
 }

@@ -49,6 +49,46 @@ Production compose поднимает frontend, backend, tender-rag и две Po
 
 Telegram-уведомления отправляются только для новых подходящих лотов. Bot token и chat id храните в `.env`/секретах, не записывайте их в README и не отправляйте в чат.
 
+### Deploy через GitHub Actions и GHCR
+
+Для production на VPS есть быстрый сценарий: GitHub Actions собирает Docker-образы, публикует их в GitHub Container Registry, а сервер только скачивает готовые образы и перезапускает сервисы без локальной сборки.
+
+Workflow: `.github/workflows/deploy-vps-ghcr.yml`.
+
+Нужно добавить GitHub Secrets:
+
+```text
+VPS_HOST=85.116.182.35
+VPS_USER=cloud-user
+VPS_SSH_KEY=<private SSH key with access to the VPS>
+```
+
+И GitHub Variables:
+
+```text
+PUBLIC_BACKEND_URL=http://85.116.182.35:8082
+PUBLIC_RAG_URL=http://85.116.182.35:8083
+```
+
+Пароль от VPS в GitHub не кладите. Создайте отдельный SSH-ключ для деплоя и добавьте публичную часть в `~/.ssh/authorized_keys` пользователя `cloud-user` на сервере.
+
+Пример:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/tender_github_actions -C "github-actions-tender"
+ssh-copy-id -i ~/.ssh/tender_github_actions.pub cloud-user@85.116.182.35
+```
+
+После push в `main`/`master` workflow:
+
+1. Запускает тесты backend и проверку Python-синтаксиса.
+2. Собирает образы `backend`, `parser`, `rag-api`, `frontend` в GHCR.
+3. Копирует на VPS только compose-файлы и `scripts/deploy_ghcr_vm.sh`.
+4. Выполняет `docker-compose pull` и `up --no-build`.
+5. Проверяет `/health` backend и RAG.
+
+Старый Azure workflow оставлен, но переведён в ручной запуск, чтобы push не запускал два разных production-деплоя одновременно.
+
 Проверки:
 
 ```bash

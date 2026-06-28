@@ -14,6 +14,7 @@ func NewRouter(h *Handler, allowedOrigins []string) http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Logger)
+	r.Use(middleware.Compress(5, "application/json", "text/plain"))
 
 	r.Use(cors.New(cors.Options{
 		AllowedOrigins:   allowedOrigins,
@@ -27,7 +28,10 @@ func NewRouter(h *Handler, allowedOrigins []string) http.Handler {
 	r.Route("/api/v1", func(s chi.Router) {
 		s.Get("/tenders", h.ListTenders)
 		s.Get("/tenders/{tenderId}", h.GetTender)
+		s.Post("/tenders/{tenderId}/spec-summary/auto", h.AutoExtractTenderSpecSummary)
+		s.Post("/tenders/{tenderId}/cloudy/chat", h.CloudyChat)
 		s.Delete("/tenders/{tenderId}/suitable", h.RemoveTenderFromSuitable)
+		s.Get("/notifications", h.ListNotifications)
 		s.Get("/dictionaries", h.ListDictionaries)
 		s.Post("/dictionaries", h.CreateDictionaryItem)
 		s.Get("/dictionaries/{id}", h.GetDictionaryItem)

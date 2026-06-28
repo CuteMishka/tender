@@ -1,0 +1,526 @@
+from collections.abc import Iterable
+from dataclasses import asdict
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any
+
+from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, Text, UniqueConstraint, create_engine, delete, select
+from sqlalchemy.dialects.postgresql import JSONB, insert
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+
+from tender_parser.fingerprints import stable_json_hash
+from tender_parser.schemas import TenderDocument, TenderLot
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class ParserKeyword(Base):
+    __tablename__ = "parser_keywords"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    value: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class ParserLot(Base):
+    __tablename__ = "parser_lots"
+    __table_args__ = (UniqueConstraint("source", "external_id", name="parser_lots_source_external_id_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    stable_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    external_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    end_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    place: Mapped[str | None] = mapped_column(Text)
+    customer_name: Mapped[str | None] = mapped_column(Text)
+    organizer_name: Mapped[str | None] = mapped_column(Text)
+    purchase_type: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(64), default="active", nullable=False, index=True)
+    complaints_count: Mapped[int | None] = mapped_column(Integer)
+    winner_bin: Mapped[str | None] = mapped_column(String(32), index=True)
+    winner_name: Mapped[str | None] = mapped_column(Text)
+    is_suitable: Mapped[bool | None] = mapped_column(Boolean)
+    matched_keyword: Mapped[str | None] = mapped_column(Text)
+    match_score: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))
+    ai_score: Mapped[int | None] = mapped_column(Integer)
+    ai_status: Mapped[str | None] = mapped_column(String(64))
+    ai_provider: Mapped[str | None] = mapped_column(String(64))
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    documents_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class ParserDocument(Base):
+    __tablename__ = "parser_documents"
+    __table_args__ = (UniqueConstraint("lot_stable_id", "url", name="parser_documents_lot_url_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lot_stable_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(64), default="document", nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String(255))
+    sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    local_path: Mapped[str | None] = mapped_column(Text)
+    text_chars: Mapped[int | None] = mapped_column(Integer)
+    rag_indexed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class ParserNotification(Base):
+    __tablename__ = "parser_notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lot_stable_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    type: Mapped[str] = mapped_column(String(32), default="info", nullable=False)
+    category: Mapped[str] = mapped_column(String(64), default="updates", nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class ParserRun(Base):
+    __tablename__ = "parser_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(32), default="running", nullable=False)
+    platforms: Mapped[list[str] | None] = mapped_column(JSONB)
+    keywords: Mapped[list[str] | None] = mapped_column(JSONB)
+    lots_found: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lots_changed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    errors: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+
+
+class ParserRunRequest(Base):
+    __tablename__ = "parser_run_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    requested_by: Mapped[str] = mapped_column(String(255), default="admin", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    message: Mapped[str | None] = mapped_column(Text)
+
+
+class TelegramSettings(Base):
+    __tablename__ = "telegram_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    bot_token: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    chat_id: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class UserTelegramBinding(Base):
+    __tablename__ = "user_telegram_bindings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    chat_id: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    username: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class Database:
+    def __init__(self, url: str) -> None:
+        self.engine = create_engine(url, pool_pre_ping=True)
+        self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False)
+
+    def create_schema(self) -> None:
+        Base.metadata.create_all(self.engine)
+
+    def session(self) -> Session:
+        return self.SessionLocal()
+
+    def seed_keywords(self, keywords: Iterable[str]) -> None:
+        with self.session() as session:
+            for value in keywords:
+                normalized = value.strip()
+                if not normalized:
+                    continue
+                stmt = insert(ParserKeyword).values(value=normalized, active=True).on_conflict_do_nothing(index_elements=["value"])
+                session.execute(stmt)
+            session.commit()
+
+    def load_keywords(self, fallback: list[str]) -> list[str]:
+        with self.session() as session:
+            rows = list(session.scalars(select(ParserKeyword.value).where(ParserKeyword.active.is_(True)).order_by(ParserKeyword.value.asc())))
+        if rows:
+            return rows
+        self.seed_keywords(fallback)
+        return fallback
+
+    def clear_lot_data(self) -> None:
+        with self.session() as session:
+            session.execute(delete(ParserDocument))
+            session.execute(delete(ParserNotification).where(ParserNotification.lot_stable_id.is_not(None)))
+            session.execute(delete(ParserLot))
+            session.commit()
+
+    def load_existing_lots_for_ai(self, limit: int = 0) -> list[TenderLot]:
+        stmt = select(ParserLot).order_by(ParserLot.updated_at.desc(), ParserLot.id.desc())
+        if limit > 0:
+            stmt = stmt.limit(limit)
+        with self.session() as session:
+            rows = list(session.scalars(stmt))
+        return [self._row_to_lot(row) for row in rows]
+
+    def update_lot_raw(self, lot: TenderLot) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session() as session:
+            row = session.scalar(select(ParserLot).where(ParserLot.stable_id == lot.stable_id).limit(1))
+            if row is None:
+                return
+            row.raw = lot.raw
+            row.is_suitable = self._bool_or_none(lot.raw.get("is_suitable"))
+            row.matched_keyword = self._str_or_none(lot.raw.get("matched_keyword"))
+            row.match_score = self._decimal_or_none(lot.raw.get("match_score"))
+            row.ai_score = self._int_or_none(lot.raw.get("ai_score"))
+            row.ai_status = self._str_or_none(lot.raw.get("ai_filter_status"))
+            row.ai_provider = self._str_or_none(lot.raw.get("ai_provider"))
+            row.updated_at = now
+            session.commit()
+
+    def load_lot_raw(self, stable_id: str) -> dict[str, Any]:
+        with self.session() as session:
+            raw = session.scalar(select(ParserLot.raw).where(ParserLot.stable_id == stable_id).limit(1))
+        return raw if isinstance(raw, dict) else {}
+
+    def start_run(self, platforms: list[str], keywords: list[str]) -> int:
+        with self.session() as session:
+            run = ParserRun(platforms=platforms, keywords=keywords)
+            session.add(run)
+            session.commit()
+            return run.id
+
+    def finish_run(self, run_id: int, status: str, lots_found: int, lots_changed: int, errors: list[dict[str, Any]]) -> None:
+        with self.session() as session:
+            run = session.get(ParserRun, run_id)
+            if run is None:
+                return
+            run.status = status
+            run.finished_at = datetime.now(timezone.utc)
+            run.lots_found = lots_found
+            run.lots_changed = lots_changed
+            run.errors = errors
+            session.commit()
+
+    def claim_run_request(self) -> dict[str, Any] | None:
+        now = datetime.now(timezone.utc)
+        with self.session() as session:
+            request = session.scalar(
+                select(ParserRunRequest)
+                .where(ParserRunRequest.status == "pending")
+                .order_by(ParserRunRequest.requested_at.asc())
+                .with_for_update(skip_locked=True)
+                .limit(1)
+            )
+            if request is None:
+                return None
+            request.status = "running"
+            request.started_at = now
+            session.commit()
+            mode, limit, message = self.parse_run_request_message(request.message)
+            return {
+                "id": request.id,
+                "mode": mode,
+                "limit": limit,
+                "message": message,
+            }
+
+    def finish_run_request(self, request_id: int, status: str, message: str = "") -> None:
+        with self.session() as session:
+            request = session.get(ParserRunRequest, request_id)
+            if request is None:
+                return
+            request.status = status
+            request.finished_at = datetime.now(timezone.utc)
+            request.message = message
+            session.commit()
+
+    @staticmethod
+    def build_run_request_message(mode: str, limit: int, message: str) -> str:
+        normalized_mode = (mode or "parse").strip().lower() or "parse"
+        normalized_limit = max(0, int(limit))
+        return f"[parser mode={normalized_mode} limit={normalized_limit}] {message.strip()}"
+
+    @staticmethod
+    def parse_run_request_message(message: str | None) -> tuple[str, int, str]:
+        text = (message or "").strip()
+        if not text.startswith("[parser "):
+            return "parse", 0, text
+        end = text.find("]")
+        if end <= 0:
+            return "parse", 0, text
+        meta = text[len("[parser ") : end]
+        display = text[end + 1 :].strip()
+        mode = "parse"
+        limit = 0
+        for item in meta.split():
+            key, _, value = item.partition("=")
+            key = key.strip().lower()
+            value = value.strip()
+            if key == "mode" and value:
+                mode = value.lower()
+            elif key == "limit":
+                try:
+                    limit = max(0, int(value))
+                except ValueError:
+                    limit = 0
+        return mode, limit, display
+
+    def lot_exists(self, stable_id: str) -> bool:
+        with self.session() as session:
+            return session.scalar(select(ParserLot.id).where(ParserLot.stable_id == stable_id).limit(1)) is not None
+
+    def filter_new_lots(self, lots: list[TenderLot], stop_at_first_seen: bool, max_lots: int) -> tuple[list[TenderLot], int]:
+        if not lots:
+            return [], 0
+        selected: list[TenderLot] = []
+        skipped_seen = 0
+        with self.session() as session:
+            for lot in lots:
+                exists = session.scalar(select(ParserLot.id).where(ParserLot.stable_id == lot.stable_id).limit(1)) is not None
+                if exists:
+                    skipped_seen += 1
+                    if stop_at_first_seen:
+                        break
+                    continue
+                selected.append(lot)
+                if max_lots > 0 and len(selected) >= max_lots:
+                    break
+        return selected, skipped_seen
+
+    def upsert_lot(self, lot: TenderLot) -> tuple[bool, list[str]]:
+        now = datetime.now(timezone.utc)
+        fingerprint = self._lot_fingerprint(lot)
+        docs_fingerprint = stable_json_hash({"documents": [asdict(doc) for doc in lot.documents]})
+        values = self._lot_values(lot, fingerprint, docs_fingerprint, now)
+        with self.session() as session:
+            existing = session.scalar(select(ParserLot).where(ParserLot.stable_id == lot.stable_id))
+            changes: list[str] = []
+            is_new = existing is None
+            if existing is not None:
+                if existing.fingerprint != fingerprint:
+                    changes.append("lot_fields")
+                if existing.documents_fingerprint != docs_fingerprint:
+                    changes.append("documents")
+                if existing.complaints_count != lot.complaints_count:
+                    changes.append("complaints")
+                if existing.winner_bin != lot.winner_bin and lot.winner_bin:
+                    changes.append("winner")
+            stmt = insert(ParserLot).values(**values).on_conflict_do_update(
+                constraint="parser_lots_source_external_id_key",
+                set_={
+                    "url": values["url"],
+                    "title": values["title"],
+                    "description": values["description"],
+                    "amount": values["amount"],
+                    "start_date": values["start_date"],
+                    "end_date": values["end_date"],
+                    "place": values["place"],
+                    "customer_name": values["customer_name"],
+                    "organizer_name": values["organizer_name"],
+                    "purchase_type": values["purchase_type"],
+                    "status": values["status"],
+                    "complaints_count": values["complaints_count"],
+                    "winner_bin": values["winner_bin"],
+                    "winner_name": values["winner_name"],
+                    "is_suitable": values["is_suitable"],
+                    "matched_keyword": values["matched_keyword"],
+                    "match_score": values["match_score"],
+                    "ai_score": values["ai_score"],
+                    "ai_status": values["ai_status"],
+                    "ai_provider": values["ai_provider"],
+                    "fingerprint": values["fingerprint"],
+                    "documents_fingerprint": values["documents_fingerprint"],
+                    "raw": values["raw"],
+                    "last_seen_at": now,
+                    "updated_at": now,
+                },
+            )
+            session.execute(stmt)
+            session.commit()
+            return is_new, changes
+
+    def upsert_document(self, lot: TenderLot, doc: TenderDocument, text_chars: int | None = None, rag_indexed: bool = False) -> None:
+        now = datetime.now(timezone.utc)
+        values = {
+            "lot_stable_id": lot.stable_id,
+            "name": doc.name,
+            "url": doc.url,
+            "kind": doc.kind,
+            "content_type": doc.content_type,
+            "sha256": doc.sha256,
+            "local_path": doc.local_path,
+            "text_chars": text_chars,
+            "rag_indexed": rag_indexed,
+            "updated_at": now,
+        }
+        with self.session() as session:
+            stmt = insert(ParserDocument).values(**values).on_conflict_do_update(
+                constraint="parser_documents_lot_url_key",
+                set_={**values, "updated_at": now},
+            )
+            session.execute(stmt)
+            session.commit()
+
+    def notify(self, lot_stable_id: str | None, type_: str, category: str, title: str, message: str, payload: dict[str, Any] | None = None) -> None:
+        with self.session() as session:
+            session.add(ParserNotification(lot_stable_id=lot_stable_id, type=type_, category=category, title=title, message=message, payload=payload))
+            session.commit()
+
+    def load_telegram_settings(self) -> tuple[str, str]:
+        with self.session() as session:
+            settings = session.get(TelegramSettings, 1)
+            if not settings or not settings.enabled:
+                return "", ""
+            return (settings.bot_token or "").strip(), (settings.chat_id or "").strip()
+
+    def load_user_telegram_chat_ids(self) -> list[str]:
+        with self.session() as session:
+            rows = list(session.scalars(select(UserTelegramBinding.chat_id).where(UserTelegramBinding.enabled.is_(True), UserTelegramBinding.chat_id != "").order_by(UserTelegramBinding.id.asc())))
+        seen: set[str] = set()
+        result: list[str] = []
+        for chat_id in rows:
+            normalized = (chat_id or "").strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                result.append(normalized)
+        return result
+
+    def _lot_fingerprint(self, lot: TenderLot) -> str:
+        return stable_json_hash({
+            "title": lot.title,
+            "description": lot.description,
+            "amount": str(lot.amount) if lot.amount is not None else None,
+            "start_date": lot.start_date,
+            "end_date": lot.end_date,
+            "place": lot.place,
+            "customer_name": lot.customer_name,
+            "organizer_name": lot.organizer_name,
+            "purchase_type": lot.purchase_type,
+            "status": lot.status,
+            "winner_bin": lot.winner_bin,
+            "winner_name": lot.winner_name,
+        })
+
+    def _lot_values(self, lot: TenderLot, fingerprint: str, docs_fingerprint: str, now: datetime) -> dict[str, Any]:
+        return {
+            "stable_id": lot.stable_id,
+            "source": lot.source,
+            "external_id": lot.external_id,
+            "url": lot.url,
+            "title": lot.title or lot.external_id,
+            "description": lot.description or "",
+            "amount": lot.amount,
+            "start_date": lot.start_date,
+            "end_date": lot.end_date,
+            "place": lot.place,
+            "customer_name": lot.customer_name,
+            "organizer_name": lot.organizer_name,
+            "purchase_type": lot.purchase_type,
+            "status": lot.status,
+            "complaints_count": lot.complaints_count,
+            "winner_bin": lot.winner_bin,
+            "winner_name": lot.winner_name,
+            "is_suitable": self._bool_or_none(lot.raw.get("is_suitable")),
+            "matched_keyword": self._str_or_none(lot.raw.get("matched_keyword")),
+            "match_score": self._decimal_or_none(lot.raw.get("match_score")),
+            "ai_score": self._int_or_none(lot.raw.get("ai_score")),
+            "ai_status": self._str_or_none(lot.raw.get("ai_filter_status")),
+            "ai_provider": self._str_or_none(lot.raw.get("ai_provider")),
+            "fingerprint": fingerprint,
+            "documents_fingerprint": docs_fingerprint,
+            "raw": lot.raw,
+            "last_seen_at": now,
+            "updated_at": now,
+        }
+
+    def _row_to_lot(self, row: ParserLot) -> TenderLot:
+        raw = dict(row.raw or {})
+        return TenderLot(
+            source=row.source,
+            external_id=row.external_id,
+            url=row.url,
+            title=row.title,
+            description=row.description or "",
+            amount=row.amount,
+            start_date=row.start_date,
+            end_date=row.end_date,
+            place=row.place,
+            customer_name=row.customer_name,
+            organizer_name=row.organizer_name,
+            purchase_type=row.purchase_type,
+            status=row.status,
+            complaints_count=row.complaints_count,
+            winner_bin=row.winner_bin,
+            winner_name=row.winner_name,
+            raw=raw,
+            documents=self._documents_from_raw(raw),
+        )
+
+    def _documents_from_raw(self, raw: dict[str, Any]) -> list[TenderDocument]:
+        values = raw.get("documents")
+        if not isinstance(values, list):
+            return []
+        docs: list[TenderDocument] = []
+        seen: set[str] = set()
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("downloadLink") or item.get("url") or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            name = str(item.get("name") or item.get("filename") or url.rsplit("/", 1)[-1] or "document").strip()
+            docs.append(TenderDocument(name=name, url=url))
+        return docs
+
+    @staticmethod
+    def _str_or_none(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
+    def _int_or_none(value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _decimal_or_none(value: Any) -> Decimal | None:
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _bool_or_none(value: Any) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        return None

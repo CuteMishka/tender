@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { getLocalApiBase } from "@/lib/tenders-api";
 
 export type NotificationType = "success" | "warning" | "error" | "info";
 export type NotificationCategory = "deadline" | "appeal" | "updates" | "mentions" | "review";
@@ -15,6 +16,7 @@ export interface AppNotification {
 }
 
 const STORAGE_KEY = "tender_notifications";
+const SERVER_SEEN_KEY = "tender_server_notifications_seen_id";
 const MAX_NOTIFICATIONS = 200;
 
 function loadFromStorage(): AppNotification[] {
@@ -32,7 +34,8 @@ function loadFromStorage(): AppNotification[] {
 
 function saveToStorage(items: AppNotification[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items.slice(0, MAX_NOTIFICATIONS)));
+    const sorted = [...items].sort((a, b) => b.timestamp - a.timestamp);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sorted.slice(0, MAX_NOTIFICATIONS)));
   } catch {
     /* ignore */
   }
@@ -40,6 +43,21 @@ function saveToStorage(items: AppNotification[]): void {
 
 // Глобальный стор уведомлений — подписчики через window-event
 const NOTIFY_EVENT = "tender_notify_update";
+
+type ServerNotification = {
+  id: number;
+  type: string;
+  category: string;
+  title: string;
+  message: string;
+  createdAt: string;
+  link?: string;
+};
+
+type ServerNotificationsResponse = {
+  items?: ServerNotification[];
+  meta?: { maxId?: number };
+};
 
 export function pushNotification(
   type: NotificationType,
@@ -62,6 +80,102 @@ export function pushNotification(
   const updated = [item, ...current].slice(0, MAX_NOTIFICATIONS);
   saveToStorage(updated);
   window.dispatchEvent(new CustomEvent(NOTIFY_EVENT));
+}
+
+function normalizeNotificationType(value: string): NotificationType {
+  return value === "success" || value === "warning" || value === "error" || value === "info" ? value : "info";
+}
+
+function normalizeNotificationCategory(value: string): NotificationCategory {
+  return value === "deadline" || value === "appeal" || value === "updates" || value === "mentions" || value === "review"
+    ? value
+    : "updates";
+}
+
+function readLastServerId(): number {
+  try {
+    const parsed = Number(localStorage.getItem(SERVER_SEEN_KEY) || "0");
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeLastServerId(value: number): void {
+  if (!Number.isFinite(value) || value <= 0) return;
+  try {
+    localStorage.setItem(SERVER_SEEN_KEY, String(Math.floor(value)));
+  } catch {
+    /* ignore */
+  }
+}
+
+function mergeServerNotifications(items: ServerNotification[], silent: boolean): void {
+  if (items.length === 0) return;
+  const current = loadFromStorage();
+  const existingIds = new Set(current.map((item) => item.id));
+  const additions: AppNotification[] = [];
+
+  for (const item of items) {
+    if (!Number.isFinite(item.id) || item.id <= 0) continue;
+    const id = `server:${item.id}`;
+    if (existingIds.has(id)) continue;
+    const timestamp = Date.parse(item.createdAt);
+    additions.push({
+      id,
+      type: normalizeNotificationType(item.type),
+      category: normalizeNotificationCategory(item.category),
+      title: item.title || "Уведомление",
+      message: item.message || "",
+      timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+      read: silent,
+      link: item.link && item.link.startsWith("/") ? item.link : undefined,
+    });
+  }
+
+  if (additions.length === 0) return;
+  saveToStorage([...additions, ...current]);
+  window.dispatchEvent(new CustomEvent(NOTIFY_EVENT));
+}
+
+async function syncServerNotifications(silent: boolean): Promise<void> {
+  const lastId = readLastServerId();
+  const params = new URLSearchParams({ limit: "50" });
+  if (lastId > 0) params.set("after", String(lastId));
+  const res = await fetch(`${getLocalApiBase()}/api/v1/notifications?${params.toString()}`);
+  if (!res.ok) return;
+  const body = (await res.json().catch(() => null)) as ServerNotificationsResponse | null;
+  const items = Array.isArray(body?.items) ? body.items : [];
+  mergeServerNotifications(items, silent);
+  const maxFromItems = items.reduce((max, item) => Math.max(max, Number(item.id) || 0), lastId);
+  const maxFromMeta = Number(body?.meta?.maxId) || 0;
+  writeLastServerId(Math.max(lastId, maxFromItems, maxFromMeta));
+}
+
+export function useServerNotificationsSync(enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    let firstSync = readLastServerId() === 0;
+
+    async function run() {
+      try {
+        await syncServerNotifications(firstSync);
+        firstSync = false;
+      } catch {
+        /* next poll will retry */
+      }
+    }
+
+    run();
+    const timer = window.setInterval(() => {
+      if (!cancelled) run();
+    }, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [enabled]);
 }
 
 export function useNotifications() {

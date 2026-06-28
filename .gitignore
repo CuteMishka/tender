@@ -5,3 +5,33 @@ TenderMachine.html
 пример лота.html
 Реестр лотов __ Портал государственных закупок Республики Казахстан.html
 goszakup.html
+project.tar.gz
+.cache/
+.codex_tmp/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+!.env.production.example
+!tenderflow-admin/.env.example
+!tender-rag/.env.example
+
+# Runtime/build/cache artifacts
+__pycache__/
+*.py[cod]
+.gocache/
+node_modules/
+.output/
+dist/
+*.log
+*.tar.gz
+*.zip
+*.bak-*
+*.bak
+*.tmp
+backend-server-ai-positive
+
+# Local tool state
+tenderflow-admin/.agents/
+tenderflow-admin/skills-lock.json

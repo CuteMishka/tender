@@ -174,7 +174,7 @@ func validateFetchURL(u *url.URL, hosts map[string]struct{}, pathPrefix string) 
 		return errFetchHostNotAllowed
 	}
 	host := strings.ToLower(u.Hostname())
-	if _, ok := hosts[host]; !ok {
+	if _, ok := hosts[host]; !ok && !hostSuffixAllowed(host, hosts) {
 		return errFetchHostNotAllowed
 	}
 	if pathPrefix != "" {
@@ -187,6 +187,19 @@ func validateFetchURL(u *url.URL, hosts map[string]struct{}, pathPrefix string) 
 		}
 	}
 	return nil
+}
+
+func hostSuffixAllowed(host string, hosts map[string]struct{}) bool {
+	for allowed := range hosts {
+		suffix := strings.TrimPrefix(strings.TrimPrefix(allowed, "*"), ".")
+		if suffix == "" || suffix == allowed {
+			continue
+		}
+		if host == suffix || strings.HasSuffix(host, "."+suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func logFetchDocumentReject(kind string, u *url.URL, cause error) {

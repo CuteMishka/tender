@@ -1,27 +1,22 @@
 import { Link, useNavigate, useLocation } from "@tanstack/react-router";
 import {
-  LayoutDashboard, FileText, Gavel, Settings, LogOut, Cloud,
-  BarChart2, History, Building2, Trophy, TrendingDown, ChevronDown, ChevronRight,
-  Bell, BookOpen, Users,
+  LayoutDashboard, FileText, Gavel, Settings, LogOut,
+  BarChart3, Building2, Bell, BookOpen, Users, UserRound, BriefcaseBusiness,
 } from "lucide-react";
 import { canManageUsers, getCurrentUser, logout, roleLabels } from "@/lib/auth";
-import { useState } from "react";
 import { useNotifications } from "@/hooks/use-notifications";
 
 const mainNav = [
   { to: "/dashboard", label: "Дашборд", icon: LayoutDashboard },
   { to: "/tenders", label: "Тендеры", icon: Gavel, search: { page: 1 } },
+  { to: "/workflow", label: "Воронка", icon: BriefcaseBusiness },
   { to: "/bids", label: "Заявки", icon: FileText },
+  { to: "/cabinet", label: "Кабинет", icon: UserRound },
+  { to: "/analytics", label: "Аналитика", icon: BarChart3 },
+  { to: "/companies", label: "Компании", icon: Building2 },
   { to: "/dictionaries", label: "Справочники", icon: BookOpen },
   { to: "/notifications", label: "Уведомления", icon: Bell },
   { to: "/users", label: "Пользователи", icon: Users, manageUsers: true },
-] as const;
-
-const analyticsNav = [
-  { to: "/analytics/historical", label: "История тендеров", icon: History },
-  { to: "/analytics/customers", label: "Заказчики", icon: Building2 },
-  { to: "/analytics/winners", label: "Победители", icon: Trophy },
-  { to: "/analytics/prices", label: "Анализ цен", icon: TrendingDown },
 ] as const;
 
 const bottomNav = [
@@ -31,8 +26,6 @@ const bottomNav = [
 export function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
-  const isAnalytics = location.pathname.startsWith("/analytics");
-  const [analyticsOpen, setAnalyticsOpen] = useState(isAnalytics);
   const { unreadCount } = useNotifications();
   const user = getCurrentUser();
 
@@ -48,10 +41,10 @@ export function Sidebar() {
       {/* Logo */}
       <div className="flex items-center gap-3 border-b border-sidebar-border px-6 py-5">
         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-          <Cloud className="h-5 w-5" />
+          <Gavel className="h-5 w-5" />
         </div>
         <div>
-          <h1 className="text-base font-bold">Freedom Cloud</h1>
+          <h1 className="text-base font-bold">Tender</h1>
           <p className="text-xs text-sidebar-foreground/60">Админ-панель</p>
         </div>
       </div>
@@ -83,44 +76,6 @@ export function Sidebar() {
             </Link>
           );
         })}
-
-        {/* Разделитель */}
-        <div className="pt-3 pb-1">
-          <button
-            onClick={() => setAnalyticsOpen((v) => !v)}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/50 hover:text-sidebar-foreground/80 transition-colors"
-          >
-            <BarChart2 className="h-3.5 w-3.5" />
-            <span className="flex-1 text-left">Аналитика</span>
-            {analyticsOpen
-              ? <ChevronDown className="h-3.5 w-3.5" />
-              : <ChevronRight className="h-3.5 w-3.5" />}
-          </button>
-        </div>
-
-        {/* Подменю аналитики */}
-        {analyticsOpen && (
-          <div className="space-y-0.5 pl-2">
-            {analyticsNav.map((item) => {
-              const Icon = item.icon;
-              const active = isActive(item.to);
-              return (
-                <Link
-                  key={item.to}
-                  to={item.to}
-                  className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                    active
-                      ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-md"
-                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                  }`}
-                >
-                  <Icon className="h-4 w-4 shrink-0" />
-                  {item.label}
-                </Link>
-              );
-            })}
-          </div>
-        )}
 
         {/* Настройки */}
         <div className="pt-1">

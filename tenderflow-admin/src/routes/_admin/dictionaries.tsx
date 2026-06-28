@@ -8,13 +8,14 @@ export const Route = createFileRoute("/_admin/dictionaries")({
   component: DictionariesPage,
 });
 
-type DictKind = "advantages" | "blockers" | "keywords" | "tru" | "companies";
+type DictKind = "advantages" | "blockers" | "keywords" | "stop_words" | "tru" | "companies";
 
 type DictItem = {
   id: string;
   kind?: DictKind;
   value: string;
   active: boolean;
+  minAmount?: number | null;
   lastLot?: string;
 };
 
@@ -22,14 +23,15 @@ const tabs: { key: DictKind; label: string; hint: string }[] = [
   { key: "advantages", label: "Преимущества", hint: "Что усиливает релевантность тендера" },
   { key: "blockers", label: "Блокеры", hint: "Что исключает тендер на этапе парсинга" },
   { key: "keywords", label: "Ключевые слова", hint: "Слова для поиска тендеров через TenderPlus API" },
+  { key: "stop_words", label: "Стоп-слова", hint: "Слова, которые исключают нерелевантные лоты из выдачи" },
   { key: "tru", label: "ТРУ коды", hint: "Коды товаров/работ/услуг для фильтрации и аналитики" },
   { key: "companies", label: "Компании / BIN", hint: "Наши компании, конкуренты и заказчики" },
 ];
 
 const storageKey = "parser_dictionaries_v1";
 
-function createItem(value: string): DictItem {
-  return { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, value, active: true };
+function createItem(value: string, minAmount?: number | null): DictItem {
+  return { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, value, active: true, minAmount };
 }
 
 function emptyData(): Record<DictKind, DictItem[]> {
@@ -37,6 +39,7 @@ function emptyData(): Record<DictKind, DictItem[]> {
     advantages: [],
     blockers: [],
     keywords: [],
+    stop_words: [],
     tru: [],
     companies: [],
   };
@@ -48,7 +51,11 @@ function loadData(): Record<DictKind, DictItem[]> {
     if (!raw) return emptyData();
     const parsed = JSON.parse(raw) as Partial<Record<DictKind, DictItem[]>>;
     const data = emptyData();
-    for (const tab of tabs) data[tab.key] = Array.isArray(parsed[tab.key]) ? parsed[tab.key]! : [];
+    for (const tab of tabs) {
+      data[tab.key] = Array.isArray(parsed[tab.key])
+        ? parsed[tab.key]!.map((item) => ({ ...item, id: String(item.id), minAmount: normalizeMinAmount(item.minAmount) }))
+        : [];
+    }
     return data;
   } catch {
     return emptyData();
@@ -59,12 +66,19 @@ function saveData(data: Record<DictKind, DictItem[]>) {
   localStorage.setItem(storageKey, JSON.stringify(data));
 }
 
+function normalizeMinAmount(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : null;
+  if (typeof value !== "string") return null;
+  const amount = Number(value.replace(/\s+/g, "").replace(",", "."));
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
 function normalizeData(items: DictItem[]): Record<DictKind, DictItem[]> {
   const data = emptyData();
   for (const item of items) {
     const kind = item.kind;
     if (!kind || !(kind in data)) continue;
-    data[kind].push({ ...item, id: String(item.id), kind });
+    data[kind].push({ ...item, id: String(item.id), kind, minAmount: normalizeMinAmount(item.minAmount) });
   }
   return data;
 }
@@ -76,11 +90,11 @@ async function fetchDictionaries(): Promise<Record<DictKind, DictItem[]>> {
   return normalizeData(Array.isArray(payload.items) ? payload.items : Array.isArray(payload.data) ? payload.data : []);
 }
 
-async function createDictionaryItem(kind: DictKind, value: string): Promise<DictItem> {
+async function createDictionaryItem(kind: DictKind, value: string, minAmount?: number | null): Promise<DictItem> {
   const res = await fetch(`${getLocalApiBase()}/api/v1/dictionaries`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind, value, active: true }),
+    body: JSON.stringify({ kind, value, active: true, minAmount: kind === "keywords" ? minAmount || 0 : 0 }),
   });
   if (!res.ok) throw new Error((await res.text()).slice(0, 200));
   return await res.json() as DictItem;
@@ -90,7 +104,7 @@ async function updateDictionaryItem(item: DictItem): Promise<DictItem> {
   const res = await fetch(`${getLocalApiBase()}/api/v1/dictionaries/${encodeURIComponent(item.id)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind: item.kind, value: item.value, active: item.active, lastLot: item.lastLot || "" }),
+    body: JSON.stringify({ kind: item.kind, value: item.value, active: item.active, minAmount: item.kind === "keywords" ? item.minAmount || 0 : 0, lastLot: item.lastLot || "" }),
   });
   if (!res.ok) throw new Error((await res.text()).slice(0, 200));
   return await res.json() as DictItem;
@@ -101,13 +115,25 @@ async function deleteDictionaryItem(id: string): Promise<void> {
   if (!res.ok && res.status !== 404) throw new Error((await res.text()).slice(0, 200));
 }
 
+function parseMoneyInput(value: string): number | null {
+  const amount = Number(value.replace(/\s+/g, "").replace(",", "."));
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+function formatMoney(value?: number | null): string {
+  if (!value || !Number.isFinite(value)) return "—";
+  return new Intl.NumberFormat("ru-KZ", { maximumFractionDigits: 0 }).format(value);
+}
+
 function DictionariesPage() {
   const [data, setData] = useState<Record<DictKind, DictItem[]>>(loadData);
   const [active, setActive] = useState<DictKind>("keywords");
   const [draft, setDraft] = useState("");
+  const [draftMinAmount, setDraftMinAmount] = useState("1000000");
   const [searchText, setSearchText] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
+  const [editingMinAmount, setEditingMinAmount] = useState("");
   const [syncStatus, setSyncStatus] = useState<"loading" | "online" | "offline">("loading");
   const [error, setError] = useState<string | null>(null);
 
@@ -135,15 +161,21 @@ function DictionariesPage() {
   const visibleItems = items.filter((item) => {
     const q = searchText.trim().toLowerCase();
     if (!q) return true;
-    return `${item.value} ${item.lastLot ?? ""} ${item.active ? "вкл активно" : "выкл неактивно"}`.toLowerCase().includes(q);
+    return `${item.value} ${formatMoney(item.minAmount)} ${item.lastLot ?? ""} ${item.active ? "вкл активно" : "выкл неактивно"}`.toLowerCase().includes(q);
   });
   const totals = useMemo(() => Object.fromEntries(
     tabs.map((tab) => [tab.key, { total: data[tab.key].length, active: data[tab.key].filter((i) => i.active).length }])
   ), [data]);
 
   const exportCSV = () => {
-    const rows = items.map((item, i) => `${i + 1},"${item.value.replace(/"/g, '""')}",${item.active ? "Вкл" : "Выкл"},"${item.lastLot || ""}"`);
-    const csv = `#,Значение,Статус,Последний лот\n${rows.join("\n")}`;
+    const rows = items.map((item, i) => {
+      const common = `${i + 1},"${item.value.replace(/"/g, '""')}",${item.active ? "Вкл" : "Выкл"}`;
+      if (active !== "keywords") return `${common},"${item.lastLot || ""}"`;
+      return `${common},${item.minAmount || ""},"${item.lastLot || ""}"`;
+    });
+    const csv = active === "keywords"
+      ? `#,Значение,Статус,Мин. сумма ₸,Последний лот\n${rows.join("\n")}`
+      : `#,Значение,Статус,Последний лот\n${rows.join("\n")}`;
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -156,13 +188,15 @@ function DictionariesPage() {
   const add = async () => {
     const value = draft.trim();
     if (!value) return;
-    const optimistic = { ...createItem(value), kind: active };
+    const minAmount = active === "keywords" ? parseMoneyInput(draftMinAmount) : null;
+    const optimistic = { ...createItem(value, minAmount), kind: active };
     setData((prev) => ({ ...prev, [active]: [...prev[active], optimistic] }));
     setDraft("");
+    if (active === "keywords") setDraftMinAmount("1000000");
     if (syncStatus !== "online") return;
     try {
-      const saved = await createDictionaryItem(active, value);
-      setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === optimistic.id ? { ...saved, kind: active, id: String(saved.id) } : item) }));
+      const saved = await createDictionaryItem(active, value, minAmount);
+      setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === optimistic.id ? { ...saved, kind: active, id: String(saved.id), minAmount: normalizeMinAmount(saved.minAmount) } : item) }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось сохранить значение");
     }
@@ -188,7 +222,7 @@ function DictionariesPage() {
     if (syncStatus !== "online") return;
     try {
       const saved = await updateDictionaryItem(updated);
-      setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === id ? { ...saved, kind: active, id: String(saved.id) } : item) }));
+      setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === id ? { ...saved, kind: active, id: String(saved.id), minAmount: normalizeMinAmount(saved.minAmount) } : item) }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось обновить значение");
     }
@@ -197,6 +231,7 @@ function DictionariesPage() {
   const startEdit = (item: DictItem) => {
     setEditingId(item.id);
     setEditingValue(item.value);
+    setEditingMinAmount(item.minAmount ? String(item.minAmount) : "");
   };
 
   const saveEdit = async () => {
@@ -205,14 +240,15 @@ function DictionariesPage() {
     if (!value) return;
     const current = data[active].find((item) => item.id === editingId);
     if (!current) return;
-    const updated = { ...current, kind: current.kind || active, value };
+    const updated = { ...current, kind: current.kind || active, value, minAmount: active === "keywords" ? parseMoneyInput(editingMinAmount) : null };
     setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === editingId ? updated : item) }));
     setEditingId(null);
     setEditingValue("");
+    setEditingMinAmount("");
     if (syncStatus !== "online") return;
     try {
       const saved = await updateDictionaryItem(updated);
-      setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === updated.id ? { ...saved, kind: active, id: String(saved.id) } : item) }));
+      setData((prev) => ({ ...prev, [active]: prev[active].map((item) => item.id === updated.id ? { ...saved, kind: active, id: String(saved.id), minAmount: normalizeMinAmount(saved.minAmount) } : item) }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось сохранить изменение");
     }
@@ -222,7 +258,7 @@ function DictionariesPage() {
     <>
       <PageHeader
         title="Справочники"
-        description="Преимущества, блокеры, ключевые слова, ТРУ коды и переменные для анализа лотов"
+        description="Преимущества, блокеры, ключевые слова, стоп-слова, ТРУ коды и переменные для анализа лотов"
         actions={
           <div className="flex items-center gap-2">
             <span className={`rounded-full px-2 py-1 text-xs font-medium ${syncStatus === "online" ? "bg-green-100 text-green-700" : syncStatus === "loading" ? "bg-blue-100 text-blue-700" : "bg-yellow-100 text-yellow-700"}`}>
@@ -276,7 +312,7 @@ function DictionariesPage() {
                   className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm"
                 />
               </div>
-              <div className="flex min-w-[280px] flex-1 gap-2">
+              <div className="flex min-w-[280px] flex-1 flex-wrap gap-2">
                 <input
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
@@ -284,6 +320,16 @@ function DictionariesPage() {
                   placeholder="Добавить значение"
                   className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 />
+                {active === "keywords" && (
+                  <input
+                    value={draftMinAmount}
+                    onChange={(e) => setDraftMinAmount(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") add(); }}
+                    inputMode="numeric"
+                    placeholder="Мин. сумма ₸"
+                    className="w-[150px] rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                  />
+                )}
                 <button onClick={add} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">
                   <Plus className="h-4 w-4" /> Добавить
                 </button>
@@ -299,12 +345,13 @@ function DictionariesPage() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-sm">
+            <table className={`w-full text-sm ${active === "keywords" ? "min-w-[900px]" : "min-w-[760px]"}`}>
               <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
                 <tr>
                   <th className="px-6 py-3 text-left font-medium">#</th>
                   <th className="px-6 py-3 text-left font-medium">Значение</th>
                   <th className="px-6 py-3 text-left font-medium">Активно</th>
+                  {active === "keywords" && <th className="px-6 py-3 text-left font-medium">Мин. сумма ₸</th>}
                   <th className="px-6 py-3 text-left font-medium">Последний лот</th>
                   <th className="px-6 py-3 text-right font-medium">Действия</th>
                 </tr>
@@ -325,12 +372,26 @@ function DictionariesPage() {
                         <Check className="h-3 w-3" /> {item.active ? "Вкл" : "Выкл"}
                       </button>
                     </td>
+                    {active === "keywords" && (
+                      <td className="px-6 py-3">
+                        {editingId === item.id ? (
+                          <input
+                            value={editingMinAmount}
+                            onChange={(e) => setEditingMinAmount(e.target.value)}
+                            inputMode="numeric"
+                            className="w-[150px] rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                          />
+                        ) : (
+                          <span className="font-mono text-xs text-muted-foreground">{formatMoney(item.minAmount)}</span>
+                        )}
+                      </td>
+                    )}
                     <td className="px-6 py-3 text-xs text-muted-foreground">{item.lastLot || "—"}</td>
                     <td className="px-6 py-3 text-right">
                       {editingId === item.id ? (
                         <div className="inline-flex gap-1">
                           <button onClick={saveEdit} className="rounded-lg p-2 text-green-700 hover:bg-green-100"><Save className="h-4 w-4" /></button>
-                          <button onClick={() => setEditingId(null)} className="rounded-lg p-2 text-muted-foreground hover:bg-accent"><X className="h-4 w-4" /></button>
+                          <button onClick={() => { setEditingId(null); setEditingMinAmount(""); }} className="rounded-lg p-2 text-muted-foreground hover:bg-accent"><X className="h-4 w-4" /></button>
                         </div>
                       ) : (
                         <div className="inline-flex gap-1">
@@ -343,7 +404,7 @@ function DictionariesPage() {
                 ))}
                 {visibleItems.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-6 py-12 text-center text-sm text-muted-foreground">
+                    <td colSpan={active === "keywords" ? 6 : 5} className="px-6 py-12 text-center text-sm text-muted-foreground">
                       По справочнику ничего не найдено
                     </td>
                   </tr>

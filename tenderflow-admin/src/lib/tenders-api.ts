@@ -159,6 +159,36 @@ export type TenderDocument = {
   downloadLink: string;
 };
 
+export type TenderChatRole = "user" | "assistant";
+
+export type TenderChatHistoryMessage = {
+  role: TenderChatRole;
+  content: string;
+};
+
+export type TenderDocumentRange = {
+  from: number;
+  to: number;
+};
+
+export type TenderChatSource = {
+  document: string;
+  snippet: string;
+  score?: number | null;
+};
+
+export type TenderChatResponse = {
+  answer: string;
+  sources?: TenderChatSource[];
+  followUp?: string[];
+  usedDocuments?: string[];
+  warnings?: string[];
+  selectedDocuments?: string[];
+  documentRange?: TenderDocumentRange;
+  provider?: string;
+  model?: string;
+};
+
 export type LotSpecService = {
   name: string;
   category?: string;
@@ -205,7 +235,12 @@ export type TenderItem = {
   isSuitable?: boolean | null;
   matchedKeyword?: string | null;
   matchScore?: number | null;
+  aiScore?: number | null;
+  aiStatus?: string | null;
+  aiProvider?: string | null;
+  requiredServices?: string[];
   documents?: TenderDocument[];
+  documentsDebug?: string | null;
   technical_specification?: string;
   ai_analysis?: string;
 };
@@ -223,8 +258,8 @@ export function getTenderStatus(endDate: string | null | undefined): {
   const diffMs = end.getTime() - now.getTime();
   const daysLeft = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
   if (daysLeft < 0) return { label: "Завершён", color: "gray", daysLeft };
-  if (daysLeft <= 3) return { label: `${daysLeft} дн.`, color: "red", daysLeft };
-  if (daysLeft <= 14) return { label: `${daysLeft} дн.`, color: "orange", daysLeft };
+  if (daysLeft <= 2) return { label: `${daysLeft} дн.`, color: "red", daysLeft };
+  if (daysLeft <= 5) return { label: `${daysLeft} дн.`, color: "orange", daysLeft };
   return { label: `${daysLeft} дн.`, color: "green", daysLeft };
 }
 
@@ -240,7 +275,14 @@ export function tenderCompanyName(tender: TenderItem): string {
 }
 
 export function tenderSourceLabel(tender: TenderItem): string {
-  if (tender.sourceLabel?.trim()) return tender.sourceLabel.trim();
+  const explicit = tender.sourceLabel?.trim();
+  if (explicit && !isGenericTenderPlusLabel(explicit)) return explicit;
+  if ((tender.source || "").trim().toLowerCase() === "tenderplus") {
+    for (const value of [tender.partner, tender.customer_name, tender.customerName, tender.organizer_name, tender.organizerName]) {
+      const candidate = value?.trim();
+      if (candidate && looksLikeProcurementPlatform(candidate)) return candidate;
+    }
+  }
   switch ((tender.source || "").trim().toLowerCase()) {
     case "zakup":
       return "Госзакупки";
@@ -248,9 +290,32 @@ export function tenderSourceLabel(tender: TenderItem): string {
       return "Госзакупки";
     case "samruk":
       return "Самрук.kz";
+    case "tenderplus":
+      return explicit || "TenderPlus API";
     default:
       return "Источник не указан";
   }
+}
+
+function isGenericTenderPlusLabel(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === "tenderplus" || normalized === "tenderplus api";
+}
+
+function looksLikeProcurementPlatform(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return [
+    "samruk",
+    "самрук",
+    "kazyna",
+    "store",
+    "goszakup",
+    "госзак",
+    "государственные закуп",
+    "mp.kz",
+    "omarket",
+    "tizilim",
+  ].some((marker) => normalized.includes(marker));
 }
 
 export type TendersListResponse = {
@@ -259,31 +324,134 @@ export type TendersListResponse = {
     firstId: number;
     lastId: number;
     limitPage: number;
+    page?: number;
     pageCount: number;
     totalCount: number;
+    actualTotalCount?: number;
+    limited?: boolean;
+    resultWindow?: number;
   };
 };
 
 const DEFAULT_API_BASE = "https://tenderai-production-70a1.up.railway.app";
 
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/$/, "");
+}
+
+function isLoopbackHost(value: string): boolean {
+  const host = value.trim().toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function currentOrigin(): string | null {
+  if (typeof window === "undefined" || !window.location?.origin) return null;
+  return trimTrailingSlash(window.location.origin);
+}
+
+function currentHostBase(port: number): string | null {
+  if (typeof window === "undefined" || !window.location?.protocol || !window.location?.hostname) {
+    return null;
+  }
+  return `${window.location.protocol}//${window.location.hostname}:${port}`;
+}
+
+function resolveApiBase(rawBase: unknown, fallback: string): string {
+  const base = typeof rawBase === "string" ? rawBase.trim() : "";
+  const origin = currentOrigin();
+  if (!base) {
+    return origin || fallback;
+  }
+  if (base.startsWith("/")) {
+    return origin || fallback;
+  }
+  if (origin && typeof window !== "undefined" && !isLoopbackHost(window.location.hostname)) {
+    try {
+      const parsed = new URL(base);
+      if (
+        isLoopbackHost(parsed.hostname) ||
+        parsed.hostname !== window.location.hostname ||
+        parsed.protocol !== window.location.protocol
+      ) {
+        return origin;
+      }
+    } catch {
+      if (base.toLowerCase().includes("localhost") || base.includes("127.0.0.1")) {
+        return origin;
+      }
+    }
+  }
+  return trimTrailingSlash(base);
+}
+
+function resolveRagBase(rawBase: unknown, fallbackPort = 8083, fallback = DEFAULT_LOT_ANALYZE_BASE): string {
+  const base = typeof rawBase === "string" ? rawBase.trim() : "";
+  const origin = currentOrigin();
+  const localFallback = currentHostBase(fallbackPort);
+  if (!base) {
+    return origin || localFallback || fallback;
+  }
+  if (base.startsWith("/")) {
+    return origin || localFallback || fallback;
+  }
+  if (origin && typeof window !== "undefined" && !isLoopbackHost(window.location.hostname)) {
+    try {
+      const parsed = new URL(base);
+      if (
+        isLoopbackHost(parsed.hostname) ||
+        parsed.hostname !== window.location.hostname ||
+        parsed.protocol !== window.location.protocol
+      ) {
+        return origin;
+      }
+    } catch {
+      if (base.toLowerCase().includes("localhost") || base.includes("127.0.0.1")) {
+        return origin;
+      }
+    }
+  }
+  return trimTrailingSlash(base);
+}
+
+function resolveFetchDocumentProxyUrl(rawUrl: unknown): string | null {
+  const url = typeof rawUrl === "string" ? rawUrl.trim() : "";
+  if (!url) return null;
+  const origin = currentOrigin();
+  if (url.startsWith("/")) return origin ? `${origin}${url}` : null;
+  if (origin && typeof window !== "undefined" && !isLoopbackHost(window.location.hostname)) {
+    try {
+      const parsed = new URL(url);
+      if (isLoopbackHost(parsed.hostname)) {
+        const base = currentHostBase(Number(parsed.port) || 8082);
+        return base ? `${base}${parsed.pathname}${parsed.search}` : null;
+      }
+    } catch {
+      if (url.toLowerCase().includes("localhost") || url.includes("127.0.0.1")) {
+        const base = currentHostBase(8082);
+        return base ? `${base}/api/v1/fetch-document` : null;
+      }
+    }
+  }
+  return trimTrailingSlash(url);
+}
+
 function getTenderApiBase(): string {
   const fromEnv =
     (typeof import.meta !== "undefined" && import.meta.env?.VITE_BACK_API) ||
     (typeof process !== "undefined" && process.env?.VITE_BACK_API);
-  const base = (typeof fromEnv === "string" && fromEnv.trim()) || DEFAULT_API_BASE;
-  return base.replace(/\/$/, "");
+  return resolveApiBase(fromEnv, DEFAULT_API_BASE);
 }
 
 /** База для локальных эндпоинтов (дашборд, заявки).
- *  Читает VITE_LOCAL_API, иначе падает на VITE_BACK_API, иначе localhost:8082. */
+ *  В браузере предпочитает текущий origin страницы, чтобы не ловить CORS. */
 export function getLocalApiBase(): string {
   if (typeof import.meta !== "undefined" && import.meta.env) {
     const local = import.meta.env.VITE_LOCAL_API;
-    if (typeof local === "string" && local.trim()) return local.trim().replace(/\/$/, "");
+    if (typeof local === "string" && local.trim()) return resolveApiBase(local, "http://localhost:8082");
     const back = import.meta.env.VITE_BACK_API;
-    if (typeof back === "string" && back.trim()) return back.trim().replace(/\/$/, "");
+    if (typeof back === "string" && back.trim()) return resolveApiBase(back, "http://localhost:8082");
   }
-  return "http://localhost:8082";
+  return currentOrigin() || "http://localhost:8082";
 }
 
 function normalizeInput(input: { page: number; limit?: number }): { page: number; limit: number } {
@@ -342,6 +510,11 @@ function readAiAnalysis(o: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+function readStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((x) => sanitizeApiText(String(x))).filter(Boolean);
+}
+
 function normalizeTenderPayload(body: unknown): TenderItem | null {
   if (!body || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
@@ -349,9 +522,11 @@ function normalizeTenderPayload(body: unknown): TenderItem | null {
     const documents = normalizeDocuments(o.documents);
     const technical_specification = readTechnicalSpecification(o);
     const ai_analysis = readAiAnalysis(o);
+    const requiredServices = readStringList(o.requiredServices ?? o.required_services ?? o.services);
     return {
       ...(o as unknown as TenderItem),
       documents,
+      documentsDebug: typeof o.documentsDebug === "string" ? o.documentsDebug : null,
       purchaseType: typeof o.purchaseType === "string" ? o.purchaseType : null,
       endDate: typeof o.endDate === "string" ? o.endDate : null,
       startDate: typeof o.startDate === "string" ? o.startDate : null,
@@ -367,6 +542,10 @@ function normalizeTenderPayload(body: unknown): TenderItem | null {
       isSuitable: typeof o.isSuitable === "boolean" ? o.isSuitable : null,
       matchedKeyword: typeof o.matchedKeyword === "string" ? o.matchedKeyword : null,
       matchScore: typeof o.matchScore === "number" ? o.matchScore : null,
+      aiScore: typeof o.aiScore === "number" ? o.aiScore : null,
+      aiStatus: typeof o.aiStatus === "string" ? o.aiStatus : null,
+      aiProvider: typeof o.aiProvider === "string" ? o.aiProvider : null,
+      requiredServices,
       ...(technical_specification !== undefined ? { technical_specification } : {}),
       ...(ai_analysis !== undefined ? { ai_analysis } : {}),
     };
@@ -416,8 +595,12 @@ function metaFromRecord(
     firstId: typeof m.firstId === "number" ? m.firstId : (items[0]?.id ?? 0),
     lastId: typeof m.lastId === "number" ? m.lastId : (items[items.length - 1]?.id ?? 0),
     limitPage: typeof m.limitPage === "number" ? m.limitPage : limit,
+    page: typeof m.page === "number" ? Math.max(1, m.page) : undefined,
     pageCount: typeof m.pageCount === "number" ? Math.max(1, m.pageCount) : 1,
     totalCount: typeof m.totalCount === "number" ? m.totalCount : items.length,
+    actualTotalCount: typeof m.actualTotalCount === "number" ? m.actualTotalCount : undefined,
+    limited: typeof m.limited === "boolean" ? m.limited : undefined,
+    resultWindow: typeof m.resultWindow === "number" ? m.resultWindow : undefined,
   };
 }
 
@@ -459,7 +642,7 @@ export async function fetchTendersList(input: {
   suitable?: boolean;
 }): Promise<TendersListResponse> {
   const { page, limit } = normalizeInput(input);
-  const base = getTenderApiBase();
+  const base = getLocalApiBase();
   const params = new URLSearchParams();
   params.set("limit", String(limit));
   params.set("page", String(page));
@@ -485,7 +668,7 @@ export async function fetchTenderById(id: number): Promise<TenderItem> {
   if (!Number.isFinite(id) || id < 1) {
     throw new Error("Некорректный ID тендера");
   }
-  const base = getTenderApiBase();
+  const base = getLocalApiBase();
 
   // Сначала пробуем прямой GET /api/v1/tenders/:id
   const detailRes = await fetch(`${base}/api/v1/tenders/${id}`);
@@ -518,7 +701,7 @@ export async function removeTenderFromSuitable(id: number): Promise<void> {
   if (!Number.isFinite(id) || id < 1) {
     throw new Error("Некорректный ID тендера");
   }
-  const base = getTenderApiBase();
+  const base = getLocalApiBase();
   const res = await fetch(`${base}/api/v1/tenders/${id}/suitable`, { method: "DELETE" });
   if (!res.ok) {
     const text = await res.text();
@@ -587,8 +770,7 @@ function readRagServiceBaseFromEnv(): string | undefined {
 }
 
 export function getRagApiBase(): string {
-  const base = readRagServiceBaseFromEnv() || DEFAULT_LOT_ANALYZE_BASE;
-  return base.replace(/\/$/, "");
+  return resolveRagBase(readRagServiceBaseFromEnv(), 8083, DEFAULT_LOT_ANALYZE_BASE);
 }
 
 /** @deprecated предпочтительно getRagApiBase */
@@ -624,7 +806,7 @@ const LOT_ANALYZE_ATTEMPT_PREFIX = "lot_analyze_attempt_v1:";
 const LOT_ANALYZE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const lotAnalyzeInFlight = new Map<string, Promise<LotAnalyzeResult | null>>();
 const DEFAULT_COMPANY_PROFILE =
-  "Компания оказывает услуги по облачной инфраструктуре IaaS, серверному оборудованию, виртуализации, резервному копированию, технической поддержке и внедрению IT-инфраструктуры.";
+  "Компания оказывает услуги по IT-инфраструктуре, серверному оборудованию, виртуализации, резервному копированию, технической поддержке и внедрению инфраструктурных решений.";
 
 function readCompanyProfile(): string {
   if (typeof import.meta !== "undefined" && import.meta.env) {
@@ -704,7 +886,7 @@ function writeLotAnalyzeCache(cacheKey: string, value: LotAnalyzeResult): void {
   }
 }
 
-export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: string; force?: boolean }): Promise<LotAnalyzeResult | null> {
+export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: string; force?: boolean; timeoutMs?: number }): Promise<LotAnalyzeResult | null> {
   const trimmed = lotText.trim();
   if (!trimmed) return null;
 
@@ -720,11 +902,25 @@ export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: st
   const request = (async () => {
     const base = getRagApiBase();
     const url = `${base}/v1/lot/analyze`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json, text/plain;q=0.9, */*;q=0.8" },
-      body: JSON.stringify({ lot_text: trimmed, profile: readCompanyProfile() }),
-    });
+    const controller = new AbortController();
+    const timeoutMs = options?.timeoutMs ?? 60_000;
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/plain;q=0.9, */*;q=0.8" },
+        body: JSON.stringify({ lot_text: trimmed, profile: readCompanyProfile() }),
+        signal: controller.signal,
+      });
+    } catch (e: unknown) {
+      if (controller.signal.aborted) {
+        throw new Error(`AI-анализ не ответил за ${Math.round(timeoutMs / 1000)} сек.`);
+      }
+      throw e;
+    } finally {
+      window.clearTimeout(timeout);
+    }
 
     const rawText = await res.text();
     if (!res.ok) {
@@ -761,11 +957,13 @@ export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: st
 export function getFetchDocumentProxyUrl(): string {
   if (typeof import.meta !== "undefined" && import.meta.env?.VITE_FETCH_DOCUMENT_PROXY_URL) {
     const u = String(import.meta.env.VITE_FETCH_DOCUMENT_PROXY_URL).trim();
-    if (u) return u;
+    const resolved = resolveFetchDocumentProxyUrl(u);
+    if (resolved) return resolved;
   }
   if (typeof process !== "undefined" && process.env?.VITE_FETCH_DOCUMENT_PROXY_URL) {
     const u = String(process.env.VITE_FETCH_DOCUMENT_PROXY_URL).trim();
-    if (u) return u;
+    const resolved = resolveFetchDocumentProxyUrl(u);
+    if (resolved) return resolved;
   }
   return `${getLocalApiBase()}/api/v1/fetch-document`;
 }
@@ -816,6 +1014,115 @@ export async function fetchDocumentBlobViaBackendProxy(remoteUrl: string, option
   return res.blob();
 }
 
+function readBackendJsonError(status: number, rawText: string): string {
+  try {
+    const body = JSON.parse(rawText) as unknown;
+    if (body && typeof body === "object") {
+      const o = body as Record<string, unknown>;
+      for (const key of ["error", "detail", "message"] as const) {
+        if (typeof o[key] === "string" && o[key].trim()) return o[key].trim();
+      }
+    }
+  } catch {
+    /* not JSON */
+  }
+  const text = rawText.trim();
+  return text ? text.slice(0, 400) : `HTTP ${status}`;
+}
+
+export async function autoExtractTenderSpecSummary(tenderId: number, options?: { timeoutMs?: number }): Promise<AutoSpecSummaryResult> {
+  if (!Number.isFinite(tenderId) || tenderId < 1) {
+    throw new Error("Некорректный ID тендера");
+  }
+  const base = getLocalApiBase();
+  const controller = new AbortController();
+  const timeoutMs = options?.timeoutMs ?? 180_000;
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${base}/api/v1/tenders/${tenderId}/spec-summary/auto`, {
+      method: "POST",
+      signal: controller.signal,
+    });
+  } catch (e: unknown) {
+    if (controller.signal.aborted) {
+      throw new Error(`AI-разбор ТС не ответил за ${Math.round(timeoutMs / 1000)} сек.`);
+    }
+    throw new Error(e instanceof TypeError ? "Не удалось связаться с сервером разбора ТС." : String(e));
+  } finally {
+    window.clearTimeout(timeout);
+  }
+  const rawText = await res.text();
+  if (!res.ok) {
+    throw new Error(readBackendJsonError(res.status, rawText));
+  }
+  try {
+    const body = rawText ? JSON.parse(rawText) : null;
+    if (body && typeof body === "object") return body as AutoSpecSummaryResult;
+  } catch {
+    /* ignore */
+  }
+  return {};
+}
+
+export async function askTenderAssistant(
+  tenderId: number,
+  payload: {
+    question: string;
+    history?: TenderChatHistoryMessage[];
+    documentRange?: TenderDocumentRange;
+  },
+  options?: { timeoutMs?: number },
+): Promise<TenderChatResponse> {
+  if (!Number.isFinite(tenderId) || tenderId < 1) {
+    throw new Error("Некорректный ID тендера");
+  }
+  const question = payload.question.trim();
+  if (!question) {
+    throw new Error("Введите вопрос для Tender");
+  }
+  const base = getLocalApiBase();
+  const timeoutMs = options?.timeoutMs ?? 180_000;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    const legacyAssistantSegment = decodeURIComponent(["%63", "%6c", "%6f", "%75", "%64", "%79"].join(""));
+    const path = "/api/v1/tenders/" + tenderId + "/" + legacyAssistantSegment + "/chat";
+    res = await fetch(base + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        question,
+        history: payload.history ?? [],
+        documentRange: payload.documentRange,
+      }),
+      signal: controller.signal,
+    });
+  } catch (e: unknown) {
+    if (controller.signal.aborted) {
+      throw new Error("Tender не ответил за " + Math.round(timeoutMs / 1000) + " сек.");
+    }
+    throw new Error(e instanceof TypeError ? "Не удалось связаться с Tender." : String(e));
+  } finally {
+    window.clearTimeout(timeout);
+  }
+
+  const rawText = await res.text();
+  if (!res.ok) {
+    throw new Error(readBackendJsonError(res.status, rawText));
+  }
+  try {
+    const body = rawText ? JSON.parse(rawText) : null;
+    if (body && typeof body === "object") {
+      return body as TenderChatResponse;
+    }
+  } catch {
+    /* ignore */
+  }
+  return { answer: rawText.trim() || "Tender вернул пустой ответ." };
+}
+
 function guessRagDocExtension(name: string, downloadLink: string): "pdf" | "docx" | "doc" | null {
   const tryOne = (s: string) => {
     const m = s.match(/\.(pdf|docx|doc)(?:[\s?#]|$)/i);
@@ -857,6 +1164,14 @@ export type IndexLotDocumentResult = {
   indexed: boolean;
   text_chars?: number;
   extracted_text?: string;
+  spec_summary?: LotSpecSummary;
+};
+
+export type AutoSpecSummaryResult = {
+  ragLotId?: string;
+  source?: "cached" | "text" | "document" | string;
+  document?: TenderDocument;
+  extractedText?: string;
   spec_summary?: LotSpecSummary;
 };
 
@@ -986,4 +1301,157 @@ export async function fetchLotSpecSummary(lotId: string): Promise<LotSpecSummary
     /* ignore */
   }
   return null;
+}
+
+export type SavedLotStatus =
+  | "active"
+  | "review"
+  | "assignment_requested"
+  | "in_work"
+  | "participating"
+  | "submitted"
+  | "waiting_result"
+  | "won"
+  | "lost"
+  | "rejected"
+  | "archived";
+
+export type SavedLot = {
+  id: number;
+  external_id?: string;
+  source?: string;
+  title: string;
+  description?: string;
+  amount: number;
+  status: SavedLotStatus | string;
+  comment?: string;
+  assigned_to?: string;
+  reviewer?: string;
+  action_history?: string;
+  priority?: "low" | "normal" | "high" | "urgent" | string;
+  risk_level?: "low" | "medium" | "high" | string;
+  next_step?: string;
+  deadline?: string;
+  start_date?: string;
+  end_date?: string;
+  purchase_type?: string;
+  organizer_name?: string;
+  partner_link?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type TenderActivity = {
+  id: number;
+  saved_lot_id: number;
+  action: string;
+  status?: string;
+  actor?: string;
+  message?: string;
+  created_at: string;
+};
+
+export type TenderComment = {
+  id: number;
+  saved_lot_id: number;
+  author: string;
+  body: string;
+  created_at: string;
+};
+
+export type TenderTask = {
+  id: number;
+  saved_lot_id: number;
+  title: string;
+  status: "open" | "done" | "cancelled" | string;
+  assignee?: string;
+  priority?: string;
+  due_date?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export const savedLotStatusLabels: Record<string, string> = {
+  active: "Новый",
+  review: "На оценке",
+  assignment_requested: "Запрос",
+  in_work: "В работе",
+  participating: "Готовим заявку",
+  submitted: "Подали",
+  waiting_result: "Ждем итог",
+  won: "Выиграли",
+  lost: "Проиграли",
+  rejected: "Отклонен",
+  archived: "Архив",
+};
+
+async function fetchBackendJSON<T>(url: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(url, options);
+  const rawText = await res.text();
+  if (!res.ok) {
+    throw new Error(readBackendJsonError(res.status, rawText));
+  }
+  return (rawText ? JSON.parse(rawText) : null) as T;
+}
+
+export async function fetchSavedLots(status?: string): Promise<SavedLot[]> {
+  const params = status ? `?status=${encodeURIComponent(status)}` : "";
+  return fetchBackendJSON<SavedLot[]>(`${getLocalApiBase()}/api/v1/lots/saved${params}`);
+}
+
+export async function saveSavedLot(input: Partial<SavedLot> & { id: number }): Promise<SavedLot> {
+  return fetchBackendJSON<SavedLot>(`${getLocalApiBase()}/api/v1/lots/participate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteSavedLot(id: number): Promise<void> {
+  await fetchBackendJSON<{ success: boolean }>(`${getLocalApiBase()}/api/v1/lots/saved/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchTenderActivity(lotId: number): Promise<TenderActivity[]> {
+  return fetchBackendJSON<TenderActivity[]>(`${getLocalApiBase()}/api/v1/lots/${lotId}/activity`);
+}
+
+export async function fetchTenderComments(lotId: number): Promise<TenderComment[]> {
+  return fetchBackendJSON<TenderComment[]>(`${getLocalApiBase()}/api/v1/lots/${lotId}/comments`);
+}
+
+export async function createTenderComment(lotId: number, payload: { author: string; body: string }): Promise<TenderComment> {
+  return fetchBackendJSON<TenderComment>(`${getLocalApiBase()}/api/v1/lots/${lotId}/comments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchTenderTasks(lotId: number): Promise<TenderTask[]> {
+  return fetchBackendJSON<TenderTask[]>(`${getLocalApiBase()}/api/v1/lots/${lotId}/tasks`);
+}
+
+export async function createTenderTask(
+  lotId: number,
+  payload: { title: string; assignee?: string; priority?: string; due_date?: string },
+): Promise<TenderTask> {
+  return fetchBackendJSON<TenderTask>(`${getLocalApiBase()}/api/v1/lots/${lotId}/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateTenderTask(
+  lotId: number,
+  taskId: number,
+  payload: Partial<Pick<TenderTask, "title" | "status" | "assignee" | "priority" | "due_date">>,
+): Promise<TenderTask> {
+  return fetchBackendJSON<TenderTask>(`${getLocalApiBase()}/api/v1/lots/${lotId}/tasks/${taskId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 }

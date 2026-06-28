@@ -30,15 +30,15 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Freedom Cloud — Админ-панель" },
-      { name: "description", content: "Freedom Cloud — админ-панель" },
-      { name: "author", content: "Freedom Cloud" },
-      { property: "og:title", content: "Freedom Cloud — Админ-панель" },
-      { property: "og:description", content: "Freedom Cloud — админ-панель" },
+      { title: "Tender — Админ-панель" },
+      { name: "description", content: "Tender — админ-панель" },
+      { name: "author", content: "Tender" },
+      { property: "og:title", content: "Tender — Админ-панель" },
+      { property: "og:description", content: "Tender — админ-панель" },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
-      { name: "twitter:title", content: "Freedom Cloud — Админ-панель" },
-      { name: "twitter:description", content: "Freedom Cloud — админ-панель" },
+      { name: "twitter:title", content: "Tender — Админ-панель" },
+      { name: "twitter:description", content: "Tender — админ-панель" },
     ],
     links: [
       {

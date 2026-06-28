@@ -29,31 +29,37 @@ func run() error {
 		return fmt.Errorf("config: %w", err)
 	}
 
-	var tp *tenderplus.Client
-	if cfg.HasTenderPlus() {
-		tp = tenderplus.NewClient(cfg.TenderPlusURL, cfg.TenderPlusToken)
-	} else {
-		log.Print("warning: TENDERPLUS_TOKEN is empty; analytics sync from TenderPlus is disabled")
+	tp := tenderplus.NewClient(cfg.TenderPlusURL, cfg.TenderPlusToken)
+	if !cfg.HasTenderPlus() {
+		log.Print("warning: TENDERPLUS_TOKEN is empty; TenderPlus GraphQL is disabled, public attached files fallback remains available")
 	}
 
 	fd := api.NewFetchDocumentProxy(cfg.FetchDocument)
 	db := database.InitDB()
 	users := service.NewUserService(repository.NewUserRepository(db))
 	srv := api.NewRouter(&api.Handler{
-		DB:       db,
-		Users:    users,
-		FetchDoc: fd,
-		TP:       tp,
+		DB:         db,
+		Users:      users,
+		FetchDoc:   fd,
+		TP:         tp,
+		RagAPIBase: cfg.RagAPIBase,
 	}, cfg.CORSAllowedOrigins)
 
 	// Подключаем локальную БД и добавляем новые эндпоинты
 	if r, ok := srv.(chi.Router); ok {
 		r.Get("/api/v1/dashboard", tenderplus.DashboardHandler(db))
+		r.Get("/api/v1/dashboard/dynamics", tenderplus.DashboardDynamicsHandler(db))
 		r.Post("/api/v1/lots/participate", tenderplus.ParticipateLotHandler(db))
 		r.Get("/api/v1/lots/saved", tenderplus.GetSavedLotsHandler(db))
 		r.Delete("/api/v1/lots/saved/{id}", tenderplus.DeleteSavedLotHandler(db))
+		r.Get("/api/v1/lots/{id}/activity", tenderplus.ListLotActivityHandler(db))
+		r.Get("/api/v1/lots/{id}/comments", tenderplus.ListLotCommentsHandler(db))
+		r.Post("/api/v1/lots/{id}/comments", tenderplus.CreateLotCommentHandler(db))
+		r.Get("/api/v1/lots/{id}/tasks", tenderplus.ListLotTasksHandler(db))
+		r.Post("/api/v1/lots/{id}/tasks", tenderplus.CreateLotTaskHandler(db))
+		r.Patch("/api/v1/lots/{id}/tasks/{taskId}", tenderplus.UpdateLotTaskHandler(db))
 
-		// Аналитика
+		// Company intelligence and historical tender endpoints.
 		ah := &analytics.Handler{DB: db, TP: tp, Keywords: cfg.TendersKeywords}
 		r.Route("/api/v1/analytics", func(s chi.Router) {
 			s.Post("/sync", ah.Sync)
@@ -63,6 +69,7 @@ func run() error {
 			s.Get("/dynamics", ah.GetDynamics)
 			s.Get("/filters", ah.GetFilters)
 			s.Get("/export", ah.Export)
+			s.Get("/company-tenders", ah.GetCompanyTenderIntelligence)
 			s.Get("/customers/candidates", ah.ListCustomerCandidates)
 			s.Get("/customers", ah.ListCustomers)
 			s.Post("/customers", ah.AddCustomer)

@@ -28,6 +28,7 @@ type ParserStatus = {
     requestedAt: string;
     requestedBy: string;
     status: string;
+    runMode?: string;
     startedAt?: string;
     finishedAt?: string;
     message?: string;
@@ -107,6 +108,47 @@ function formatInterval(seconds?: number) {
   return minutes >= 60 ? `${Math.floor(minutes / 60)} ч. ${minutes % 60} мин.` : `${minutes} мин.`;
 }
 
+function formatRunMode(mode?: string) {
+  if (mode === "reanalyze_existing") return "AI-переоценка";
+  if (mode === "parse") return "Парсинг";
+  return "Ручной запуск";
+}
+
+function formatParserStatus(status?: string, configured?: boolean) {
+  const value = (status || "").toLowerCase();
+  if (["ok", "success", "completed", "done"].includes(value)) return "Работает";
+  if (["pending", "queued"].includes(value)) return "Ожидает";
+  if (["running", "in_progress"].includes(value)) return "Идёт проверка";
+  if (["failed", "error"].includes(value)) return "Ошибка";
+  return status || (configured ? "Подключён" : "Нет данных");
+}
+
+function parserStatusClass(status?: string, configured?: boolean) {
+  const value = (status || "").toLowerCase();
+  if (["ok", "success", "completed", "done"].includes(value)) {
+    return "border-green-200 bg-green-50 text-green-700 dark:border-green-500/20 dark:bg-green-500/10 dark:text-green-300";
+  }
+  if (["pending", "queued", "running", "in_progress"].includes(value)) {
+    return "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300";
+  }
+  if (["failed", "error"].includes(value)) {
+    return "border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300";
+  }
+  if (configured) {
+    return "border-green-200 bg-green-50 text-green-700 dark:border-green-500/20 dark:bg-green-500/10 dark:text-green-300";
+  }
+  return "border-yellow-200 bg-yellow-50 text-yellow-700 dark:border-yellow-500/20 dark:bg-yellow-500/10 dark:text-yellow-300";
+}
+
+function formatRequestStatus(status?: string) {
+  const value = (status || "").toLowerCase();
+  if (["pending", "queued"].includes(value)) return "ожидает";
+  if (["running", "in_progress"].includes(value)) return "выполняется";
+  if (["ok", "success", "completed", "done"].includes(value)) return "выполнен";
+  if (["failed", "error"].includes(value)) return "ошибка";
+  return status || "—";
+}
+
 function Settings() {
   const [settings, setSettings] = useState<SettingsState>(loadSettings);
   const [parserStatus, setParserStatus] = useState<ParserStatus | null>(null);
@@ -121,6 +163,8 @@ function Settings() {
   const { theme, setTheme, appearance, setAppearance } = useTheme();
   const parserRequestActive = parserStatus?.lastRequest?.status === "pending" || parserStatus?.lastRequest?.status === "running";
   const currentUser = getCurrentUser();
+  const parserDisplayStatus = formatParserStatus(parserStatus?.lastRun?.status, parserStatus?.configured);
+  const parserDisplayClass = parserStatusClass(parserStatus?.lastRun?.status, parserStatus?.configured);
 
   useEffect(() => {
     localStorage.setItem(settingsKey, JSON.stringify(settings));
@@ -217,8 +261,8 @@ function Settings() {
       const base = getLocalApiBase();
       const res = await fetch(`${base}/api/v1/parser/run`, { method: "POST" });
       const body = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(body?.error || "Не удалось проверить источник лотов");
-      pushNotification("success", "TenderPlus API подключён", body?.message || "Лоты загружаются напрямую из API.", "/settings");
+      if (!res.ok) throw new Error(body?.error || "Не удалось запустить парсер");
+      pushNotification("success", "Парсер запускается", "Запрос отправлен на ВМ. Статус обновится автоматически.", "/settings");
       await loadParserStatus();
     } catch (error) {
       pushNotification("error", "Источник не проверен", error instanceof Error ? error.message : "Проверьте backend и токен TenderPlus.", "/settings");
@@ -233,11 +277,11 @@ function Settings() {
       const base = getLocalApiBase();
       const res = await fetch(`${base}/api/v1/parser/reanalyze-existing`, { method: "POST" });
       const body = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(body?.error || "Не удалось запустить AI/RAG-проверку");
-      pushNotification("success", "AI/RAG готов", body?.message || "RAG анализирует документы TenderPlus в карточке лота.", "/settings");
+      if (!res.ok) throw new Error(body?.error || "Не удалось запустить AI-переоценку");
+      pushNotification("success", "AI-переоценка запускается", "Переоценка отправлена в текущий runner-механизм. Статус обновится автоматически.", "/settings");
       await loadParserStatus();
     } catch (error) {
-      pushNotification("error", "AI/RAG не проверен", error instanceof Error ? error.message : "Проверьте backend, RAG и ключ локальной модели.", "/settings");
+      pushNotification("error", "AI-переоценка не запущена", error instanceof Error ? error.message : "Проверьте backend и AI-конфигурацию.", "/settings");
     } finally {
       setAiReanalyzing(false);
     }
@@ -332,7 +376,7 @@ function Settings() {
                 <div>
                   <h3 className="font-semibold">Telegram-уведомления</h3>
                   <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-                      Напишите боту @freedom_tender_bot команду /start и привяжите Telegram-аккаунт, чтобы получать сообщения о новых подходящих тендерах.
+                      Напишите Telegram-боту команду /start и привяжите аккаунт, чтобы получать сообщения о новых подходящих тендерах.
                   </p>
                   <div className="mt-3 flex flex-wrap gap-2 text-xs">
                     <span className={`rounded-full px-2.5 py-1 font-medium ${telegram.configured ? "bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-300" : "bg-muted text-muted-foreground"}`}>
@@ -397,75 +441,107 @@ function Settings() {
               </div>
             </div>
             <p className="relative mt-4 text-xs text-muted-foreground">
-              Откройте @freedom_tender_bot, отправьте `/start`, укажите свой `@username` и нажмите «Сохранить». Система сама найдёт `chat_id`. Если Telegram не нашёл пользователя, можно вручную вставить `chat_id`.
+              Откройте Telegram-бота, отправьте `/start`, укажите свой `@username` и нажмите «Сохранить». Система сама найдёт `chat_id`. Если Telegram не нашёл пользователя, можно вручную вставить `chat_id`.
             </p>
           </div>
         </div>
 
-        <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: "var(--shadow-sm)" }}>
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
-                <Clock className="h-5 w-5" />
+        <div className="overflow-hidden rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
+          <div className="border-b border-border bg-muted/20 px-6 py-5">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <Clock className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-semibold">Источник лотов TenderPlus API</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Автопроверка {formatInterval(parserStatus?.intervalSeconds)} · последний запуск {formatSince(parserStatus?.lastRun?.startedAt)}
+                  </p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-semibold">Источник лотов TenderPlus API</h3>
-                <p className="text-sm text-muted-foreground">Проверка: {formatSince(parserStatus?.lastRun?.startedAt)}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`inline-flex h-9 items-center rounded-full border px-3 text-xs font-semibold ${parserDisplayClass}`}>
+                  {parserDisplayStatus}
+                </span>
+                <button
+                  onClick={runParserNow}
+                  disabled={parserRunning || parserRequestActive}
+                  className="inline-flex h-9 items-center gap-2 rounded-lg px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+                  style={{ background: "var(--gradient-primary)" }}
+                >
+                  {parserRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                  {parserRequestActive ? "Проверка идёт" : "Запустить парсер"}
+                </button>
+                <button
+                  onClick={reanalyzeExistingTenders}
+                  disabled={aiReanalyzing || parserRequestActive}
+                  className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-4 text-sm font-semibold transition hover:bg-accent disabled:opacity-60"
+                  title="Запустить AI-переоценку уже сохранённых тендеров"
+                >
+                  {aiReanalyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  Переоценить AI
+                </button>
               </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={runParserNow}
-                disabled={parserRunning || parserRequestActive}
-                className="inline-flex h-9 items-center gap-2 rounded-lg px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60"
-                style={{ background: "var(--gradient-primary)" }}
-              >
-                {parserRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                {parserRequestActive ? "Проверка идёт" : "Проверить API"}
-              </button>
-              <button
-                onClick={reanalyzeExistingTenders}
-                disabled={aiReanalyzing || parserRequestActive}
-                className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-4 text-sm font-semibold transition hover:bg-accent disabled:opacity-60"
-                title="Проверить готовность AI/RAG для документов TenderPlus"
-              >
-                {aiReanalyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                Проверить существующие AI
-              </button>
-              <span className={`rounded-full px-2 py-1 text-xs font-medium ${parserStatus?.configured ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>
-                {parserStatus?.configured ? "Подключён" : "Нет данных"}
-              </span>
             </div>
           </div>
-          <div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
-            <div className="rounded-lg bg-muted/40 p-3">
-              <p className="text-xs text-muted-foreground">Статус</p>
-              <p className="mt-1 font-medium">{parserStatus?.lastRun?.status || "—"}</p>
+
+          <div className="p-6">
+            <div className="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-7">
+              <div className="rounded-xl border border-border bg-background p-4">
+                <p className="text-xs text-muted-foreground">Статус</p>
+                <p className="mt-1 font-semibold">{parserDisplayStatus}</p>
+              </div>
+              <div className="rounded-xl border border-border bg-background p-4">
+                <p className="text-xs text-muted-foreground">Последний запуск</p>
+                <p className="mt-1 font-semibold">{formatDateTime(parserStatus?.lastRun?.startedAt)}</p>
+              </div>
+              <div className="rounded-xl border border-border bg-background p-4">
+                <p className="text-xs text-muted-foreground">Следующий запуск</p>
+                <p className="mt-1 font-semibold">{formatDateTime(parserStatus?.nextRunAt)}</p>
+              </div>
+              <div className="rounded-xl border border-border bg-background p-4">
+                <p className="text-xs text-muted-foreground">Автозапуск</p>
+                <p className="mt-1 font-semibold">{formatInterval(parserStatus?.intervalSeconds)}</p>
+              </div>
+              <div className="rounded-xl border border-border bg-background p-4">
+                <p className="text-xs text-muted-foreground">Найдено</p>
+                <p className="mt-1 font-semibold tabular-nums">{parserStatus?.lastRun ? parserStatus.lastRun.lotsFound : "—"}</p>
+              </div>
+              <div className="rounded-xl border border-border bg-background p-4">
+                <p className="text-xs text-muted-foreground">Изменено</p>
+                <p className="mt-1 font-semibold tabular-nums">{parserStatus?.lastRun ? parserStatus.lastRun.lotsChanged : "—"}</p>
+              </div>
+              <div className="rounded-xl border border-border bg-background p-4">
+                <p className="text-xs text-muted-foreground">Режим</p>
+                <p className="mt-1 font-semibold">TenderPlus API</p>
+              </div>
             </div>
-            <div className="rounded-lg bg-muted/40 p-3">
-              <p className="text-xs text-muted-foreground">Старт</p>
-              <p className="mt-1 font-medium">{formatDateTime(parserStatus?.lastRun?.startedAt)}</p>
+
+            <div className="mt-4 rounded-xl border border-border bg-muted/25 p-4 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs text-muted-foreground">Последний ручной запуск</p>
+                  <p className="mt-1 font-semibold">
+                    {parserStatus?.lastRequest
+                      ? `${formatRunMode(parserStatus.lastRequest.runMode)} · ${formatRequestStatus(parserStatus.lastRequest.status)} · ${formatDateTime(parserStatus.lastRequest.requestedAt)}`
+                      : "Ручных запусков ещё не было"}
+                  </p>
+                </div>
+                {parserStatus?.lastRun?.errors?.length ? (
+                  <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700">
+                    Ошибок: {parserStatus.lastRun.errors.length}
+                  </span>
+                ) : (
+                  <span className="rounded-full border border-green-200 bg-green-50 px-3 py-1 text-xs font-semibold text-green-700">
+                    Ошибок нет
+                  </span>
+                )}
+              </div>
+              {parserStatus?.lastRequest?.message && (
+                <p className="mt-2 text-xs text-muted-foreground">{parserStatus.lastRequest.message}</p>
+              )}
             </div>
-            <div className="rounded-lg bg-muted/40 p-3">
-              <p className="text-xs text-muted-foreground">Обновление</p>
-              <p className="mt-1 font-medium">по запросу</p>
-            </div>
-            <div className="rounded-lg bg-muted/40 p-3">
-              <p className="text-xs text-muted-foreground">Интервал</p>
-              <p className="mt-1 font-medium">{formatInterval(parserStatus?.intervalSeconds)}</p>
-            </div>
-            <div className="rounded-lg bg-muted/40 p-3">
-              <p className="text-xs text-muted-foreground">Режим</p>
-              <p className="mt-1 font-medium">TenderPlus API</p>
-            </div>
-          </div>
-          <div className="mt-3 rounded-lg bg-muted/30 p-3 text-sm">
-            <p className="text-xs text-muted-foreground">Последний ручной запуск</p>
-            <p className="mt-1 font-medium">
-              {parserStatus?.lastRequest
-                ? `${parserStatus.lastRequest.status} · ${formatDateTime(parserStatus.lastRequest.requestedAt)}`
-                : "—"}
-            </p>
           </div>
         </div>
 

@@ -15,6 +15,7 @@ type Config struct {
 	TendersKeywords    string
 	CORSAllowedOrigins []string
 	DatabaseURL        string
+	RagAPIBase         string
 	FetchDocument      FetchDocumentConfig
 }
 
@@ -40,6 +41,7 @@ func FromEnv() (Config, error) {
 		TendersKeywords:    strings.TrimSpace(os.Getenv("TENDERS_KEYWORDS")),
 		CORSAllowedOrigins: mergeCORSOrigins(os.Getenv("CORS_ALLOWED_ORIGINS")),
 		DatabaseURL:        strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		RagAPIBase:         strings.TrimRight(getEnv("RAG_API_BASE", "http://127.0.0.1:8083"), "/"),
 		FetchDocument:      fetchDocumentFromEnv(),
 	}
 	if _, err := strconv.Atoi(port); err != nil {
@@ -97,7 +99,7 @@ func fetchDocumentFromEnv() FetchDocumentConfig {
 		}
 	}
 	if len(hosts) == 0 {
-		hosts = []string{"v3bl.goszakup.gov.kz", "goszakup.gov.kz", "zakup.gov.kz", "ows.goszakup.gov.kz", "tenderplus.kz", "eep.mitwork.kz"}
+		hosts = []string{"v3bl.goszakup.gov.kz", "goszakup.gov.kz", "zakup.gov.kz", "ows.goszakup.gov.kz", "api.tenderplus.kz", ".tenderplus.kz", "eep.mitwork.kz"}
 	}
 	maxB := int64(50 * 1024 * 1024)
 	if v := strings.TrimSpace(os.Getenv("FETCH_DOCUMENT_MAX_BYTES")); v != "" {

@@ -13,26 +13,29 @@ import (
 )
 
 type DictionaryItemDTO struct {
-	ID        string `json:"id"`
-	Kind      string `json:"kind"`
-	Value     string `json:"value"`
-	Active    bool   `json:"active"`
-	LastLot   string `json:"lastLot,omitempty"`
-	CreatedAt string `json:"createdAt,omitempty"`
-	UpdatedAt string `json:"updatedAt,omitempty"`
+	ID        string   `json:"id"`
+	Kind      string   `json:"kind"`
+	Value     string   `json:"value"`
+	Active    bool     `json:"active"`
+	MinAmount *float64 `json:"minAmount,omitempty"`
+	LastLot   string   `json:"lastLot,omitempty"`
+	CreatedAt string   `json:"createdAt,omitempty"`
+	UpdatedAt string   `json:"updatedAt,omitempty"`
 }
 
 type DictionarySaveRequest struct {
-	Kind    string `json:"kind"`
-	Value   string `json:"value"`
-	Active  *bool  `json:"active"`
-	LastLot string `json:"lastLot"`
+	Kind      string   `json:"kind"`
+	Value     string   `json:"value"`
+	Active    *bool    `json:"active"`
+	MinAmount *float64 `json:"minAmount"`
+	LastLot   string   `json:"lastLot"`
 }
 
 var allowedDictionaryKinds = map[string]bool{
 	"advantages": true,
 	"blockers":   true,
 	"keywords":   true,
+	"stop_words": true,
 	"tru":        true,
 	"companies":  true,
 }
@@ -52,23 +55,28 @@ func (h *Handler) ListDictionaries(w http.ResponseWriter, r *http.Request) {
 		query = query.Where("kind = ?", kind)
 	}
 	var rows []domain.DictionaryItem
-	if err := query.Order("kind asc, value asc, id asc").Find(&rows).Error; err != nil {
+	if err := query.Order("kind asc, id asc").Find(&rows).Error; err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "ошибка получения справочника")
 		return
 	}
 	items := make([]DictionaryItemDTO, 0, len(rows))
 	keywords := make([]string, 0)
+	stopWords := make([]string, 0)
 	for _, row := range rows {
 		items = append(items, dictionaryItemDTO(row))
 		if row.Kind == "keywords" && row.Active {
 			keywords = append(keywords, row.Value)
 		}
+		if row.Kind == "stop_words" && row.Active {
+			stopWords = append(stopWords, row.Value)
+		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"items":    items,
-		"data":     items,
-		"keywords": keywords,
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"items":      items,
+		"data":       items,
+		"keywords":   keywords,
+		"stopWords":  stopWords,
+		"stop_words": stopWords,
 	})
 }
 
@@ -117,7 +125,12 @@ func (h *Handler) CreateDictionaryItem(w http.ResponseWriter, r *http.Request) {
 	if req.Active != nil {
 		active = *req.Active
 	}
-	row := domain.DictionaryItem{Kind: kind, Value: value, Active: active, LastLot: strings.TrimSpace(req.LastLot)}
+	minAmount, ok := normalizeDictionaryMinAmount(req.MinAmount)
+	if !ok {
+		writeJSONError(w, http.StatusBadRequest, "минимальная сумма не может быть отрицательной")
+		return
+	}
+	row := domain.DictionaryItem{Kind: kind, Value: value, Active: active, MinAmount: minAmount, LastLot: strings.TrimSpace(req.LastLot)}
 	if err := h.DB.Create(&row).Error; err != nil {
 		if isUniqueViolation(err) {
 			writeJSONError(w, http.StatusConflict, "значение уже есть в справочнике")
@@ -162,6 +175,14 @@ func (h *Handler) UpdateDictionaryItem(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Active != nil {
 		row.Active = *req.Active
+	}
+	if req.MinAmount != nil {
+		minAmount, ok := normalizeDictionaryMinAmount(req.MinAmount)
+		if !ok {
+			writeJSONError(w, http.StatusBadRequest, "минимальная сумма не может быть отрицательной")
+			return
+		}
+		row.MinAmount = minAmount
 	}
 	row.LastLot = strings.TrimSpace(req.LastLot)
 	if row.Kind == "" || row.Value == "" {
@@ -211,6 +232,7 @@ func dictionaryItemDTO(row domain.DictionaryItem) DictionaryItemDTO {
 		Kind:      row.Kind,
 		Value:     row.Value,
 		Active:    row.Active,
+		MinAmount: row.MinAmount,
 		LastLot:   row.LastLot,
 		CreatedAt: row.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt: row.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
@@ -229,6 +251,20 @@ func normalizeDictionaryKind(kind string) string {
 
 func normalizeDictionaryValue(value string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+}
+
+func normalizeDictionaryMinAmount(value *float64) (*float64, bool) {
+	if value == nil {
+		return nil, true
+	}
+	if *value < 0 {
+		return nil, false
+	}
+	if *value == 0 {
+		return nil, true
+	}
+	normalized := *value
+	return &normalized, true
 }
 
 func stringID(id uint) string {
@@ -254,4 +290,17 @@ func writeJSONError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "ошибка подготовки ответа")
+		return
+	}
+	body = append(body, '\n')
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
 }

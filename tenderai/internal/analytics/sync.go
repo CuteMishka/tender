@@ -71,18 +71,21 @@ func SyncFromTenderPlus(ctx context.Context, db *gorm.DB, tp *tenderplus.Client,
 
 func lotToHistorical(l tenderplus.Lot) HistoricalLot {
 	h := HistoricalLot{
-		LotID:       l.ID,
-		LotSource:   derefStr(l.LotSourceID),
-		PartnerLink: derefStr(l.PartnerLink),
+		LotID:         l.ID,
+		LotSource:     derefStr(l.LotSourceID),
+		PartnerLink:   derefStr(l.PartnerLink),
+		InitialAmount: tenderplus.LotAmount(l),
+		Status:        tenderplus.LotStatusName(l),
+		CustomerName:  tenderplus.LotOrganizationName(l),
+		CustomerID:    tenderplus.LotOrganizationBIN(l),
+		OrganizerName: tenderplus.LotOrganizationName(l),
+		PurchaseType:  tenderplus.LotPurchaseType(l),
 	}
 	if l.Title != nil {
 		h.Title = *l.Title
 	}
 	if l.Description != nil {
 		h.Description = *l.Description
-	}
-	if l.Cost != nil {
-		h.InitialAmount = *l.Cost
 	}
 	if l.Region != nil && l.Region.Name != nil {
 		h.Region = *l.Region.Name
@@ -92,22 +95,22 @@ func lotToHistorical(l tenderplus.Lot) HistoricalLot {
 		if lb.EndDate != nil {
 			t := parseTP(*lb.EndDate)
 			h.EndDate = t
-			if t != nil && t.Before(time.Now()) {
+			if strings.TrimSpace(h.Status) == "" && t != nil && t.Before(time.Now()) {
 				h.Status = "completed"
 			}
 		}
 		if lb.BeginDate != nil {
 			h.StartDate = parseTP(*lb.BeginDate)
 		}
-		if lb.LotStatus != nil && lb.LotStatus.Name != nil {
-			h.PurchaseType = *lb.LotStatus.Name
-		}
-		if lb.Partner != nil && lb.Partner.Name != nil {
-			h.OrganizerName = *lb.Partner.Name
+		if lb.PubDate != nil {
+			h.PublishDate = parseTP(*lb.PubDate)
 		}
 	}
 	if strings.TrimSpace(h.CustomerName) == "" {
 		h.CustomerName = h.OrganizerName
+	}
+	if strings.TrimSpace(h.Status) == "" {
+		h.Status = "active"
 	}
 	return h
 }
@@ -115,6 +118,7 @@ func lotToHistorical(l tenderplus.Lot) HistoricalLot {
 func parseTP(s string) *time.Time {
 	layouts := []string{
 		time.RFC3339,
+		"2006-01-02 15:04:05",
 		"2006-01-02T15:04:05",
 		"2006-01-02",
 	}

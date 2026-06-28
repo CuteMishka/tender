@@ -19,7 +19,14 @@ import {
   type TenderViewInfo,
 } from "@/lib/tenders-api";
 
-type TendersSearch = { page: number };
+type TendersSearch = { page: number; limit: number };
+
+const PAGE_LIMIT_OPTIONS = [10, 20, 50] as const;
+
+function normalizePageLimit(value: unknown): number {
+  const limit = Number(value);
+  return PAGE_LIMIT_OPTIONS.includes(limit as (typeof PAGE_LIMIT_OPTIONS)[number]) ? limit : 10;
+}
 
 function pageFromLocation(location: { search: unknown; searchStr?: string }): number {
   const s = location.search;
@@ -33,10 +40,23 @@ function pageFromLocation(location: { search: unknown; searchStr?: string }): nu
   return Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
 }
 
+function limitFromLocation(location: { search: unknown; searchStr?: string }): number {
+  const s = location.search;
+  if (typeof s === "object" && s !== null && "limit" in s) {
+    return normalizePageLimit((s as { limit: unknown }).limit);
+  }
+  const raw = location.searchStr ?? "";
+  const q = new URLSearchParams(raw.startsWith("?") ? raw.slice(1) : raw);
+  return normalizePageLimit(q.get("limit"));
+}
+
 export const Route = createFileRoute("/_admin/tenders/")({
   validateSearch: (raw: Record<string, unknown>): TendersSearch => {
     const page = Number(raw.page);
-    return { page: Number.isFinite(page) && page >= 1 ? Math.floor(page) : 1 };
+    return {
+      page: Number.isFinite(page) && page >= 1 ? Math.floor(page) : 1,
+      limit: normalizePageLimit(raw.limit),
+    };
   },
   ssr: false,
   component: TendersList,
@@ -55,9 +75,16 @@ function isGovernmentProcurementQuery(s: string): boolean {
 
 const statusColorMap: Record<string, string> = {
   green: "bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-300",
-  orange: "bg-orange-100 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300",
+  orange: "bg-yellow-100 text-yellow-800 dark:bg-yellow-950/40 dark:text-yellow-300",
   red: "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300",
   gray: "bg-muted/50 text-muted-foreground",
+};
+
+const deadlineBadgeClass: Record<string, string> = {
+  green: "border-green-200 bg-green-50 text-green-700",
+  orange: "border-yellow-200 bg-yellow-50 text-yellow-800",
+  red: "border-red-200 bg-red-50 text-red-700",
+  gray: "border-border bg-muted/50 text-muted-foreground",
 };
 
 function lotStatusLabel(status?: string | null): string {
@@ -94,10 +121,119 @@ function sourceBadgeClass(source?: string | null): string {
   }
 }
 
+function renderAiStatusLabel(status?: string | null): string {
+  const value = (status || "").trim().toLowerCase();
+  switch (value) {
+    case "ok":
+      return "AI оценка";
+    case "cooldown":
+      return "AI временно недоступен";
+    case "rate_limited":
+      return "AI ждёт лимит";
+    case "manual_removed":
+      return "Убрано вручную";
+    case "no_spec_text":
+    case "document_download_disabled":
+    case "document_text_unavailable":
+    case "no_supported_documents":
+      return "Требуется ТС";
+    case "no_relevant_spec_signals":
+      return "Не профиль Tender";
+    case "error":
+      return "AI ошибка";
+    default:
+      return value ? "AI проверен" : "AI в очереди";
+  }
+}
+
+function renderAiStatusClass(status?: string | null, suitable?: boolean | null): string {
+  const value = (status || "").trim().toLowerCase();
+  if (suitable) return "border-green-200 bg-green-50 text-green-700";
+  if (value === "ok") return "border-sky-200 bg-sky-50 text-sky-700";
+  if (value === "cooldown" || value === "rate_limited") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (value === "manual_removed") return "border-red-200 bg-red-50 text-red-700";
+  if (value === "no_relevant_spec_signals") return "border-slate-200 bg-slate-50 text-slate-600";
+  if (value === "no_spec_text" || value === "document_text_unavailable" || value === "no_supported_documents") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-border bg-muted/50 text-muted-foreground";
+}
+
+function aiScoreTone(score?: number | null): string {
+  if (typeof score !== "number") return "text-muted-foreground";
+  if (score > 50) return "text-green-700";
+  if (score >= 35) return "text-amber-700";
+  return "text-red-700";
+}
+
+function aiScoreBarTone(score?: number | null): string {
+  if (typeof score !== "number") return "bg-muted-foreground/30";
+  if (score > 50) return "bg-green-500";
+  if (score >= 35) return "bg-amber-500";
+  return "bg-red-500";
+}
+
+const obviousNonProfileMarkers = [
+  "станок",
+  "видеопроектор",
+  "dlp-проектор",
+  "dlp проектор",
+  "проектор",
+  "кабель-канал",
+  "кабель канал",
+  "канцеляр",
+  "принтер",
+  "сканер",
+  "компьютер",
+  "ноутбук",
+  "планшет",
+  "научно-технической обработке документов",
+  "научно технической обработке документов",
+  "обработке документов",
+  "экспертизе образовательных программ",
+  "образовательных программ",
+];
+
+function isObviousNonProfileTender(tender: TenderItem): boolean {
+  const text = sanitizeApiText([
+    tender.title,
+    tender.description,
+    tender.purchaseType,
+    tender.matchedKeyword,
+  ].filter(Boolean).join(" ")).toLowerCase().replace(/ё/g, "е");
+  return obviousNonProfileMarkers.some((marker) => text.includes(marker));
+}
+
+type PaginationItem = number | "ellipsis-start" | "ellipsis-end";
+
+function buildPaginationItems(currentPage: number, pageCount: number): PaginationItem[] {
+  const total = Math.max(1, pageCount);
+  const current = Math.min(Math.max(1, currentPage), total);
+  if (total <= 9) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+
+  const pages = new Set<number>([1, 2, total - 1, total]);
+  for (let p = current - 2; p <= current + 2; p += 1) {
+    if (p >= 1 && p <= total) pages.add(p);
+  }
+
+  const sorted = [...pages].sort((a, b) => a - b);
+  const out: PaginationItem[] = [];
+  for (const p of sorted) {
+    const last = out[out.length - 1];
+    const previous = typeof last === "number" ? last : null;
+    if (previous !== null && p - previous > 1) {
+      out.push(previous < current ? "ellipsis-start" : "ellipsis-end");
+    }
+    out.push(p);
+  }
+  return out;
+}
+
 function TendersList() {
   const location = useLocation();
   const navigate = useNavigate();
   const page = pageFromLocation(location);
+  const limit = limitFromLocation(location);
   const [data, setData] = useState<TendersListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -109,13 +245,43 @@ function TendersList() {
   const [searchText, setSearchText] = useState("");
   const [filterMinAmount, setFilterMinAmount] = useState("");
   const [filterMaxAmount, setFilterMaxAmount] = useState("");
-  const [savedIds, setSavedIds] = useState<Set<number>>(new Set());
+  const [participatingItems, setParticipatingItems] = useState<TenderItem[]>([]);
   const [removingSuitableIds, setRemovingSuitableIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     fetch(`${getLocalApiBase()}/api/v1/lots/saved`)
       .then((r) => r.json())
-      .then((d) => { if (Array.isArray(d)) setSavedIds(new Set(d.filter((l: any) => l.status === "participating").map((l: any) => l.id))); })
+      .then((d) => {
+        if (!Array.isArray(d)) return;
+        // Вкладка "Участвуем" показывает сами сохранённые заявки (включая истёкшие),
+        // а не фильтрует ленту активных тендеров — иначе счётчик и список расходятся
+        // (истёкший участвующий лот считается в бейдже, но пропадает из активной ленты).
+        setParticipatingItems(
+          d
+            .filter((l: any) => l.status === "participating")
+            .map((l: any) => ({
+              id: l.id,
+              lot: l.external_id || "",
+              lot_source_id: l.external_id ?? null,
+              source: l.source ?? null,
+              sourceLabel: null,
+              title: l.title || "",
+              description: l.description || "",
+              cost: typeof l.amount === "number" ? l.amount : 0,
+              partnerLink: l.partner_link || "",
+              place: "",
+              buy_id: 0,
+              endDate: l.end_date || l.deadline || null,
+              startDate: l.start_date || null,
+              organizer_name: l.organizer_name ?? null,
+              status: l.status ?? null,
+              purchaseType: l.purchase_type ?? null,
+              isSuitable: null,
+              matchedKeyword: null,
+              aiStatus: null,
+            } as TenderItem)),
+        );
+      })
       .catch(() => {});
   }, []);
 
@@ -131,25 +297,28 @@ function TendersList() {
     setLoading(true);
     setError(null);
     const keywords = isGovernmentProcurementQuery(searchText) ? "" : searchText;
-    fetchTendersList({ page, limit: 10, keywords, suitable: activeTab === "Подходящие" })
+    fetchTendersList({ page, limit, keywords, suitable: activeTab === "Подходящие" })
       .then((d) => { if (!cancelled) setData(d); })
       .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [page, searchText, activeTab]);
+  }, [page, limit, searchText, activeTab]);
 
-  const filteredItems = (data?.items ?? []).filter((t) => {
+  const baseItems = activeTab === "Участвуем" ? participatingItems : (data?.items ?? []);
+  const filteredItems = baseItems.filter((t) => {
+    if (activeTab !== "Участвуем" && isObviousNonProfileTender(t)) return false;
     const status = getTenderStatus(t.endDate);
     if (activeTab === "Активные" && status.color === "gray") return false;
     if (activeTab === "Истекающие" && status.color !== "red" && status.color !== "orange") return false;
     if (activeTab === "Завершённые" && status.color !== "gray") return false;
-    if (activeTab === "Участвуем" && !savedIds.has(t.id)) return false;
     const minA = parseFloat(filterMinAmount);
     const maxA = parseFloat(filterMaxAmount);
     if (!isNaN(minA) && t.cost < minA) return false;
     if (!isNaN(maxA) && t.cost > maxA) return false;
     return true;
   });
+  const currentPage = data?.meta.page ?? page;
+  const pageCount = Math.max(1, data?.meta.pageCount || 1);
 
   async function handleRemoveFromSuitable(tender: TenderItem) {
     if (removingSuitableIds.has(tender.id)) return;
@@ -206,7 +375,7 @@ function TendersList() {
                 onChange={(e) => {
                   setSearchText(e.target.value);
                   if (page !== 1) {
-                    navigate({ to: "/tenders", search: { page: 1 } });
+                    navigate({ to: "/tenders", search: { page: 1, limit } });
                   }
                 }}
                 className="rounded-lg border border-input bg-background px-3 py-2.5 text-sm"
@@ -236,14 +405,14 @@ function TendersList() {
             { key: "Активные" },
             { key: "Истекающие" },
             { key: "Завершённые" },
-            { key: "Участвуем", count: savedIds.size, icon: CheckCircle2 },
+            { key: "Участвуем", count: participatingItems.length, icon: CheckCircle2 },
           ].map(({ key: tab, count, icon: Icon }) => (
             <button
               key={tab}
               onClick={() => {
                 setActiveTab(tab);
                 if (page !== 1) {
-                  navigate({ to: "/tenders", search: { page: 1 } });
+                  navigate({ to: "/tenders", search: { page: 1, limit } });
                 }
               }}
               className={`inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === tab ? "bg-primary text-primary-foreground" : "border border-border bg-card text-foreground hover:bg-accent"}`}
@@ -269,12 +438,13 @@ function TendersList() {
           ) : data ? (
             <>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1000px] text-sm">
+                <table className="w-full min-w-[1120px] text-sm">
                   <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
                     <tr>
                       <th className="px-4 py-3 text-left font-medium">ID / закупка</th>
                       <th className="px-4 py-3 text-left font-medium">Лот / источник</th>
                       <th className="px-4 py-3 text-left font-medium">Тендер</th>
+                      <th className="px-4 py-3 text-left font-medium">Подходит</th>
                       <th className="px-4 py-3 text-right font-medium">Сумма ₸</th>
                       <th className="px-4 py-3 text-left font-medium">Дедлайн</th>
                       <th className="px-4 py-3 text-left font-medium">Статус</th>
@@ -351,19 +521,36 @@ function TendersList() {
                             )}
                             <div className="mt-1 max-w-sm text-xs text-muted-foreground">{truncate(t.description, 120)}</div>
                           </td>
+                          <td className="px-4 py-4">
+                            {typeof t.aiScore === "number" ? (
+                              <div className="min-w-28">
+                                <div className="mb-1 flex items-center justify-between gap-2">
+                                  <span className={`text-sm font-bold tabular-nums ${aiScoreTone(t.aiScore)}`}>{t.aiScore}%</span>
+                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${renderAiStatusClass(t.aiStatus, t.isSuitable)}`}>
+                                    {renderAiStatusLabel(t.aiStatus)}
+                                  </span>
+                                </div>
+                                <div className="h-2 overflow-hidden rounded-full bg-muted">
+                                  <div
+                                    className={`h-full rounded-full ${aiScoreBarTone(t.aiScore)}`}
+                                    style={{ width: `${Math.max(0, Math.min(100, t.aiScore))}%` }}
+                                  />
+                                </div>
+                                {t.aiProvider && <div className="mt-1 text-[10px] text-muted-foreground">{t.aiProvider}</div>}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">ожидает AI</span>
+                            )}
+                          </td>
                           <td className="px-4 py-4 text-right font-semibold tabular-nums">{formatTenderAmount(t.cost)}</td>
                           <td className="px-4 py-4 text-xs text-muted-foreground">
                             {t.endDate ? (
-                              <span
-                                className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                                  statusInfo.daysLeft !== null && statusInfo.daysLeft < 0
-                                    ? "bg-muted text-muted-foreground"
-                                    : "bg-muted/70 text-foreground dark:bg-muted/60 dark:text-foreground"
-                                }`}
-                                title={formatDate(t.endDate)}
-                              >
-                                {deadlineBadgeLabel(statusInfo.daysLeft)}
-                              </span>
+                              <div className="flex min-w-[128px] flex-col gap-1">
+                                <span className="font-medium text-foreground">{formatDate(t.endDate)}</span>
+                                <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[10px] font-semibold ${deadlineBadgeClass[statusInfo.color]}`}>
+                                  {deadlineBadgeLabel(statusInfo.daysLeft)}
+                                </span>
+                              </div>
                             ) : (
                               <span className="text-muted-foreground/60">—</span>
                             )}
@@ -372,7 +559,7 @@ function TendersList() {
                             <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${statusColorMap[lotStatusColorKey]}`}>
                               <span className={`h-1.5 w-1.5 rounded-full ${
                                 lotStatusColorKey === "green" ? "bg-green-500" :
-                                lotStatusColorKey === "orange" ? "bg-orange-500" :
+                                lotStatusColorKey === "orange" ? "bg-yellow-500" :
                                 lotStatusColorKey === "red" ? "bg-red-500" : "bg-muted-foreground"
                               }`} />
                               {lotStatusLabel(t.status)}
@@ -411,7 +598,7 @@ function TendersList() {
                     })}
                     {filteredItems.length === 0 && !loading && (
                       <tr>
-                        <td colSpan={7} className="px-6 py-16 text-center text-sm text-muted-foreground">
+                        <td colSpan={8} className="px-6 py-16 text-center text-sm text-muted-foreground">
                           {searchText.trim()
                             ? "По названию, заказчику или виду закупки тендеры не найдены. Попробуйте другое слово или сбросьте фильтр."
                             : "Тендеры не найдены"}
@@ -423,34 +610,58 @@ function TendersList() {
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-6 py-3 text-sm text-muted-foreground">
                 <span>
-                  Стр. {page} из {Math.max(1, data.meta.pageCount || 1)} · записей: {filteredItems.length} · всего: {data.meta.totalCount}
+                  Стр. {currentPage} из {pageCount} · записей: {filteredItems.length} · всего: {data.meta.totalCount}
                   {loading ? " · обновление…" : ""}
                 </span>
-                <div className="flex flex-wrap gap-1">
+                <div className="flex flex-wrap items-center gap-3">
+                  <label htmlFor="tenders-page-limit" className="flex items-center gap-2">
+                    <span>На странице</span>
+                    <select
+                      id="tenders-page-limit"
+                      value={limit}
+                      onChange={(e) =>
+                        navigate({
+                          to: "/tenders",
+                          search: { page: 1, limit: normalizePageLimit(e.target.value) },
+                        })
+                      }
+                      className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
+                    >
+                      {PAGE_LIMIT_OPTIONS.map((value) => (
+                        <option key={value} value={value}>{value}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="flex flex-wrap gap-1">
                   <Link
                     to="/tenders"
-                    search={{ page: Math.max(1, page - 1) }}
-                    className={`rounded-md border border-border px-3 py-1 hover:bg-accent ${page <= 1 ? "pointer-events-none opacity-40" : ""}`}
+                    search={{ page: Math.max(1, currentPage - 1), limit }}
+                    className={`rounded-md border border-border px-3 py-1 hover:bg-accent ${currentPage <= 1 ? "pointer-events-none opacity-40" : ""}`}
                   >
                     ←
                   </Link>
-                  {Array.from({ length: Math.max(1, data.meta.pageCount || 1) }, (_, i) => i + 1).map((p) => (
-                    <Link
-                      key={p}
-                      to="/tenders"
-                      search={{ page: p }}
-                      className={`rounded-md px-3 py-1 ${p === page ? "bg-primary text-primary-foreground" : "border border-border hover:bg-accent"}`}
-                    >
-                      {p}
-                    </Link>
+                  {buildPaginationItems(currentPage, pageCount).map((entry) => (
+                    typeof entry === "number" ? (
+                      <Link
+                        key={entry}
+                        to="/tenders"
+                        search={{ page: entry, limit }}
+                        className={`rounded-md px-3 py-1 ${entry === currentPage ? "bg-primary text-primary-foreground" : "border border-border hover:bg-accent"}`}
+                      >
+                        {entry}
+                      </Link>
+                    ) : (
+                      <span key={entry} className="rounded-md px-2 py-1 text-muted-foreground">...</span>
+                    )
                   ))}
                   <Link
                     to="/tenders"
-                    search={{ page: Math.min(Math.max(1, data.meta.pageCount || 1), page + 1) }}
-                    className={`rounded-md border border-border px-3 py-1 hover:bg-accent ${page >= (data.meta.pageCount || 1) ? "pointer-events-none opacity-40" : ""}`}
+                    search={{ page: Math.min(pageCount, currentPage + 1), limit }}
+                    className={`rounded-md border border-border px-3 py-1 hover:bg-accent ${currentPage >= pageCount ? "pointer-events-none opacity-40" : ""}`}
                   >
                     →
                   </Link>
+                  </div>
                 </div>
               </div>
             </>

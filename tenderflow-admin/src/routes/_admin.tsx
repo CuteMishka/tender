@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Sidebar } from "@/components/admin/Sidebar";
 import { isAuthenticated } from "@/lib/auth";
 import { Bell, CheckCheck, Trash2, X } from "lucide-react";
-import { useNotifications, type AppNotification } from "@/hooks/use-notifications";
+import { useNotifications, useServerNotificationsSync, type AppNotification } from "@/hooks/use-notifications";
 import { useTheme } from "@/hooks/use-theme";
 
 export const Route = createFileRoute("/_admin")({
@@ -143,6 +143,89 @@ function NotificationBell() {
   );
 }
 
+function NotificationToastStack() {
+  const { notifications, markRead } = useNotifications();
+  const [visible, setVisible] = useState<AppNotification[]>([]);
+  const knownRef = useRef<Set<string> | null>(null);
+  const timersRef = useRef<Record<string, number>>({});
+  const navigate = useNavigate();
+
+  const dismiss = (id: string) => {
+    if (timersRef.current[id]) {
+      window.clearTimeout(timersRef.current[id]);
+      delete timersRef.current[id];
+    }
+    setVisible((items) => items.filter((item) => item.id !== id));
+  };
+
+  useEffect(() => {
+    if (knownRef.current === null) {
+      knownRef.current = new Set(notifications.map((item) => item.id));
+      return;
+    }
+
+    const known = knownRef.current;
+    const unreadIds = new Set(notifications.filter((item) => !item.read).map((item) => item.id));
+    const fresh = notifications.filter((item) => !known.has(item.id) && !item.read).slice(0, 3);
+    notifications.forEach((item) => known.add(item.id));
+
+    setVisible((items) => {
+      const stillUnread = items.filter((item) => unreadIds.has(item.id));
+      if (fresh.length === 0) return stillUnread;
+      const freshIds = new Set(fresh.map((item) => item.id));
+      return [...fresh, ...stillUnread.filter((item) => !freshIds.has(item.id))].slice(0, 3);
+    });
+
+    fresh.forEach((item) => {
+      if (timersRef.current[item.id]) window.clearTimeout(timersRef.current[item.id]);
+      timersRef.current[item.id] = window.setTimeout(() => dismiss(item.id), 9000);
+    });
+  }, [notifications]);
+
+  useEffect(() => () => {
+    Object.values(timersRef.current).forEach((timer) => window.clearTimeout(timer));
+  }, []);
+
+  if (visible.length === 0) return null;
+
+  return (
+    <div className="pointer-events-none fixed right-6 top-16 z-40 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-3">
+      {visible.map((item) => {
+        const s = typeStyles[item.type];
+        return (
+          <div
+            key={item.id}
+            className={`pointer-events-auto overflow-hidden rounded-xl border border-border bg-card shadow-xl ${s.bg} border-l-4 animate-in fade-in-0 slide-in-from-right-3`}
+          >
+            <div className="flex items-start gap-3 p-4">
+              <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${s.dot}`} />
+              <button
+                onClick={() => {
+                  markRead(item.id);
+                  dismiss(item.id);
+                  if (item.link) navigate({ to: item.link as any });
+                }}
+                className="min-w-0 flex-1 text-left"
+              >
+                <p className="text-sm font-semibold text-foreground">{item.title}</p>
+                <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{item.message}</p>
+                <p className="mt-2 text-[11px] font-medium text-primary">Откроется в центре уведомлений</p>
+              </button>
+              <button
+                onClick={() => dismiss(item.id)}
+                className="shrink-0 rounded-lg p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label="Скрыть уведомление"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -156,6 +239,8 @@ function AdminLayout() {
       setReady(true);
     }
   }, [navigate]);
+
+  useServerNotificationsSync(ready);
 
   if (!ready) {
     return (
@@ -172,6 +257,7 @@ function AdminLayout() {
         <div className="fixed right-6 top-4 z-40">
           <NotificationBell />
         </div>
+        <NotificationToastStack />
         <main className="flex-1 overflow-y-auto">
           <div key={location.pathname} className="animate-in fade-in-0 slide-in-from-bottom-3 duration-200 min-h-full">
             <Outlet />

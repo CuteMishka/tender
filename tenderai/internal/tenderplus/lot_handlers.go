@@ -3,6 +3,7 @@ package tenderplus
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -18,9 +19,33 @@ func ParticipateLotHandler(db *gorm.DB) http.HandlerFunc {
 			return
 		}
 
-		if input.Status != "participating" && input.Status != "rejected" && input.Status != "active" && input.Status != "review" && input.Status != "in_work" {
+		if !isSavedLotStatus(input.Status) {
 			input.Status = "participating"
 		}
+		rawPriority := strings.TrimSpace(input.Priority)
+		rawRiskLevel := strings.TrimSpace(input.RiskLevel)
+		now := time.Now()
+		if input.ID != 0 {
+			var existing SavedLot
+			if err := db.Select("created_at", "priority", "risk_level", "next_step").First(&existing, input.ID).Error; err == nil && validSavedLotTime(existing.CreatedAt) {
+				input.CreatedAt = existing.CreatedAt
+				if rawPriority == "" {
+					input.Priority = normalizeSavedLotChoice(existing.Priority, "normal")
+				}
+				if rawRiskLevel == "" {
+					input.RiskLevel = normalizeSavedLotChoice(existing.RiskLevel, "medium")
+				}
+				if strings.TrimSpace(input.NextStep) == "" {
+					input.NextStep = existing.NextStep
+				}
+			}
+		}
+		input.Priority = normalizeSavedLotChoice(input.Priority, "normal")
+		input.RiskLevel = normalizeSavedLotChoice(input.RiskLevel, "medium")
+		if !validSavedLotTime(input.CreatedAt) {
+			input.CreatedAt = now
+		}
+		input.UpdatedAt = now
 		entry := map[string]string{
 			"status":     input.Status,
 			"comment":    input.Comment,
@@ -40,10 +65,48 @@ func ParticipateLotHandler(db *gorm.DB) http.HandlerFunc {
 			http.Error(w, `{"error":"Ошибка сохранения лота"}`, http.StatusInternalServerError)
 			return
 		}
+		_ = db.Create(&TenderActivity{
+			SavedLotID: input.ID,
+			Action:     "status_changed",
+			Status:     input.Status,
+			Actor:      firstNonEmpty(input.Reviewer, input.AssignedTo),
+			Message:    input.Comment,
+			CreatedAt:  now,
+		}).Error
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(input)
 	}
+}
+
+func isSavedLotStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "active", "review", "assignment_requested", "in_work", "participating", "submitted", "waiting_result", "won", "lost", "rejected", "archived":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeSavedLotChoice(value string, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func validSavedLotTime(value time.Time) bool {
+	return !value.IsZero() && value.Year() >= 2000
 }
 
 // GetSavedLotsHandler возвращает список сохраненных лотов для вкладки "Заявки"

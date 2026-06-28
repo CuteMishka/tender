@@ -29,7 +29,7 @@ AI_PROVIDER = LOT_ANALYZE_AI_PROVIDER
 CHAT_MODEL = LOT_ANALYZE_CHAT_MODEL
 GEMINI_CACHE_TTL_SECONDS = int(os.environ.get("GEMINI_CACHE_TTL_SECONDS", "86400"))
 GEMINI_MIN_INTERVAL_SECONDS = float(os.environ.get("GEMINI_MIN_INTERVAL_SECONDS", "12"))
-GEMINI_MAX_RETRIES = int(os.environ.get("GEMINI_MAX_RETRIES", "0"))
+GEMINI_MAX_RETRIES = int(os.environ.get("GEMINI_MAX_RETRIES", os.environ.get("AI_MAX_RETRIES", "2")))
 
 # Обратная совместимость
 OPENAI_CHAT_MODEL = CHAT_MODEL
@@ -118,33 +118,60 @@ def _respect_gemini_rate_limit() -> None:
 
 def is_ai_configured() -> bool:
     if AI_PROVIDER == "groq":
-        return bool(GROQ_API_KEY)
+        return bool(GROQ_API_KEY) or _is_local_openai_compatible_base()
     return bool(GEMINI_API_KEY)
 
 
 def is_spec_ai_configured() -> bool:
     if SPEC_AI_PROVIDER == "groq":
-        return bool(GROQ_API_KEY)
+        return bool(GROQ_API_KEY) or _is_local_openai_compatible_base()
     return bool(GEMINI_API_KEY)
 
 
 def ai_configuration() -> dict[str, Any]:
     key = GROQ_API_KEY if AI_PROVIDER == "groq" else GEMINI_API_KEY
     key_name = "GROQ_API_KEY" if AI_PROVIDER == "groq" else "GEMINI_API_KEY"
+    configured = bool(key) or (AI_PROVIDER == "groq" and _is_local_openai_compatible_base())
+    spec_key = GROQ_API_KEY if SPEC_AI_PROVIDER == "groq" else GEMINI_API_KEY
+    spec_configured = bool(spec_key) or (SPEC_AI_PROVIDER == "groq" and _is_local_openai_compatible_base())
     return {
         "provider": AI_PROVIDER,
         "model": CHAT_MODEL,
-        "configured": bool(key),
+        "configured": configured,
         "key_defined": key_name in os.environ,
         "key_length": len(key),
         "spec_provider": SPEC_AI_PROVIDER,
         "spec_model": SPEC_CHAT_MODEL,
-        "spec_configured": is_spec_ai_configured(),
+        "spec_configured": spec_configured,
     }
 
 
 def _provider_api_key(provider: str) -> str:
-    return GROQ_API_KEY if provider == "groq" else GEMINI_API_KEY
+    if provider == "groq":
+        return GROQ_API_KEY or ("ollama" if _is_local_openai_compatible_base() else "")
+    return GEMINI_API_KEY
+
+
+def _is_local_openai_compatible_base() -> bool:
+    normalized = GROQ_BASE_URL.lower()
+    return "11434" in normalized or "ollama" in normalized or "localhost" in normalized or "127.0.0.1" in normalized
+
+
+def _is_retryable_ai_error(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int) and status in {408, 409, 429, 500, 502, 503, 504}:
+        return True
+
+    retryable_names = {
+        "APIConnectionError",
+        "APITimeoutError",
+        "DeadlineExceeded",
+        "InternalServerError",
+        "ResourceExhausted",
+        "ServiceUnavailable",
+        "TooManyRequests",
+    }
+    return exc.__class__.__name__ in retryable_names
 
 
 def gemini_chat(
@@ -211,15 +238,17 @@ def ai_chat(
                     from openai import OpenAI
 
                     client = OpenAI(api_key=api_key, base_url=GROQ_BASE_URL)
-                    response = client.chat.completions.create(
-                        model=model,
-                        messages=[
+                    request_payload = {
+                        "model": model,
+                        "messages": [
                             {"role": "system", "content": system},
                             {"role": "user", "content": user},
                         ],
-                        temperature=temperature,
-                        response_format={"type": "json_object"},
-                    )
+                        "temperature": temperature,
+                    }
+                    if not _is_local_openai_compatible_base():
+                        request_payload["response_format"] = {"type": "json_object"}
+                    response = client.chat.completions.create(**request_payload)
                     text = response.choices[0].message.content or ""
                 else:
                     import google.generativeai as genai
@@ -245,6 +274,9 @@ def ai_chat(
                     break
                 continue
             except Exception as e:
+                if _is_retryable_ai_error(e) and attempt < len(delays):
+                    last_err = e
+                    continue
                 raise
 
         raise RuntimeError(
@@ -280,17 +312,61 @@ def ai_chat_json(
 ) -> Any:
     """Возвращает уже распарсенный JSON из ответа AI."""
     text = ai_chat(system, user, temperature, provider=provider, model=model)
-    # Убираем markdown-обёртку если модель всё же добавила ```json
+    for candidate in (_strip_json_fence(text), _first_json_value(text)):
+        if not candidate:
+            continue
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    raise RuntimeError(f"{provider} вернул невалидный JSON\n{text[:300]}")
+
+
+def _strip_json_fence(text: str) -> str:
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.split("```", 2)[-1] if cleaned.count("```") >= 2 else cleaned
         cleaned = cleaned.lstrip("json").strip()
         if cleaned.endswith("```"):
             cleaned = cleaned[:-3].strip()
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"{provider} вернул невалидный JSON: {e}\n{text[:300]}") from e
+    return cleaned
+
+
+def _first_json_value(text: str) -> str | None:
+    start = -1
+    for index, char in enumerate(text):
+        if char in "{[":
+            start = index
+            break
+    if start < 0:
+        return None
+
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            stack.append("}")
+        elif char == "[":
+            stack.append("]")
+        elif char in "}]":
+            if not stack or stack[-1] != char:
+                return None
+            stack.pop()
+            if not stack:
+                return text[start : index + 1]
+    return None
 
 
 def get_company_profile() -> str:

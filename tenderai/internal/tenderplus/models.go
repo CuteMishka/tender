@@ -16,6 +16,9 @@ type SavedLot struct {
 	AssignedTo    string    `gorm:"type:varchar(255)" json:"assigned_to,omitempty"`
 	Reviewer      string    `gorm:"type:varchar(255)" json:"reviewer,omitempty"`
 	ActionHistory string    `gorm:"type:text" json:"action_history,omitempty"`
+	Priority      string    `gorm:"type:varchar(32);default:'normal'" json:"priority,omitempty"`
+	RiskLevel     string    `gorm:"type:varchar(32);default:'medium'" json:"risk_level,omitempty"`
+	NextStep      string    `gorm:"type:text" json:"next_step,omitempty"`
 	Deadline      time.Time `json:"deadline"`
 	StartDate     time.Time `json:"start_date"`
 	EndDate       time.Time `json:"end_date"`
@@ -24,4 +27,34 @@ type SavedLot struct {
 	PartnerLink   string    `gorm:"type:text" json:"partner_link"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type TenderActivity struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	SavedLotID uint      `gorm:"index;not null" json:"saved_lot_id"`
+	Action     string    `gorm:"type:varchar(64);index" json:"action"`
+	Status     string    `gorm:"type:varchar(64);index" json:"status,omitempty"`
+	Actor      string    `gorm:"type:varchar(255)" json:"actor,omitempty"`
+	Message    string    `gorm:"type:text" json:"message,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type TenderComment struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	SavedLotID uint      `gorm:"index;not null" json:"saved_lot_id"`
+	Author     string    `gorm:"type:varchar(255)" json:"author"`
+	Body       string    `gorm:"type:text;not null" json:"body"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type TenderTask struct {
+	ID         uint       `gorm:"primaryKey" json:"id"`
+	SavedLotID uint       `gorm:"index;not null" json:"saved_lot_id"`
+	Title      string     `gorm:"type:text;not null" json:"title"`
+	Status     string     `gorm:"type:varchar(32);index;default:'open'" json:"status"`
+	Assignee   string     `gorm:"type:varchar(255)" json:"assignee,omitempty"`
+	Priority   string     `gorm:"type:varchar(32);default:'normal'" json:"priority,omitempty"`
+	DueDate    *time.Time `json:"due_date,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }

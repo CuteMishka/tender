@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
@@ -16,6 +17,7 @@ from app.api.crm import router as crm_router
 from app.api.knowledge import router as knowledge_router
 from app.api.tailoring import router as tailoring_router
 from app.config import CORS_ORIGINS, ai_configuration, get_company_profile, is_ai_configured, is_spec_ai_configured
+from app.cloudy import answer_cloudy_question, extract_cloudy_documents
 from app.database import create_async_schema
 from app.document_extract import extract_text_from_bytes
 from app.embeddings import embed_chunks, embed_profile
@@ -80,6 +82,22 @@ class SpecSummaryOut(BaseModel):
     terms_and_deadlines: list[str] = Field(default_factory=list)
     constraints: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
+
+
+class CloudySourceOut(BaseModel):
+    document: str
+    snippet: str
+    score: float | None = None
+
+
+class CloudyChatOut(BaseModel):
+    answer: str
+    sources: list[CloudySourceOut] = Field(default_factory=list)
+    follow_up: list[str] = Field(default_factory=list)
+    used_documents: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    provider: str = ""
+    model: str = ""
 
 
 class IndexBody(BaseModel):
@@ -285,6 +303,95 @@ def get_spec_summary(lot_id: str) -> SpecSummaryOut:
     return SpecSummaryOut.model_validate(row)
 
 
+@app.post("/v1/lots/{lot_id}/cloudy/chat", response_model=CloudyChatOut)
+async def cloudy_chat(
+    lot_id: str,
+    question: Annotated[str, Form(..., description="Вопрос пользователя по выбранным документам")],
+    history_json: Annotated[
+        str | None,
+        Form(description="JSON-массив предыдущих сообщений текущего открытого диалога"),
+    ] = None,
+    lot_context: Annotated[
+        str | None,
+        Form(description="Краткая карточка лота из backend"),
+    ] = None,
+    spec_summary_json: Annotated[
+        str | None,
+        Form(description="Опциональная JSON-выжимка ТС"),
+    ] = None,
+    warnings_json: Annotated[
+        str | None,
+        Form(description="JSON-массив предупреждений backend по скачиванию документов"),
+    ] = None,
+    documents: Annotated[
+        list[UploadFile] | None,
+        File(description="Выбранные документы диапазона"),
+    ] = None,
+) -> CloudyChatOut:
+    history: list[dict[str, Any]] = []
+    if history_json and history_json.strip():
+        try:
+            parsed = json.loads(history_json)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail="history_json должен быть JSON") from e
+        if not isinstance(parsed, list):
+            raise HTTPException(status_code=400, detail="history_json должен быть массивом")
+        history = [item for item in parsed if isinstance(item, dict)]
+
+    spec_summary: dict[str, Any] | None = None
+    if spec_summary_json and spec_summary_json.strip():
+        try:
+            parsed_summary = json.loads(spec_summary_json)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail="spec_summary_json должен быть JSON") from e
+        if isinstance(parsed_summary, dict):
+            spec_summary = parsed_summary
+        else:
+            raise HTTPException(status_code=400, detail="spec_summary_json должен быть объектом")
+
+    upstream_warnings: list[str] = []
+    if warnings_json and warnings_json.strip():
+        try:
+            parsed_warnings = json.loads(warnings_json)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail="warnings_json должен быть JSON") from e
+        if not isinstance(parsed_warnings, list):
+            raise HTTPException(status_code=400, detail="warnings_json должен быть массивом")
+        upstream_warnings = [str(item).strip() for item in parsed_warnings if str(item).strip()][:24]
+
+    uploaded = documents or []
+    if len(uploaded) > 12:
+        raise HTTPException(status_code=400, detail="выберите не больше 12 документов за раз")
+
+    files: list[tuple[str, bytes]] = []
+    for document in uploaded:
+        files.append((document.filename or "document", await document.read()))
+
+    extracted, warnings = extract_cloudy_documents(files)
+    warnings = [*upstream_warnings, *warnings]
+    base_context = (lot_context or "").strip() or f"lot_id: {lot_id}"
+    if files and not extracted and not base_context:
+        raise HTTPException(
+            status_code=400,
+            detail="не удалось извлечь текст из выбранных документов",
+        )
+
+    try:
+        out = answer_cloudy_question(
+            question=question,
+            lot_context=base_context,
+            history=history,
+            documents=extracted,
+            spec_summary=spec_summary,
+            warnings=warnings,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI: {e!s}") from e
+    return CloudyChatOut(**out)
+
+
 @app.post("/v1/match", response_model=list[MatchResult])
 def match(body: MatchBody) -> list[MatchResult]:
     profile = effective_profile(body.profile)
@@ -399,5 +506,6 @@ def root() -> dict[str, str]:
         "match": "POST /v1/match",
         "match_analyze": "POST /v1/match/analyze (нужен GROQ_API_KEY или GEMINI_API_KEY)",
         "lot_analyze": "POST /v1/lot/analyze — лот без индекса, AI-анализ",
+        "cloudy_chat": "POST /v1/lots/{lot_id}/cloudy/chat — вопрос + выбранные документы без хранения сессии",
         "profile_default": "COMPANY_PROFILE или COMPANY_PROFILE_FILE в .env если не передаёте profile",
     }

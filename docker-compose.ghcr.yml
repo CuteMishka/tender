@@ -1,0 +1,12 @@
+services:
+  backend:
+    image: ${GHCR_IMAGE_PREFIX:-ghcr.io/cutemishka/tender}/backend:${IMAGE_TAG:-latest}
+
+  rag-api:
+    image: ${GHCR_IMAGE_PREFIX:-ghcr.io/cutemishka/tender}/rag-api:${IMAGE_TAG:-latest}
+
+  parser:
+    image: ${GHCR_IMAGE_PREFIX:-ghcr.io/cutemishka/tender}/parser:${IMAGE_TAG:-latest}
+
+  frontend:
+    image: ${GHCR_IMAGE_PREFIX:-ghcr.io/cutemishka/tender}/frontend:${IMAGE_TAG:-latest}

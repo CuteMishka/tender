@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"unicode"
 
 	analyticsModels "github.com/dauren/tender/internal/analytics"
 	"github.com/dauren/tender/internal/domain"
@@ -29,7 +30,7 @@ func InitDB() *gorm.DB {
 		log.Fatalf("Ошибка подключения к базе данных: %v", err)
 	}
 
-	if err := db.AutoMigrate(&domain.User{}, &domain.RegistrationRequest{}, &domain.DictionaryItem{}, &domain.ParserRunRequest{}, &domain.TelegramSettings{}, &domain.UserTelegramBinding{}, &tenderplus.SavedLot{}, &analyticsModels.HistoricalLot{}, &analyticsModels.TrackedCustomer{}); err != nil {
+	if err := db.AutoMigrate(&domain.User{}, &domain.RegistrationRequest{}, &domain.DictionaryItem{}, &domain.ParserRunRequest{}, &domain.TelegramSettings{}, &domain.UserTelegramBinding{}, &tenderplus.SavedLot{}, &tenderplus.TenderActivity{}, &tenderplus.TenderComment{}, &tenderplus.TenderTask{}, &analyticsModels.HistoricalLot{}, &analyticsModels.TrackedCustomer{}); err != nil {
 		log.Fatalf("Ошибка AutoMigrate: %v", err)
 	}
 	ensureAdminUser(db)
@@ -43,12 +44,17 @@ func ensureAdminUser(db *gorm.DB) {
 	if email == "" {
 		email = "admin@tender.local"
 	}
-	password := os.Getenv("ADMIN_PASSWORD")
-	if password == "" {
-		password = "admin"
-	}
 	var count int64
 	if err := db.Model(&domain.User{}).Where("role = ?", "admin").Count(&count).Error; err != nil || count > 0 {
+		return
+	}
+	password := os.Getenv("ADMIN_PASSWORD")
+	if password == "" {
+		log.Print("ADMIN_PASSWORD is empty; default admin user was not created")
+		return
+	}
+	if !isStrongAdminPassword(password) {
+		log.Print("ADMIN_PASSWORD is too weak; default admin user was not created")
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -63,4 +69,24 @@ func ensureAdminUser(db *gorm.DB) {
 		Status:       "active",
 	}
 	_ = db.Create(&user).Error
+}
+
+func isStrongAdminPassword(password string) bool {
+	var hasUpper, hasLower, hasDigit, hasSymbol bool
+	if len([]rune(password)) < 12 {
+		return false
+	}
+	for _, r := range password {
+		switch {
+		case unicode.IsUpper(r):
+			hasUpper = true
+		case unicode.IsLower(r):
+			hasLower = true
+		case unicode.IsDigit(r):
+			hasDigit = true
+		default:
+			hasSymbol = true
+		}
+	}
+	return hasUpper && hasLower && hasDigit && hasSymbol
 }

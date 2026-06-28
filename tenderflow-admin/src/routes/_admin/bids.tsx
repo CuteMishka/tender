@@ -1,8 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { CheckCircle2, Clock, XCircle, Trash2, FileText, Search, Send, BriefcaseBusiness } from "lucide-react";
-import { getCurrentUser } from "@/lib/auth";
+import { Archive, CheckCircle2, Clock, XCircle, Trash2, FileText, Search, Send, BriefcaseBusiness, Trophy } from "lucide-react";
+import { getCurrentUser, type UserRole } from "@/lib/auth";
 import { getLocalApiBase } from "@/lib/tenders-api";
 
 export const Route = createFileRoute("/_admin/bids")({
@@ -24,10 +24,24 @@ interface SavedLot {
   created_at: string;
 }
 
+type BackendUser = {
+  id: number;
+  email: string;
+  name?: string;
+  role?: UserRole;
+  status?: string;
+};
+
 const statusMap: Record<string, { label: string; icon: any; cls: string }> = {
+  assignment_requested: { label: "Запрос", icon: Send, cls: "bg-amber-100 text-amber-800" },
   participating: { label: "Участвуем", icon: CheckCircle2, cls: "bg-primary/15 text-primary" },
   review: { label: "На ревью", icon: Send, cls: "bg-blue-100 text-blue-700" },
   in_work: { label: "В работе", icon: BriefcaseBusiness, cls: "bg-purple-100 text-purple-700" },
+  submitted: { label: "Подали", icon: CheckCircle2, cls: "bg-sky-100 text-sky-700" },
+  waiting_result: { label: "Ждем итог", icon: Clock, cls: "bg-teal-100 text-teal-700" },
+  won: { label: "Выигран", icon: CheckCircle2, cls: "bg-emerald-100 text-emerald-700" },
+  lost: { label: "Проигран", icon: Trophy, cls: "bg-slate-100 text-slate-700" },
+  archived: { label: "Архив", icon: Archive, cls: "bg-muted text-muted-foreground" },
   active: { label: "Открыт", icon: Clock, cls: "bg-success/15 text-success" },
   rejected: { label: "Отклонен", icon: XCircle, cls: "bg-destructive/15 text-destructive" },
 };
@@ -35,14 +49,22 @@ const statusMap: Record<string, { label: string; icon: any; cls: string }> = {
 function Bids() {
   const navigate = useNavigate();
   const [bids, setBids] = useState<SavedLot[]>([]);
-  const [activeTab, setActiveTab] = useState<"all" | "participating" | "review" | "in_work" | "rejected" | "active">("all");
+  const [activeTab, setActiveTab] = useState<"all" | "assignment_requested" | "participating" | "review" | "in_work" | "submitted" | "waiting_result" | "won" | "lost" | "rejected" | "active">("all");
   const [searchText, setSearchText] = useState("");
+  const [managerOptions, setManagerOptions] = useState<BackendUser[]>([]);
 
   useEffect(() => {
     const base = getLocalApiBase();
-    fetch(`${base}/api/v1/lots/saved`)
-      .then((res) => res.json())
-      .then((data) => { if (Array.isArray(data)) setBids(data); })
+    Promise.all([
+      fetch(`${base}/api/v1/lots/saved`).then((res) => res.json()).catch(() => []),
+      fetch(`${base}/api/v1/users`).then((res) => res.json()).catch(() => []),
+    ])
+      .then(([lots, users]) => {
+        if (Array.isArray(lots)) setBids(lots);
+        if (Array.isArray(users)) {
+          setManagerOptions(users.filter((user: BackendUser) => user.status !== "blocked" && user.role !== "admin"));
+        }
+      })
       .catch((err) => console.error(err));
   }, []);
 
@@ -80,17 +102,43 @@ function Bids() {
     }
   };
 
+  const updateManager = async (lot: SavedLot, assignedTo: string) => {
+    try {
+      const res = await fetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...lot,
+          status: lot.status || "review",
+          assigned_to: assignedTo,
+          reviewer: getCurrentUser()?.name || getCurrentUser()?.email || lot.reviewer || "",
+        }),
+      });
+      if (!res.ok) throw new Error("Ошибка обновления менеджера");
+      const updated = await res.json() as SavedLot;
+      setBids((prev) => prev.map((b) => b.id === updated.id ? updated : b));
+    } catch (err) {
+      console.error(err);
+      alert("Не удалось назначить менеджера");
+    }
+  };
+
   const filteredBids = bids.filter((b) => {
     if (activeTab !== "all" && b.status !== activeTab) return false;
     const q = searchText.trim().toLowerCase();
     if (!q) return true;
-    return `${b.id} ${b.title} ${b.organizer_name} ${b.purchase_type} ${b.status}`.toLowerCase().includes(q);
+    return `${b.id} ${b.title} ${b.organizer_name} ${b.purchase_type} ${b.status} ${b.assigned_to || ""}`.toLowerCase().includes(q);
   });
   const tabCounts = {
     all: bids.length,
+    assignment_requested: bids.filter((b) => b.status === "assignment_requested").length,
     participating: bids.filter((b) => b.status === "participating").length,
     review: bids.filter((b) => b.status === "review").length,
     in_work: bids.filter((b) => b.status === "in_work").length,
+    submitted: bids.filter((b) => b.status === "submitted").length,
+    waiting_result: bids.filter((b) => b.status === "waiting_result").length,
+    won: bids.filter((b) => b.status === "won").length,
+    lost: bids.filter((b) => b.status === "lost").length,
     active: bids.filter((b) => b.status === "active").length,
     rejected: bids.filter((b) => b.status === "rejected").length,
   };
@@ -113,9 +161,14 @@ function Bids() {
         <div className="mb-4 flex flex-wrap gap-2">
           {[
             { key: "all", label: "Все" },
+            { key: "assignment_requested", label: "Запросы" },
             { key: "participating", label: "Участвуем" },
             { key: "review", label: "На ревью" },
             { key: "in_work", label: "В работе" },
+            { key: "submitted", label: "Подали" },
+            { key: "waiting_result", label: "Ждем итог" },
+            { key: "won", label: "Выиграли" },
+            { key: "lost", label: "Проиграли" },
             { key: "rejected", label: "Не подходит" },
           ].map((tab) => (
             <button
@@ -143,6 +196,7 @@ function Bids() {
                 <th className="px-6 py-3 text-left font-medium">Организатор тендера</th>
                 <th className="px-6 py-3 text-left font-medium">Цена ₸</th>
                 <th className="px-6 py-3 text-left font-medium">Дата</th>
+                <th className="px-6 py-3 text-left font-medium">Менеджер</th>
                 <th className="px-6 py-3 text-left font-medium">Статус</th>
                 <th className="px-6 py-3 text-right font-medium">Действия</th>
               </tr>
@@ -150,7 +204,7 @@ function Bids() {
             <tbody>
               {filteredBids.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-6 py-16 text-center">
+                  <td colSpan={9} className="px-6 py-16 text-center">
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <FileText className="h-10 w-10 opacity-20" />
                       <p className="text-sm font-medium">
@@ -183,6 +237,20 @@ function Bids() {
                     <td className="px-6 py-4 font-medium text-foreground">{b.organizer_name || "Компания не указана"}</td>
                     <td className="px-6 py-4 text-right font-semibold tabular-nums">₸ {amountStr}</td>
                     <td className="px-6 py-4 text-muted-foreground">{dateStr}</td>
+                    <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        value={b.assigned_to || ""}
+                        onChange={(event) => void updateManager(b, event.target.value)}
+                        className="h-9 min-w-[160px] rounded-lg border border-input bg-background px-2 text-xs outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+                        title="Ответственный менеджер"
+                      >
+                        <option value="">Не назначен</option>
+                        {managerOptions.map((manager) => {
+                          const label = manager.name || manager.email;
+                          return <option key={manager.id} value={label}>{label}</option>;
+                        })}
+                      </select>
+                    </td>
                     <td className="px-6 py-4">
                       <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${s.cls}`}>
                         <Icon className="h-3 w-3" /> {s.label}

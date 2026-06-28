@@ -2,7 +2,133 @@ import { getLocalApiBase } from "./tenders-api";
 
 const base = () => getLocalApiBase();
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+export type CompanyMatch = {
+  name: string;
+  bin: string;
+  roles: string[];
+  score: number;
+};
+
+export type CompanySummary = {
+  published_count: number;
+  active_published_count: number;
+  published_budget: number;
+  won_contracts_count: number;
+  won_contracts_amount: number;
+  customer_contracts_count: number;
+  customer_contracts_amount: number;
+  participated_count: number;
+  last_activity_at: string | null;
+  confidence: "high" | "medium" | "low" | string;
+};
+
+export type CompanyInsight = {
+  kind: string;
+  title: string;
+  message: string;
+  severity: "success" | "info" | "warning" | "error" | string;
+};
+
+export type CompanyTender = {
+  id: number;
+  lot_number: string;
+  title: string;
+  amount: number;
+  status: string;
+  customer_name: string;
+  customer_bin: string;
+  organizer: string;
+  platform: string;
+  purchase_type: string;
+  region: string;
+  begin_date: string | null;
+  end_date: string | null;
+  publish_date: string | null;
+  link: string;
+};
+
+export type CompanyContract = {
+  id: number;
+  contract_number: string;
+  amount: number;
+  sign_date: string | null;
+  status: string;
+  supplier_name: string;
+  supplier_bin: string;
+  customer_name: string;
+  customer_bin: string;
+  tender_number: string;
+  tender_title: string;
+};
+
+export type CompanyOffer = {
+  id: number;
+  lot_id: number;
+  amount: number;
+  discount_price: number;
+  request_date: string | null;
+  status: string;
+  organization: string;
+  organization_bin: string;
+  lot: CompanyTender | null;
+};
+
+export type CompanyMonthlyPoint = {
+  label: string;
+  published: number;
+  won: number;
+  customer: number;
+  participated: number;
+  publishedAmount: number;
+  wonAmount: number;
+  customerAmount: number;
+};
+
+export type CompanyNamedValue = {
+  name: string;
+  value: number;
+};
+
+export type CompanyNamedMoney = {
+  name: string;
+  count: number;
+  amount: number;
+};
+
+export type CompanyRecentEvent = {
+  kind: "published" | "won" | "customer_contract" | "participated" | string;
+  title: string;
+  subtitle: string;
+  amount: number;
+  status: string;
+  date: string | null;
+  link: string;
+};
+
+export type CompanyAggregates = {
+  monthly: CompanyMonthlyPoint[];
+  status_mix: CompanyNamedValue[];
+  platform_mix: CompanyNamedValue[];
+  purchase_mix: CompanyNamedValue[];
+  counterparties: CompanyNamedMoney[];
+  opportunities: CompanyTender[];
+  recent: CompanyRecentEvent[];
+};
+
+export type CompanyTenderIntelligence = {
+  query: string;
+  generated_at: string;
+  source: string;
+  matches: CompanyMatch[];
+  summary: CompanySummary;
+  insights: CompanyInsight[];
+  aggregates?: CompanyAggregates;
+  published: CompanyTender[];
+  won_contracts: CompanyContract[];
+  customer_contracts: CompanyContract[];
+  participated: CompanyOffer[];
+  warnings?: string[];
+};
 
 export type HistoricalLot = {
   id: number;
@@ -29,77 +155,6 @@ export type HistoricalLot = {
   updated_at: string;
 };
 
-export type AnalyticsStats = {
-  total_lots: number;
-  total_budget: number;
-  avg_amount: number;
-  avg_discount: number;
-  with_winner: number;
-  with_contract: number;
-  excluded_lots: number;
-};
-
-export type DynamicsPoint = {
-  period: string;
-  count: number;
-  budget: number;
-};
-
-export type WinnerRow = {
-  winner_name: string;
-  wins: number;
-  total_amount: number;
-  avg_amount: number;
-  max_amount: number;
-  market_share_pct: number;
-};
-
-export type PriceStats = {
-  avg_initial: number;
-  avg_contract: number;
-  avg_discount_pct: number;
-  max_discount_pct: number;
-  min_discount_pct: number;
-  anomaly_count: number;
-  total_savings: number;
-};
-
-export type PriceRow = {
-  lot_id: number;
-  title: string;
-  initial_amount: number;
-  contract_amount: number;
-  discount_abs: number;
-  discount_pct: number;
-  purchase_type: string;
-  customer_name: string;
-  winner_name: string;
-};
-
-export type TrackedCustomer = {
-  id: number;
-  customer_name: string;
-  customer_id: string;
-  notify_email: string;
-  notes: string;
-  is_favorite: boolean;
-  last_checked_at: string | null;
-  tender_count: number;
-  last_tender_at: string | null;
-  total_budget: number;
-  created_at: string;
-};
-
-export type CustomerCandidate = {
-  customer_name: string;
-  customer_id: string;
-  tender_count: number;
-  last_tender_at: string | null;
-  total_budget: number;
-  is_tracked: boolean;
-  is_favorite: boolean;
-};
-
 export type LotsFilters = {
   customer?: string;
   purchase_type?: string;
@@ -121,69 +176,24 @@ export type LotsListResponse = {
   meta: { total: number; page: number; limit: number; pageCount: number };
 };
 
-export type FilterOptions = {
-  purchase_types: string[];
-  regions: string[];
-};
-
-export type SyncResult = { fetched: number; upserted: number };
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
 async function get<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
   const url = new URL(`${base()}${path}`);
   if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") url.searchParams.set(key, String(value));
     }
   }
   const res = await fetch(url.toString());
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`${res.status}: ${text.slice(0, 200)}`);
+    throw new Error(text || `${res.status}`);
   }
   return res.json() as Promise<T>;
 }
-
-async function post<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${base()}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${res.status}: ${text.slice(0, 200)}`);
-  }
-  return res.json() as Promise<T>;
-}
-
-async function del<T>(path: string): Promise<T> {
-  const res = await fetch(`${base()}${path}`, { method: "DELETE" });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${res.status}: ${text.slice(0, 200)}`);
-  }
-  return res.json() as Promise<T>;
-}
-
-async function put<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${base()}${path}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${res.status}: ${text.slice(0, 200)}`);
-  }
-  return res.json() as Promise<T>;
-}
-
-// ─── API Functions ────────────────────────────────────────────────────────────
 
 export const analyticsApi = {
-  sync: () => post<SyncResult>("/api/v1/analytics/sync"),
+  getCompanyTenders: (q: string, limit = 25) =>
+    get<CompanyTenderIntelligence>("/api/v1/analytics/company-tenders", { q, limit }),
 
   getLots: (filters: LotsFilters = {}) =>
     get<LotsListResponse>("/api/v1/analytics/lots", {
@@ -201,87 +211,30 @@ export const analyticsApi = {
       page: filters.page ?? 1,
       limit: filters.limit ?? 20,
     }),
-
-  updateLot: (id: number, data: { winner_name?: string; winner_id?: string; contract_amount?: number; status?: string; region?: string; excluded_from_analytics?: boolean }) =>
-    put<{ success: boolean }>(`/api/v1/analytics/lots/${id}`, data),
-
-  excludeLot: (id: number) =>
-    put<{ success: boolean }>(`/api/v1/analytics/lots/${id}`, { excluded_from_analytics: true }),
-
-  restoreLot: (id: number) =>
-    put<{ success: boolean }>(`/api/v1/analytics/lots/${id}`, { excluded_from_analytics: false }),
-
-  getStats: () => get<AnalyticsStats>("/api/v1/analytics/stats"),
-
-  getDynamics: () => get<DynamicsPoint[]>("/api/v1/analytics/dynamics"),
-
-  getFilters: () => get<FilterOptions>("/api/v1/analytics/filters"),
-
-  exportCSV: (filters: LotsFilters = {}) => {
-    const url = new URL(`${base()}/api/v1/analytics/export`);
-    const params: Record<string, string | number | undefined> = {
-      customer: filters.customer,
-      purchase_type: filters.purchase_type,
-      region: filters.region,
-      winner: filters.winner,
-      status: filters.status,
-      date_from: filters.date_from,
-      date_to: filters.date_to,
-      amount_min: filters.amount_min,
-      amount_max: filters.amount_max,
-      participation: filters.participation,
-      excluded: filters.excluded,
-    };
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
-    }
-    window.open(url.toString(), "_blank");
-  },
-
-  getCustomers: () => get<TrackedCustomer[]>("/api/v1/analytics/customers"),
-
-  addCustomer: (data: { customer_name: string; customer_id?: string; notify_email?: string; notes?: string }) =>
-    post<TrackedCustomer>("/api/v1/analytics/customers", data),
-
-  updateCustomer: (id: number, data: { customer_name: string; customer_id?: string; notify_email?: string; notes?: string; is_favorite: boolean }) =>
-    put<TrackedCustomer>(`/api/v1/analytics/customers/${id}`, data),
-
-  getCustomerCandidates: (q = "", limit = 80) =>
-    get<CustomerCandidate[]>("/api/v1/analytics/customers/candidates", { q, limit }),
-
-  deleteCustomer: (id: number) => del<{ success: boolean }>(`/api/v1/analytics/customers/${id}`),
-
-  getCustomerLots: (id: number) =>
-    get<{ customer: TrackedCustomer; lots: HistoricalLot[] }>(`/api/v1/analytics/customers/${id}/lots`),
-
-  getWinners: () => get<WinnerRow[]>("/api/v1/analytics/winners"),
-
-  getPrices: () => get<{ stats: PriceStats; rows: PriceRow[] }>("/api/v1/analytics/prices"),
 };
 
-// ─── Formatters ───────────────────────────────────────────────────────────────
-
-export function fmtM(v: number): string {
-  if (!v) return "—";
-  if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)} млрд`;
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)} млн`;
-  if (v >= 1_000) return `${(v / 1_000).toFixed(0)} тыс`;
-  return v.toFixed(0);
+export function fmtM(value: number): string {
+  if (!value) return "0";
+  if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} млрд`;
+  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} млн`;
+  if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(0)} тыс`;
+  return value.toFixed(0);
 }
 
-export function fmtN(v: number): string {
-  if (!v) return "—";
-  return new Intl.NumberFormat("ru-RU").format(v);
+export function fmtN(value: number): string {
+  return new Intl.NumberFormat("ru-RU").format(value || 0);
 }
 
-export function fmtDate(s: string | null | undefined): string {
-  if (!s) return "—";
-  const d = new Date(s);
-  if (isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("ru-KZ");
+export function fmtDate(value: string | null | undefined): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString("ru-KZ");
 }
 
-export function fmtPct(v: number): string {
-  if (!v) return "—";
-  return `${v.toFixed(1)}%`;
+export function fmtLotNumber(value: string | number | null | undefined, fallback?: string | number): string {
+  const raw = String(value ?? "").replace(/\s*\(\s*\)\s*$/g, "").trim();
+  if (raw) return raw;
+  const fallbackRaw = String(fallback ?? "").replace(/\s*\(\s*\)\s*$/g, "").trim();
+  return fallbackRaw || "—";
 }
