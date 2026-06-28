@@ -198,7 +198,7 @@ jobs:
           GHCR_IMAGE_PREFIX: ${{ needs.build.outputs.image_prefix }}
           IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
           GHCR_USERNAME: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_TOKEN: ${{ github.token }}
         run: |
           user="${VPS_USER:-cloud-user}"
           token_b64="$(printf '%s' "$GHCR_TOKEN" | base64 -w0)"
