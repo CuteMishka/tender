@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -808,9 +809,9 @@ func (h *Handler) listParserTenders(w http.ResponseWriter, r *http.Request, suit
 	aiScoreExpr := "COALESCE(ai_score, CASE WHEN (raw->>'ai_score') ~ '^[0-9]+$' THEN (raw->>'ai_score')::int ELSE 0 END)"
 	if suitable {
 		query = query.
-			Where("(is_suitable IS TRUE OR raw @> ?::jsonb)", `{"is_suitable": true}`).
+			Where("(is_suitable IS TRUE OR raw::jsonb @> ?::jsonb)", `{"is_suitable": true}`).
 			Where(aiScoreExpr+" > 50").
-			Where("(raw @> ?::jsonb OR COALESCE(raw->>'ai_passed', '') = ?)", `{"ai_passed": true}`, "true").
+			Where("(raw::jsonb @> ?::jsonb OR COALESCE(raw->>'ai_passed', '') = ?)", `{"ai_passed": true}`, "true").
 			Where("COALESCE(ai_provider, raw->>'ai_provider', '') = ?", "local-llm").
 			Where("COALESCE(raw->>'manual_suitable_removed', 'false') != ?", "true")
 	} else {
@@ -821,6 +822,11 @@ func (h *Handler) listParserTenders(w http.ResponseWriter, r *http.Request, suit
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
+		if h.TP != nil {
+			log.Printf("parser tenders count failed, falling back to TenderPlus API: %v", err)
+			h.listTenderPlusTenders(w, r)
+			return
+		}
 		http.Error(w, `{"error":"ошибка получения количества тендеров"}`, http.StatusInternalServerError)
 		return
 	}

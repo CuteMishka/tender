@@ -21,11 +21,17 @@ if [ -n "${GHCR_TOKEN:-}" ]; then
   echo "$GHCR_TOKEN" | sudo docker login ghcr.io -u "${GHCR_USERNAME:-github-actions}" --password-stdin >/dev/null
 fi
 
+if command -v docker-compose >/dev/null 2>&1; then
+  compose_cmd=(docker-compose)
+else
+  compose_cmd=(docker compose)
+fi
+
 compose=(
   sudo env
   "GHCR_IMAGE_PREFIX=$GHCR_IMAGE_PREFIX"
   "IMAGE_TAG=$IMAGE_TAG"
-  docker-compose
+  "${compose_cmd[@]}"
   -f docker-compose.prod.yml
   -f docker-compose.ghcr.yml
   --env-file .env
@@ -52,12 +58,15 @@ echo
 
 echo "Waiting for RAG health..."
 for _ in $(seq 1 40); do
-  if curl -fsS http://127.0.0.1:8083/health >/dev/null; then
+  rag_health="$(curl -fsS http://127.0.0.1:8083/health 2>/dev/null || true)"
+  if echo "$rag_health" | grep -q '"database":true'; then
     break
   fi
   sleep 3
 done
-curl -fsS http://127.0.0.1:8083/health
+rag_health="$(curl -fsS http://127.0.0.1:8083/health)"
+echo "$rag_health"
+echo "$rag_health" | grep -q '"database":true'
 echo
 
 echo "Checking first tender response..."
