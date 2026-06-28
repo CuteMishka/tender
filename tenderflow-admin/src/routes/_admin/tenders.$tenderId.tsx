@@ -61,6 +61,7 @@ function sourceBadgeClass(source?: string | null): string {
   switch ((source || "").toLowerCase()) {
     case "samruk":
       return "border-sky-200 bg-sky-50 text-sky-700";
+    case "zakup":
     case "goszakup":
       return "border-emerald-200 bg-emerald-50 text-emerald-700";
     default:
@@ -100,6 +101,86 @@ function InfoRow({ label, value, icon: Icon }: { label: string; value: React.Rea
         <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</dt>
         <dd className="mt-0.5 text-sm text-foreground">{value || "—"}</dd>
       </div>
+    </div>
+  );
+}
+
+type DetailMetricTone = "blue" | "green" | "amber" | "teal" | "red" | "slate";
+
+const detailMetricTone: Record<DetailMetricTone, { shell: string; icon: string; bar: string; text: string }> = {
+  blue: { shell: "border-blue-100 bg-blue-50/70", icon: "bg-blue-100 text-blue-700", bar: "bg-blue-500", text: "text-blue-700" },
+  green: { shell: "border-emerald-100 bg-emerald-50/80", icon: "bg-emerald-100 text-emerald-700", bar: "bg-emerald-500", text: "text-emerald-700" },
+  amber: { shell: "border-amber-100 bg-amber-50/80", icon: "bg-amber-100 text-amber-800", bar: "bg-amber-500", text: "text-amber-800" },
+  teal: { shell: "border-teal-100 bg-teal-50/80", icon: "bg-teal-100 text-teal-700", bar: "bg-teal-500", text: "text-teal-700" },
+  red: { shell: "border-red-100 bg-red-50/80", icon: "bg-red-100 text-red-700", bar: "bg-red-500", text: "text-red-700" },
+  slate: { shell: "border-border bg-muted/40", icon: "bg-background text-muted-foreground", bar: "bg-muted-foreground/40", text: "text-muted-foreground" },
+};
+
+function deadlineLabel(daysLeft: number | null): string {
+  if (daysLeft === null) return "без срока";
+  if (daysLeft < 0) return "истек";
+  if (daysLeft === 0) return "сегодня";
+  return `${daysLeft} дн.`;
+}
+
+function deadlineTone(color?: string): DetailMetricTone {
+  if (color === "red") return "red";
+  if (color === "orange") return "amber";
+  if (color === "green") return "green";
+  return "slate";
+}
+
+function DetailMetric({
+  label,
+  value,
+  hint,
+  icon: Icon,
+  tone,
+  progress,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  icon: React.ElementType;
+  tone: DetailMetricTone;
+  progress?: number;
+}) {
+  const cls = detailMetricTone[tone];
+  return (
+    <div className={`overflow-hidden rounded-lg border p-4 shadow-sm ${cls.shell}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-muted-foreground">{label}</p>
+          <p className={`mt-1 truncate text-xl font-bold text-foreground ${tone === "red" ? cls.text : ""}`}>{value}</p>
+          <p className="mt-1 truncate text-xs text-muted-foreground">{hint}</p>
+        </div>
+        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${cls.icon}`}>
+          <Icon className="h-4.5 w-4.5" />
+        </span>
+      </div>
+      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-background/80">
+        <div className={`h-full rounded-full ${cls.bar}`} style={{ width: `${Math.max(5, Math.min(100, progress ?? 100))}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function SectionHeading({
+  title,
+  meta,
+  icon: Icon,
+}: {
+  title: string;
+  meta?: React.ReactNode;
+  icon?: React.ElementType;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
+      <div className="flex min-w-0 items-center gap-2">
+        {Icon && <Icon className="h-4 w-4 shrink-0 text-primary" />}
+        <h3 className="truncate text-sm font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
+      </div>
+      {meta}
     </div>
   );
 }
@@ -285,7 +366,7 @@ function LotAnalysisCard({ analysis }: { analysis: LotAnalyzeResult }) {
   const tone = scoreTone(score);
   const checks = splitChecks(analysis.checks);
   return (
-    <div className={`space-y-4 rounded-xl border ${tone.border} ${tone.bg} p-4`}>
+    <div className={`space-y-4 rounded-lg border ${tone.border} ${tone.bg} p-4`}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Вердикт AI</div>
@@ -652,6 +733,19 @@ function TenderDetail() {
   );
   const currentUser = getCurrentUser();
   const canRequestAssignment = currentUser?.role === "tender_specialist";
+  const daysLeft = statusInfo?.daysLeft ?? null;
+  const deadlineProgress =
+    daysLeft === null
+      ? 35
+      : daysLeft < 0
+        ? 100
+        : Math.max(10, Math.min(100, ((14 - Math.min(daysLeft, 14)) / 14) * 100));
+  const decisionLabel =
+    viewInfo?.decision === "participating"
+      ? "Участвуем"
+      : viewInfo?.decision === "rejected"
+        ? "Отклонён"
+        : "Ожидает решения";
 
   return (
     <>
@@ -671,132 +765,196 @@ function TenderDetail() {
 
       <div className="p-8">
         {error && (
-          <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-6 py-4 text-sm text-destructive">
+          <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-6 py-4 text-sm text-destructive">
             {error}
           </div>
         )}
 
         {loading && !tender && (
-          <div className="flex items-center justify-center rounded-xl border border-border bg-card px-6 py-24 text-sm text-muted-foreground">
+          <div className="flex items-center justify-center rounded-lg border border-border bg-card px-6 py-24 text-sm text-muted-foreground">
             Загрузка…
           </div>
         )}
 
         {tender && (
           <div className="space-y-4">
-
-            {/* ТС и база знаний */}
-            <div className="rounded-xl border border-primary/20 bg-primary/5 p-5" style={{ boxShadow: "var(--shadow-sm)" }}>
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <div className="min-w-0">
-                  <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-primary">Техническая спецификация</p>
-                  <h3 className="text-base font-semibold text-foreground">ТС и база знаний</h3>
-                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                    {pickedSpecDocument
-                      ? `Найден документ: ${blockText(pickedSpecDocument.name)}`
-                      : "ТС в документах не найдена. Проверьте список файлов справа."}
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={handleDownloadOriginalSpec}
-                    disabled={!pickedSpecDocument || specDownloadLoading}
-                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-                  >
-                    <Download className="h-4 w-4" />
-                    {specDownloadLoading ? "Скачивание…" : "Скачать ТС"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSaveSpecToKnowledgeBase}
-                    disabled={specAutoAnalyzeLoading || !tender.documents?.length}
-                    className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
-                  >
-                    {specAutoAnalyzeLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-                    Сохранить в базу знаний
-                  </button>
+            <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+              <div className="border-b border-border bg-muted/20 px-5 py-4">
+                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="min-w-0 space-y-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {tender.source && (
+                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${sourceBadgeClass(tender.source)}`}>
+                          {sourceLabel}
+                        </span>
+                      )}
+                      <span className="rounded-full border border-border bg-background px-2.5 py-1 font-mono text-xs text-muted-foreground">
+                        ID {tender.id}
+                      </span>
+                      {tender.lot && (
+                        <span className="rounded-full border border-border bg-background px-2.5 py-1 font-mono text-xs text-muted-foreground">
+                          Лот {tender.lot}
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      <h2 className="text-balance text-xl font-semibold leading-snug text-foreground">
+                        {blockText(tender.title)}
+                      </h2>
+                      <p className="mt-2 line-clamp-2 max-w-5xl text-sm leading-6 text-muted-foreground">
+                        {tender.description ? blockText(tender.description) : companyName || "Описание лота не указано"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <a
+                      href={tender.partnerLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-background px-4 text-sm font-medium text-primary hover:bg-accent"
+                    >
+                      <ExternalLink className="h-4 w-4" /> Площадка
+                    </a>
+                  </div>
                 </div>
               </div>
-              {(ragUploadOk || ragUploadError || specAutoAnalyzeMessage) && (
-                <div className="mt-3 rounded-lg border border-border bg-background px-3 py-2 text-sm">
-                  {specAutoAnalyzeMessage ? (
-                    <span className="text-muted-foreground">{specAutoAnalyzeMessage}</span>
-                  ) : ragUploadError ? (
-                    <span className="text-amber-800">{ragUploadError}</span>
-                  ) : (
-                    <span className="text-muted-foreground">{ragUploadOk}</span>
-                  )}
-                </div>
-              )}
-            </div>
+              <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4">
+                <DetailMetric
+                  label="Бюджет"
+                  value={`${formatTenderAmount(tender.cost)} ₸`}
+                  hint={tender.purchaseType || "Сумма лота"}
+                  icon={DollarSign}
+                  tone="green"
+                />
+                <DetailMetric
+                  label="Срок подачи"
+                  value={tender.endDate ? formatDate(tender.endDate) : "—"}
+                  hint={`Осталось: ${deadlineLabel(daysLeft)}`}
+                  icon={Clock}
+                  tone={deadlineTone(statusInfo?.color)}
+                  progress={deadlineProgress}
+                />
+                <DetailMetric
+                  label="Заказчик"
+                  value={companyName || tender.partner || "—"}
+                  hint={tender.region || tender.partner || "Компания не указана"}
+                  icon={Building2}
+                  tone="blue"
+                />
+                <DetailMetric
+                  label="Решение"
+                  value={decisionLabel}
+                  hint={tender.status || `Источник: ${sourceLabel || "—"}`}
+                  icon={Hash}
+                  tone={viewInfo?.decision === "rejected" ? "red" : viewInfo?.decision === "participating" ? "teal" : "slate"}
+                />
+              </div>
+            </section>
 
-            {/* Блок решения об участии */}
-            <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: "var(--shadow-sm)" }}>
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Решение об участии</p>
-                  {tender.source && (
-                    <span className={`mb-2 inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${sourceBadgeClass(tender.source)}`}>
-                      {sourceLabel}
-                    </span>
-                  )}
-                  <p className="text-sm text-muted-foreground">
-                    Подходит ли лот профилю компании? Выберите действие.
-                  </p>
-                </div>
-                {viewInfo && (
-                  <div className="text-right text-xs text-muted-foreground shrink-0 ml-4">
-                    <div>Просмотрел: <span className="font-medium text-foreground">{viewInfo.viewer}</span></div>
-                    <div>{new Date(viewInfo.viewedAt).toLocaleString("ru-RU")}</div>
-                    {viewInfo.decision && (
-                      <span className={`mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                        viewInfo.decision === "participating"
-                          ? "bg-green-100 text-green-700"
-                          : "bg-red-100 text-red-600"
-                      }`}>
-                        {viewInfo.decision === "participating" ? "Участвуем" : "Отклонён"}
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+              <section className="overflow-hidden rounded-lg border border-primary/20 bg-primary/5 shadow-sm">
+                <SectionHeading
+                  title="Техническая спецификация"
+                  icon={FileText}
+                  meta={
+                    pickedSpecDocument ? (
+                      <span className="rounded-full border border-primary/20 bg-background px-2.5 py-1 text-xs font-medium text-primary">
+                        Документ найден
                       </span>
+                    ) : null
+                  }
+                />
+                <div className="space-y-4 p-5">
+                  <div className="min-w-0">
+                    <h3 className="text-base font-semibold text-foreground">ТС и база знаний</h3>
+                    <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">
+                      {pickedSpecDocument
+                        ? `Найден документ: ${blockText(pickedSpecDocument.name)}`
+                        : "ТС в документах не найдена. Проверьте список файлов справа."}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleDownloadOriginalSpec}
+                      disabled={!pickedSpecDocument || specDownloadLoading}
+                      className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-background px-4 text-sm font-medium hover:bg-accent disabled:opacity-50"
+                    >
+                      <Download className="h-4 w-4" />
+                      {specDownloadLoading ? "Скачивание…" : "Скачать ТС"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveSpecToKnowledgeBase}
+                      disabled={specAutoAnalyzeLoading || !tender.documents?.length}
+                      className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                    >
+                      {specAutoAnalyzeLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+                      Сохранить в базу знаний
+                    </button>
+                  </div>
+                  {(ragUploadOk || ragUploadError || specAutoAnalyzeMessage) && (
+                    <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                      {specAutoAnalyzeMessage ? (
+                        <span className="text-muted-foreground">{specAutoAnalyzeMessage}</span>
+                      ) : ragUploadError ? (
+                        <span className="text-amber-800">{ragUploadError}</span>
+                      ) : (
+                        <span className="text-muted-foreground">{ragUploadOk}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+                <SectionHeading title="Решение об участии" icon={ThumbsUp} />
+                <div className="space-y-4 p-5">
+                  {viewInfo && (
+                    <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                      <div>Просмотрел: <span className="font-medium text-foreground">{viewInfo.viewer}</span></div>
+                      <div>{new Date(viewInfo.viewedAt).toLocaleString("ru-RU")}</div>
+                      {viewInfo.decision && (
+                        <span className={`mt-2 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                          viewInfo.decision === "participating"
+                            ? "bg-green-100 text-green-700"
+                            : "bg-red-100 text-red-600"
+                        }`}>
+                          {viewInfo.decision === "participating" ? "Участвуем" : "Отклонён"}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <div className="grid gap-2">
+                    <button
+                      onClick={() => handleDecision("participating")}
+                      disabled={actionLoading !== null}
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90 disabled:opacity-50"
+                    >
+                      <ThumbsUp className="h-4 w-4" />
+                      {actionLoading === "participating" ? "Сохранение…" : "Подходит"}
+                    </button>
+                    <button
+                      onClick={() => handleDecision("rejected")}
+                      disabled={actionLoading !== null}
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-5 text-sm font-semibold text-destructive transition hover:bg-destructive/20 disabled:opacity-50"
+                    >
+                      <ThumbsDown className="h-4 w-4" />
+                      {actionLoading === "rejected" ? "Сохранение…" : "Не подходит"}
+                    </button>
+                    {canRequestAssignment && (
+                      <button
+                        onClick={() => handleDecision("assignment_requested")}
+                        disabled={actionLoading !== null}
+                        className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-5 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        <Send className="h-4 w-4" />
+                        {actionLoading === "assignment_requested" ? "Отправка…" : "Запросить взять в работу"}
+                      </button>
                     )}
                   </div>
-                )}
-              </div>
-              <div className="flex flex-wrap gap-3">
-                <button
-                  onClick={() => handleDecision("participating")}
-                  disabled={actionLoading !== null}
-                  className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90 disabled:opacity-50"
-                >
-                  <ThumbsUp className="h-4 w-4" />
-                  {actionLoading === "participating" ? "Сохранение…" : "Подходит"}
-                </button>
-                <button
-                  onClick={() => handleDecision("rejected")}
-                  disabled={actionLoading !== null}
-                  className="inline-flex items-center gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-5 py-2.5 text-sm font-semibold text-destructive transition hover:bg-destructive/20 disabled:opacity-50"
-                >
-                  <ThumbsDown className="h-4 w-4" />
-                  {actionLoading === "rejected" ? "Сохранение…" : "Не подходит"}
-                </button>
-                {canRequestAssignment && (
-                  <button
-                    onClick={() => handleDecision("assignment_requested")}
-                    disabled={actionLoading !== null}
-                    className="inline-flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-5 py-2.5 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-50"
-                  >
-                    <Send className="h-4 w-4" />
-                    {actionLoading === "assignment_requested" ? "Отправка…" : "Запросить взять в работу"}
-                  </button>
-                )}
-                <a
-                  href={tender.partnerLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-5 py-2.5 text-sm font-medium text-primary hover:bg-accent"
-                >
-                  <ExternalLink className="h-4 w-4" /> Открыть на площадке
-                </a>
-              </div>
+                </div>
+              </section>
             </div>
 
             <TenderWorkspacePanel lotId={tender.id} />
@@ -804,10 +962,8 @@ function TenderDetail() {
             {/* Основной блок: Описание + Детали */}
             <div className="grid gap-4 lg:grid-cols-3">
               {/* Описание */}
-              <div className="lg:col-span-2 rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
-                <div className="border-b border-border px-6 py-4">
-                  <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Описание</h3>
-                </div>
+              <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm lg:col-span-2">
+                <SectionHeading title="Описание" icon={FileText} />
                 <dl className="divide-y divide-border px-6">
                   <InfoRow label="Лот" value={<span className="font-mono text-xs">{tender.lot}</span>} icon={Hash} />
                   <InfoRow label="Наименование" value={blockText(tender.title)} icon={FileText} />
@@ -844,10 +1000,8 @@ function TenderDetail() {
 
               {/* Детали тендера */}
               <div className="space-y-4">
-                <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
-                  <div className="border-b border-border px-6 py-4">
-                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Детали тендера</h3>
-                  </div>
+                <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+                  <SectionHeading title="Детали тендера" icon={Calendar} />
                   <dl className="divide-y divide-border px-6">
                     {tender.endDate && (
                       <div className="py-3">
@@ -893,10 +1047,8 @@ function TenderDetail() {
                 </div>
 
                 {/* Документы */}
-                <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
-                  <div className="border-b border-border px-6 py-4">
-                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Документы</h3>
-                  </div>
+                <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+                  <SectionHeading title="Документы" icon={Download} />
                   <div className="px-4 py-3">
                     {tender.documents && tender.documents.length > 0 ? (
                       <ul className="space-y-2">
@@ -935,15 +1087,8 @@ function TenderDetail() {
             </div>
 
             {/* Похожие прошлые заказы */}
-            <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
-              <div className="border-b border-border px-6 py-4">
-                <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                  <History className="h-4 w-4 text-primary" /> Похожие выполненные заказы
-                </h3>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Сравнение с историей завершённых лотов по названию, описанию, заказчику, виду закупки и сумме.
-                </p>
-              </div>
+            <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+              <SectionHeading title="Похожие выполненные заказы" icon={History} />
               <div className="px-6 py-4">
                 {similarLotsLoading ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -1001,24 +1146,24 @@ function TenderDetail() {
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    Похожих выполненных заказов пока не найдено. Они появятся после накопления истории выполненных заказов.
+                    Похожих выполненных заказов пока не найдено.
                   </p>
                 )}
               </div>
             </div>
 
             {/* Услуги по ТС */}
-            <div className="overflow-hidden rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
+            <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
               <div className="border-b border-border bg-muted/20 px-6 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-start gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
                       <Sparkles className="h-5 w-5" />
                     </div>
                     <div>
                       <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Услуги по ТС</h3>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        AI извлекает из документа именно те услуги и требования, которые закупаются в этом лоте.
+                        Требования и услуги из технической спецификации.
                       </p>
                     </div>
                   </div>
@@ -1064,7 +1209,7 @@ function TenderDetail() {
                 )}
                 {ragUploadOk && <p className="text-sm text-muted-foreground">{ragUploadOk}</p>}
                 {specAutoAnalyzeLoading && (
-                  <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+                  <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
                     <div className="flex items-start gap-3">
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                         <Loader2 className="h-5 w-5 animate-spin" />
@@ -1096,19 +1241,15 @@ function TenderDetail() {
                   </div>
                 ) : specAutoAnalyzeLoading ? null : (
                   <p className="text-sm text-muted-foreground">
-                    AI-разбор ТС запускается автоматически при открытии лота. Если услуги не появились, попробуйте обновить страницу или скачать документ вручную.
+                    Услуги по ТС пока не выделены.
                   </p>
                 )}
               </div>
             </div>
 
             {/* AI Анализ */}
-            <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
-              <div className="border-b border-border px-6 py-4">
-                <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                  <Sparkles className="h-4 w-4 text-primary" /> AI Анализ
-                </h3>
-              </div>
+            <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+              <SectionHeading title="AI Анализ" icon={Sparkles} />
               <div className="px-6 py-4">
                 <div className="mb-4">
                   <button
@@ -1253,21 +1394,17 @@ function TenderWorkspacePanel({ lotId }: { lotId: number }) {
   const openTasks = tasks.filter((task) => task.status !== "done").length;
 
   return (
-    <div className="rounded-xl border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
-      <div className="border-b border-border px-6 py-4">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Рабочий блок</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Задачи, комментарии и история действий по этому тендеру.
-            </p>
-          </div>
+    <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+      <SectionHeading
+        title="Рабочий блок"
+        icon={ListTodo}
+        meta={
           <div className="flex flex-wrap gap-2 text-xs">
             <span className="rounded-full bg-muted px-2.5 py-1 text-muted-foreground">{openTasks} открытых задач</span>
             <span className="rounded-full bg-muted px-2.5 py-1 text-muted-foreground">{comments.length} комментариев</span>
           </div>
-        </div>
-      </div>
+        }
+      />
 
       {loading ? (
         <div className="px-6 py-10 text-sm text-muted-foreground">Загружаю рабочий контекст...</div>
