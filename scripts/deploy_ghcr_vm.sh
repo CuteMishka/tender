@@ -5,6 +5,7 @@ APP_DIR="${APP_DIR:-/home/cloud-user/tender1}"
 GHCR_IMAGE_PREFIX="${GHCR_IMAGE_PREFIX:?GHCR_IMAGE_PREFIX is required}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 
+# This script is used by GitHub Actions and can safely restart existing services.
 cd "$APP_DIR"
 
 if [ ! -f .env ]; then
