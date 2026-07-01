@@ -1392,138 +1392,187 @@ function TenderWorkspacePanel({ lotId }: { lotId: number }) {
   };
 
   const openTasks = tasks.filter((task) => task.status !== "done").length;
+  const doneTasks = Math.max(0, tasks.length - openTasks);
+  const activityPreview = activity.slice(0, 8);
 
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
-      <SectionHeading
-        title="Рабочий блок"
-        icon={ListTodo}
-        meta={
-          <div className="flex flex-wrap gap-2 text-xs">
-            <span className="rounded-full bg-muted px-2.5 py-1 text-muted-foreground">{openTasks} открытых задач</span>
-            <span className="rounded-full bg-muted px-2.5 py-1 text-muted-foreground">{comments.length} комментариев</span>
+      <div className="border-b border-border bg-gradient-to-r from-primary/5 via-background to-background px-6 py-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <ListTodo className="h-5 w-5" />
+            </span>
+            <div>
+              <h3 className="text-base font-semibold text-foreground">Рабочий блок</h3>
+              <p className="mt-1 text-sm text-muted-foreground">Задачи, заметки команды и история по этому лоту</p>
+            </div>
           </div>
-        }
-      />
+          <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-border bg-background text-center text-xs">
+            <div className="min-w-20 px-3 py-2">
+              <div className="font-semibold text-foreground">{openTasks}</div>
+              <div className="text-muted-foreground">открыто</div>
+            </div>
+            <div className="min-w-20 border-x border-border px-3 py-2">
+              <div className="font-semibold text-foreground">{doneTasks}</div>
+              <div className="text-muted-foreground">готово</div>
+            </div>
+            <div className="min-w-20 px-3 py-2">
+              <div className="font-semibold text-foreground">{comments.length}</div>
+              <div className="text-muted-foreground">заметки</div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {loading ? (
         <div className="px-6 py-10 text-sm text-muted-foreground">Загружаю рабочий контекст...</div>
       ) : (
-        <div className="grid gap-4 p-6 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.8fr)]">
-          <section className="space-y-4">
-            <div className="flex items-center gap-2">
-              <ListTodo className="h-4 w-4 text-primary" />
-              <h4 className="text-sm font-semibold">Чеклист подготовки</h4>
-            </div>
-            <div className="flex gap-2">
-              <input
-                value={taskTitle}
-                onChange={(event) => setTaskTitle(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void addTask();
-                }}
-                placeholder="Например: проверить сертификаты и сроки поставки"
-                className="h-10 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-primary"
-              />
-              <button
-                onClick={addTask}
-                disabled={saving === "task" || !taskTitle.trim()}
-                className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
-              >
-                <Plus className="h-4 w-4" />
-                Добавить
-              </button>
-            </div>
-            <div className="space-y-2">
-              {tasks.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground">
-                  Задач пока нет
+        <div className="space-y-4 p-5">
+          <div className="grid overflow-hidden rounded-lg border border-border bg-background xl:grid-cols-[minmax(0,1.05fr)_minmax(340px,0.95fr)]">
+            <section className="min-w-0 border-b border-border xl:border-b-0 xl:border-r">
+              <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
+                <div className="flex items-center gap-2">
+                  <ListTodo className="h-4 w-4 text-primary" />
+                  <h4 className="text-sm font-semibold">Чеклист подготовки</h4>
                 </div>
-              ) : tasks.map((task) => (
-                <button
-                  key={task.id}
-                  onClick={() => void toggleTask(task)}
-                  disabled={saving === "task-toggle"}
-                  className={`flex w-full items-start gap-3 rounded-lg border px-3 py-3 text-left transition hover:bg-muted/30 disabled:opacity-60 ${
-                    task.status === "done" ? "border-green-200 bg-green-50/60" : "border-border bg-background"
-                  }`}
-                >
-                  {task.status === "done"
-                    ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
-                    : <Circle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
-                  <span className="min-w-0 flex-1">
-                    <span className={`block text-sm font-medium ${task.status === "done" ? "text-green-800 line-through" : "text-foreground"}`}>
-                      {task.title}
-                    </span>
-                    <span className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-                      {task.assignee && <span>Ответственный: {task.assignee}</span>}
-                      {task.due_date && <span>Срок: {formatShortDate(task.due_date)}</span>}
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="space-y-4">
-            <div className="flex items-center gap-2">
-              <MessageSquare className="h-4 w-4 text-primary" />
-              <h4 className="text-sm font-semibold">Комментарии</h4>
-            </div>
-            <textarea
-              value={commentText}
-              onChange={(event) => setCommentText(event.target.value)}
-              placeholder="Оставьте заметку для команды..."
-              className="min-h-[92px] w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-            />
-            <button
-              onClick={addComment}
-              disabled={saving === "comment" || !commentText.trim()}
-              className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
-            >
-              <Send className="h-4 w-4" />
-              Отправить
-            </button>
-            <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-              {comments.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground">
-                  Комментариев пока нет
+                <span className="rounded-md bg-primary/10 px-2 py-1 text-xs font-medium text-primary">{openTasks} в работе</span>
+              </div>
+              <div className="border-b border-border bg-muted/20 p-4">
+                <div className="flex gap-2">
+                  <input
+                    value={taskTitle}
+                    onChange={(event) => setTaskTitle(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void addTask();
+                    }}
+                    placeholder="Например: проверить сертификаты и сроки поставки"
+                    className="h-10 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-primary"
+                  />
+                  <button
+                    onClick={addTask}
+                    disabled={saving === "task" || !taskTitle.trim()}
+                    className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:opacity-50"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Добавить
+                  </button>
                 </div>
-              ) : comments.map((comment) => (
-                <div key={comment.id} className="rounded-lg border border-border bg-background p-3">
-                  <div className="mb-1 flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-foreground">{comment.author || "Пользователь"}</span>
-                    <span className="text-[11px] text-muted-foreground">{formatShortDateTime(comment.created_at)}</span>
+              </div>
+              <div className="max-h-[24rem] overflow-y-auto">
+                {tasks.length === 0 ? (
+                  <div className="px-5 py-10 text-center text-sm text-muted-foreground">
+                    Задач пока нет
                   </div>
-                  <p className="text-sm leading-5 text-muted-foreground">{comment.body}</p>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="xl:col-span-2">
-            <div className="mb-3 flex items-center gap-2">
-              <History className="h-4 w-4 text-primary" />
-              <h4 className="text-sm font-semibold">История действий</h4>
-            </div>
-            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-              {activity.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground">
-                  История появится после первого действия
-                </div>
-              ) : activity.slice(0, 9).map((item) => (
-                <div key={item.id} className="rounded-lg border border-border bg-background p-3">
-                  <div className="mb-1 flex items-center justify-between gap-2">
-                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
-                      {activityLabel(item.action, item.status)}
-                    </span>
-                    <span className="text-[11px] text-muted-foreground">{formatShortDateTime(item.created_at)}</span>
+                ) : (
+                  <div className="divide-y divide-border">
+                    {tasks.map((task) => (
+                      <button
+                        key={task.id}
+                        onClick={() => void toggleTask(task)}
+                        disabled={saving === "task-toggle"}
+                        className="flex w-full items-start gap-3 px-5 py-4 text-left transition hover:bg-muted/40 disabled:opacity-60"
+                      >
+                        {task.status === "done"
+                          ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
+                          : <Circle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
+                        <span className="min-w-0 flex-1">
+                          <span className={`block text-sm font-medium ${task.status === "done" ? "text-muted-foreground line-through" : "text-foreground"}`}>
+                            {task.title}
+                          </span>
+                          <span className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                            {task.assignee && <span>Ответственный: {task.assignee}</span>}
+                            {task.due_date && <span>Срок: {formatShortDate(task.due_date)}</span>}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
                   </div>
-                  {item.message && <p className="line-clamp-2 text-sm text-foreground">{item.message}</p>}
-                  {item.actor && <p className="mt-1 text-[11px] text-muted-foreground">Автор: {item.actor}</p>}
+                )}
+              </div>
+            </section>
+
+            <section className="min-w-0">
+              <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="h-4 w-4 text-primary" />
+                  <h4 className="text-sm font-semibold">Комментарии</h4>
                 </div>
-              ))}
+                <span className="rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">{comments.length}</span>
+              </div>
+              <div className="border-b border-border bg-muted/20 p-4">
+                <textarea
+                  value={commentText}
+                  onChange={(event) => setCommentText(event.target.value)}
+                  placeholder="Оставьте заметку для команды..."
+                  className="min-h-[86px] w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-primary"
+                />
+                <div className="mt-3 flex justify-end">
+                  <button
+                    onClick={addComment}
+                    disabled={saving === "comment" || !commentText.trim()}
+                    className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:opacity-50"
+                  >
+                    <Send className="h-4 w-4" />
+                    Отправить
+                  </button>
+                </div>
+              </div>
+              <div className="max-h-[24rem] overflow-y-auto">
+                {comments.length === 0 ? (
+                  <div className="px-5 py-10 text-center text-sm text-muted-foreground">
+                    Комментариев пока нет
+                  </div>
+                ) : (
+                  <div className="divide-y divide-border">
+                    {comments.map((comment) => (
+                      <article key={comment.id} className="px-5 py-4">
+                        <div className="mb-1 flex items-center justify-between gap-3">
+                          <span className="truncate text-xs font-semibold text-foreground">{comment.author || "Пользователь"}</span>
+                          <span className="shrink-0 text-[11px] text-muted-foreground">{formatShortDateTime(comment.created_at)}</span>
+                        </div>
+                        <p className="text-sm leading-5 text-muted-foreground">{comment.body}</p>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+
+          <section className="overflow-hidden rounded-lg border border-border bg-background">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
+              <div className="flex items-center gap-2">
+                <History className="h-4 w-4 text-primary" />
+                <h4 className="text-sm font-semibold">История действий</h4>
+              </div>
+              <span className="rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">{activity.length} событий</span>
             </div>
+            {activityPreview.length === 0 ? (
+              <div className="px-5 py-8 text-sm text-muted-foreground">
+                История появится после первого действия
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {activityPreview.map((item) => (
+                  <div key={item.id} className="grid gap-3 px-5 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                          {activityLabel(item.action, item.status)}
+                        </span>
+                        {item.actor && <span className="text-[11px] text-muted-foreground">Автор: {item.actor}</span>}
+                      </div>
+                      {item.message && <p className="mt-1 line-clamp-2 text-sm text-foreground">{item.message}</p>}
+                    </div>
+                    <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+                      <Clock className="h-3.5 w-3.5" />
+                      {formatShortDateTime(item.created_at)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         </div>
       )}

@@ -45,6 +45,25 @@ func isCloudyGreeting(question string) bool {
 	return cloudyGreetingRe.MatchString(q)
 }
 
+func cloudyInstantResponse(question string) CloudyChatResponse {
+	q := strings.ToLower(strings.TrimSpace(question))
+	answer := "Здравствуйте. Я Cloudy, помощник по тендерным документам. Задайте вопрос по выбранному лоту, и я найду ответ в документах."
+	if strings.Contains(q, "спасибо") || strings.Contains(q, "благодар") || q == "спс" || q == "thanks" || q == "thx" {
+		answer = "Пожалуйста. Если нужно уточнить сроки, требования или документы по лоту, задайте следующий вопрос."
+	} else if strings.Contains(q, "кто") || strings.Contains(q, "что") || strings.Contains(q, "помо") || q == "help" {
+		answer = "Я Cloudy, AI-помощник по тендерам. Могу ответить по срокам подачи, бюджету, требованиям ТС, документам и рискам выбранного лота."
+	}
+	return CloudyChatResponse{
+		Answer:        answer,
+		Sources:       []CloudySourceDTO{},
+		FollowUp:      []string{"Какой срок подачи заявки?", "Какая сумма и валюта закупки?", "Какие ключевые требования по ТС?"},
+		UsedDocuments: []string{},
+		Warnings:      []string{},
+		Provider:      "built-in",
+		Model:         "intent-router",
+	}
+}
+
 type CloudyChatMessageDTO struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -95,10 +114,6 @@ type cloudyDocumentPayload struct {
 }
 
 func (h *Handler) CloudyChat(w http.ResponseWriter, r *http.Request) {
-	if h.DB == nil {
-		writeJSONError(w, http.StatusServiceUnavailable, "database is not configured")
-		return
-	}
 	ragBase := strings.TrimRight(h.RagAPIBase, "/")
 	if ragBase == "" {
 		ragBase = "http://127.0.0.1:8083"
@@ -127,6 +142,14 @@ func (h *Handler) CloudyChat(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "question is too long")
 		return
 	}
+	if isCloudyGreeting(question) {
+		writeJSON(w, http.StatusOK, cloudyInstantResponse(question))
+		return
+	}
+	if h.DB == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "database is not configured")
+		return
+	}
 
 	row, docs, ok := h.loadParserLotForSpec(w, id)
 	if !ok {
@@ -147,26 +170,19 @@ func (h *Handler) CloudyChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fast path: skip document fetching for greetings/thanks/smalltalk
-	// RAG will handle intent classification and return instant response
 	var payloadDocs []cloudyDocumentPayload
 	var selectedNames []string
 	var fetchWarnings []string
-	if isCloudyGreeting(question) {
-		payloadDocs = nil
-		selectedNames = nil
-	} else {
-		selected := selectCloudyDocuments(dto.Documents, documentRange)
-		if len(selected) > cloudyMaxDocuments {
-			writeJSONError(w, http.StatusBadRequest, "выберите не больше 12 документов за раз")
-			return
-		}
-		var fetchErr error
-		payloadDocs, selectedNames, fetchWarnings, fetchErr = h.fetchCloudyDocuments(r.Context(), selected)
-		if fetchErr != nil {
-			writeJSONError(w, http.StatusBadGateway, fetchErr.Error())
-			return
-		}
+	selected := selectCloudyDocuments(dto.Documents, documentRange)
+	if len(selected) > cloudyMaxDocuments {
+		writeJSONError(w, http.StatusBadRequest, "выберите не больше 12 документов за раз")
+		return
+	}
+	var fetchErr error
+	payloadDocs, selectedNames, fetchWarnings, fetchErr = h.fetchCloudyDocuments(r.Context(), selected)
+	if fetchErr != nil {
+		writeJSONError(w, http.StatusBadGateway, fetchErr.Error())
+		return
 	}
 
 	specSummary, _, _ := getRAGSpecSummary(r.Context(), ragBase, ragLotID)

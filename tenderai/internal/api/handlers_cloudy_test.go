@@ -31,6 +31,22 @@ func TestNormalizeCloudyDocumentRange(t *testing.T) {
 	}
 }
 
+func TestCloudyInstantResponse(t *testing.T) {
+	resp := cloudyInstantResponse("помоги")
+	if resp.Answer == "" {
+		t.Fatal("instant response answer is empty")
+	}
+	if resp.Provider != "built-in" || resp.Model != "intent-router" {
+		t.Fatalf("unexpected instant metadata: provider=%q model=%q", resp.Provider, resp.Model)
+	}
+	if len(resp.FollowUp) == 0 {
+		t.Fatal("instant response should include follow-up suggestions")
+	}
+	if len(resp.Sources) != 0 || len(resp.UsedDocuments) != 0 {
+		t.Fatalf("instant response should not include document data: %+v", resp)
+	}
+}
+
 func TestPostCloudyChatToRAG(t *testing.T) {
 	var gotQuestion string
 	var gotHistory string

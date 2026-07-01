@@ -27,6 +27,8 @@ interface DashboardDynamicsPoint {
   date: string;
   label: string;
   count: number;
+  created_count?: number;
+  updated_count?: number;
 }
 
 const STATUS_RU: Record<string, { label: string; cls: string }> = {
@@ -129,12 +131,16 @@ function Dashboard() {
     }));
   const rawChartData = dynamics.length > 0 ? dynamics.map((item) => ({
     count: Number(item.count) || 0,
+    created: item.created_count == null ? Number(item.count) || 0 : Number(item.created_count) || 0,
+    updated: item.updated_count == null ? 0 : Number(item.updated_count) || 0,
     label: item.label,
-  })) : fallbackChartData;
+  })) : fallbackChartData.map((item) => ({ ...item, created: item.count, updated: 0 }));
   const maxCount = Math.max(...rawChartData.map((item) => item.count), 1);
   const chartData = rawChartData.map((item) => ({
     ...item,
     height: item.count === 0 ? 4 : (item.count / maxCount) * 100,
+    createdShare: item.count > 0 ? (item.created / item.count) * 100 : 0,
+    updatedShare: item.count > 0 ? (item.updated / item.count) * 100 : 0,
   }));
 
   return (
@@ -181,30 +187,53 @@ function Dashboard() {
           <div className="mb-5 flex items-center justify-between">
             <div>
               <h3 className="text-base font-semibold">Динамика заявок</h3>
-              <p className="text-xs text-muted-foreground">За все время</p>
+              <p className="text-xs text-muted-foreground">Новые и обновленные заявки за все время</p>
             </div>
-            <Link
-              to="/bids"
-              className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-            >
-              Все заявки <ArrowRight className="h-3 w-3" />
-            </Link>
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="h-2.5 w-2.5 rounded-sm bg-primary" /> Новые
+              </span>
+              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="h-2.5 w-2.5 rounded-sm bg-emerald-300" /> Обновления
+              </span>
+              <Link
+                to="/bids"
+                className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+              >
+                Все заявки <ArrowRight className="h-3 w-3" />
+              </Link>
+            </div>
           </div>
           <div className="overflow-x-auto pb-2">
             <div
-              className="flex h-48 items-end gap-2"
+              className="flex h-52 items-end gap-2 border-b border-border/70 pb-3"
               style={{ minWidth: `${Math.max(chartData.length, 7) * 56}px` }}
             >
               {chartData.map((d, i) => (
-                <div key={`${d.label}-${i}`} className="group flex flex-1 flex-col items-center gap-2">
-                  <span className="invisible text-xs font-medium text-foreground group-hover:visible">
-                    {d.count}
-                  </span>
+                <div key={`${d.label}-${i}`} className="group relative flex flex-1 flex-col items-center gap-2">
+                  <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden w-max -translate-x-1/2 rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-md group-hover:block">
+                    <div className="font-semibold text-foreground">{d.label}: {d.count}</div>
+                    <div className="mt-1 text-muted-foreground">Новые: {d.created}</div>
+                    <div className="text-muted-foreground">Обновления: {d.updated}</div>
+                  </div>
                   <div
-                    className="w-full rounded-t-md transition-all duration-300 hover:opacity-75"
-                    style={{ height: `${d.height}%`, background: "var(--gradient-primary, #16a34a)" }}
-                  />
-                  <span className="text-xs uppercase tracking-wider text-muted-foreground">{d.label}</span>
+                    className="flex w-full min-w-8 flex-col justify-end overflow-hidden rounded-t-lg bg-muted transition-all duration-300 group-hover:opacity-85"
+                    style={{ height: `${d.height}%` }}
+                  >
+                    {d.updated > 0 && (
+                      <span
+                        className="block w-full bg-emerald-300"
+                        style={{ height: `${Math.max(d.updatedShare, 16)}%` }}
+                      />
+                    )}
+                    {d.created > 0 && (
+                      <span
+                        className="block w-full bg-primary"
+                        style={{ height: `${Math.max(d.createdShare, 16)}%` }}
+                      />
+                    )}
+                  </div>
+                  <span className="text-xs text-muted-foreground">{d.label}</span>
                 </div>
               ))}
             </div>
