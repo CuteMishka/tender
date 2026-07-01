@@ -129,19 +129,30 @@ function Dashboard() {
       count,
       label: new Date(`${date}T00:00:00`).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }),
     }));
-  const rawChartData = dynamics.length > 0 ? dynamics.map((item) => ({
-    count: Number(item.count) || 0,
-    created: item.created_count == null ? Number(item.count) || 0 : Number(item.created_count) || 0,
-    updated: item.updated_count == null ? 0 : Number(item.updated_count) || 0,
-    label: item.label,
-  })) : fallbackChartData.map((item) => ({ ...item, created: item.count, updated: 0 }));
-  const maxCount = Math.max(...rawChartData.map((item) => item.count), 1);
-  const chartData = rawChartData.map((item) => ({
-    ...item,
-    height: item.count === 0 ? 4 : (item.count / maxCount) * 100,
-    createdShare: item.count > 0 ? (item.created / item.count) * 100 : 0,
-    updatedShare: item.count > 0 ? (item.updated / item.count) * 100 : 0,
-  }));
+  const rawChartData = dynamics.length > 0 ? dynamics.map((item) => {
+    const created = item.created_count == null ? Number(item.count) || 0 : Number(item.created_count) || 0;
+    const updated = item.updated_count == null ? 0 : Number(item.updated_count) || 0;
+    const count = Math.max(Number(item.count) || 0, created + updated);
+    return {
+      count,
+      created,
+      updated,
+      label: item.label,
+    };
+  }) : fallbackChartData.map((item) => ({ ...item, created: item.count, updated: 0 }));
+  const chartWindow = rawChartData.length > 18 ? rawChartData.slice(-18) : rawChartData;
+  const totalDynamicsCount = rawChartData.reduce((sum, item) => sum + item.count, 0);
+  const activeDaysCount = rawChartData.filter((item) => item.count > 0).length;
+  const maxCount = Math.max(...chartWindow.map((item) => item.count), 1);
+  const chartData = chartWindow.map((item) => {
+    const height = item.count === 0 ? 6 : Math.max(28, Math.round((item.count / maxCount) * 148));
+    return {
+      ...item,
+      height,
+      createdShare: item.count > 0 ? (item.created / item.count) * 100 : 0,
+      updatedShare: item.count > 0 ? (item.updated / item.count) * 100 : 0,
+    };
+  });
 
   return (
     <>
@@ -184,12 +195,18 @@ function Dashboard() {
 
         {/* График динамики */}
         <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: "var(--shadow-sm)" }}>
-          <div className="mb-5 flex items-center justify-between">
+          <div className="mb-5 flex items-center justify-between gap-4">
             <div>
               <h3 className="text-base font-semibold">Динамика заявок</h3>
               <p className="text-xs text-muted-foreground">Новые и обновленные заявки за все время</p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-3">
+              <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-foreground">
+                {totalDynamicsCount} событий
+              </span>
+              <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-foreground">
+                {activeDaysCount} активных дн.
+              </span>
               <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span className="h-2.5 w-2.5 rounded-sm bg-primary" /> Новые
               </span>
@@ -206,32 +223,34 @@ function Dashboard() {
           </div>
           <div className="overflow-x-auto pb-2">
             <div
-              className="flex h-52 items-end gap-2 border-b border-border/70 pb-3"
+              className="flex h-56 items-end gap-2 border-b border-border/70 pb-3"
               style={{ minWidth: `${Math.max(chartData.length, 7) * 56}px` }}
             >
               {chartData.map((d, i) => (
-                <div key={`${d.label}-${i}`} className="group relative flex flex-1 flex-col items-center gap-2">
+                <div key={`${d.label}-${i}`} className="group relative flex h-full flex-1 flex-col items-center justify-end gap-2">
                   <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden w-max -translate-x-1/2 rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-md group-hover:block">
                     <div className="font-semibold text-foreground">{d.label}: {d.count}</div>
                     <div className="mt-1 text-muted-foreground">Новые: {d.created}</div>
                     <div className="text-muted-foreground">Обновления: {d.updated}</div>
                   </div>
-                  <div
-                    className="flex w-full min-w-8 flex-col justify-end overflow-hidden rounded-t-lg bg-muted transition-all duration-300 group-hover:opacity-85"
-                    style={{ height: `${d.height}%` }}
-                  >
-                    {d.updated > 0 && (
-                      <span
-                        className="block w-full bg-emerald-300"
-                        style={{ height: `${Math.max(d.updatedShare, 16)}%` }}
-                      />
-                    )}
-                    {d.created > 0 && (
-                      <span
-                        className="block w-full bg-primary"
-                        style={{ height: `${Math.max(d.createdShare, 16)}%` }}
-                      />
-                    )}
+                  <div className="flex h-40 w-full items-end">
+                    <div
+                      className="flex w-full min-w-8 flex-col justify-end overflow-hidden rounded-t-lg bg-muted transition-all duration-300 group-hover:opacity-85"
+                      style={{ height: `${d.height}px` }}
+                    >
+                      {d.updated > 0 && (
+                        <span
+                          className="block w-full bg-emerald-300"
+                          style={{ height: `${Math.max(d.updatedShare, d.created > 0 ? 18 : 100)}%` }}
+                        />
+                      )}
+                      {d.created > 0 && (
+                        <span
+                          className="block w-full bg-primary"
+                          style={{ height: `${Math.max(d.createdShare, d.updated > 0 ? 18 : 100)}%` }}
+                        />
+                      )}
+                    </div>
                   </div>
                   <span className="text-xs text-muted-foreground">{d.label}</span>
                 </div>
