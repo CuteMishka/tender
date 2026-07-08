@@ -269,7 +269,7 @@ VITE_LOCAL_API=http://localhost:8082
 VITE_RAG_API=http://localhost:8083
 
 # Прокси для автозагрузки ТЗ из площадки
-VITE_FETCH_DOCUMENT_PROXY_URL=http://localhost:8082/api/v1/fetch-document
+VITE_FETCH_DOCUMENT_PROXY_URL=/api/v1/fetch-document
 ```
 
 > Если `.env` не создан, фронт по умолчанию обращается к `localhost:8082` для основного API и к продакшн-серверу для тендеров.

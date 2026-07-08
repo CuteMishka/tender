@@ -417,18 +417,21 @@ function resolveFetchDocumentProxyUrl(rawUrl: unknown): string | null {
   const url = typeof rawUrl === "string" ? rawUrl.trim() : "";
   if (!url) return null;
   const origin = currentOrigin();
-  if (url.startsWith("/")) return origin ? `${origin}${url}` : null;
+  if (url.startsWith("/")) return origin ? `${origin}${url}` : url;
   if (origin && typeof window !== "undefined" && !isLoopbackHost(window.location.hostname)) {
     try {
       const parsed = new URL(url);
-      if (isLoopbackHost(parsed.hostname)) {
-        const base = currentHostBase(Number(parsed.port) || 8082);
-        return base ? `${base}${parsed.pathname}${parsed.search}` : null;
+      if (
+        isLoopbackHost(parsed.hostname) ||
+        parsed.hostname !== window.location.hostname ||
+        parsed.protocol !== window.location.protocol ||
+        parsed.port !== window.location.port
+      ) {
+        return `${origin}${parsed.pathname}${parsed.search}`;
       }
     } catch {
       if (url.toLowerCase().includes("localhost") || url.includes("127.0.0.1")) {
-        const base = currentHostBase(8082);
-        return base ? `${base}/api/v1/fetch-document` : null;
+        return `${origin}/api/v1/fetch-document`;
       }
     }
   }
