@@ -21,6 +21,7 @@ project.tar.gz
 __pycache__/
 *.py[cod]
 .gocache/
+outputs/
 node_modules/
 .output/
 dist/

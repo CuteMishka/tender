@@ -20,6 +20,7 @@ import { Route as AdminNotificationsRouteImport } from './routes/_admin/notifica
 import { Route as AdminDictionariesRouteImport } from './routes/_admin/dictionaries'
 import { Route as AdminDashboardRouteImport } from './routes/_admin/dashboard'
 import { Route as AdminCompaniesRouteImport } from './routes/_admin/companies'
+import { Route as AdminCalendarRouteImport } from './routes/_admin/calendar'
 import { Route as AdminCabinetRouteImport } from './routes/_admin/cabinet'
 import { Route as AdminBidsRouteImport } from './routes/_admin/bids'
 import { Route as AdminAnalyticsRouteImport } from './routes/_admin/analytics'
@@ -80,6 +81,11 @@ const AdminCompaniesRoute = AdminCompaniesRouteImport.update({
   path: '/companies',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminCalendarRoute = AdminCalendarRouteImport.update({
+  id: '/calendar',
+  path: '/calendar',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminCabinetRoute = AdminCabinetRouteImport.update({
   id: '/cabinet',
   path: '/cabinet',
@@ -112,6 +118,7 @@ export interface FileRoutesByFullPath {
   '/analytics': typeof AdminAnalyticsRoute
   '/bids': typeof AdminBidsRoute
   '/cabinet': typeof AdminCabinetRoute
+  '/calendar': typeof AdminCalendarRoute
   '/companies': typeof AdminCompaniesRoute
   '/dashboard': typeof AdminDashboardRoute
   '/dictionaries': typeof AdminDictionariesRoute
@@ -129,6 +136,7 @@ export interface FileRoutesByTo {
   '/analytics': typeof AdminAnalyticsRoute
   '/bids': typeof AdminBidsRoute
   '/cabinet': typeof AdminCabinetRoute
+  '/calendar': typeof AdminCalendarRoute
   '/companies': typeof AdminCompaniesRoute
   '/dashboard': typeof AdminDashboardRoute
   '/dictionaries': typeof AdminDictionariesRoute
@@ -147,6 +155,7 @@ export interface FileRoutesById {
   '/_admin/analytics': typeof AdminAnalyticsRoute
   '/_admin/bids': typeof AdminBidsRoute
   '/_admin/cabinet': typeof AdminCabinetRoute
+  '/_admin/calendar': typeof AdminCalendarRoute
   '/_admin/companies': typeof AdminCompaniesRoute
   '/_admin/dashboard': typeof AdminDashboardRoute
   '/_admin/dictionaries': typeof AdminDictionariesRoute
@@ -166,6 +175,7 @@ export interface FileRouteTypes {
     | '/analytics'
     | '/bids'
     | '/cabinet'
+    | '/calendar'
     | '/companies'
     | '/dashboard'
     | '/dictionaries'
@@ -183,6 +193,7 @@ export interface FileRouteTypes {
     | '/analytics'
     | '/bids'
     | '/cabinet'
+    | '/calendar'
     | '/companies'
     | '/dashboard'
     | '/dictionaries'
@@ -200,6 +211,7 @@ export interface FileRouteTypes {
     | '/_admin/analytics'
     | '/_admin/bids'
     | '/_admin/cabinet'
+    | '/_admin/calendar'
     | '/_admin/companies'
     | '/_admin/dashboard'
     | '/_admin/dictionaries'
@@ -297,6 +309,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminCompaniesRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/_admin/calendar': {
+      id: '/_admin/calendar'
+      path: '/calendar'
+      fullPath: '/calendar'
+      preLoaderRoute: typeof AdminCalendarRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/_admin/cabinet': {
       id: '/_admin/cabinet'
       path: '/cabinet'
@@ -353,6 +372,7 @@ interface AdminRouteChildren {
   AdminAnalyticsRoute: typeof AdminAnalyticsRoute
   AdminBidsRoute: typeof AdminBidsRoute
   AdminCabinetRoute: typeof AdminCabinetRoute
+  AdminCalendarRoute: typeof AdminCalendarRoute
   AdminCompaniesRoute: typeof AdminCompaniesRoute
   AdminDashboardRoute: typeof AdminDashboardRoute
   AdminDictionariesRoute: typeof AdminDictionariesRoute
@@ -367,6 +387,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminAnalyticsRoute: AdminAnalyticsRoute,
   AdminBidsRoute: AdminBidsRoute,
   AdminCabinetRoute: AdminCabinetRoute,
+  AdminCalendarRoute: AdminCalendarRoute,
   AdminCompaniesRoute: AdminCompaniesRoute,
   AdminDashboardRoute: AdminDashboardRoute,
   AdminDictionariesRoute: AdminDictionariesRoute,

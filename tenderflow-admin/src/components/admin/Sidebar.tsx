@@ -1,7 +1,7 @@
 import { Link, useNavigate, useLocation } from "@tanstack/react-router";
 import {
   LayoutDashboard, FileText, Gavel, Settings, LogOut,
-  BarChart3, Building2, Bell, BookOpen, Users, UserRound, BriefcaseBusiness,
+  BarChart3, Building2, Bell, BookOpen, Users, UserRound, BriefcaseBusiness, CalendarDays,
 } from "lucide-react";
 import { canManageUsers, getCurrentUser, logout, roleLabels } from "@/lib/auth";
 import { useNotifications } from "@/hooks/use-notifications";
@@ -11,6 +11,7 @@ const mainNav = [
   { to: "/tenders", label: "Тендеры", icon: Gavel, search: { page: 1 } },
   { to: "/workflow", label: "Воронка", icon: BriefcaseBusiness },
   { to: "/bids", label: "Заявки", icon: FileText },
+  { to: "/calendar", label: "Календарь", icon: CalendarDays },
   { to: "/cabinet", label: "Кабинет", icon: UserRound },
   { to: "/analytics", label: "Аналитика", icon: BarChart3 },
   { to: "/companies", label: "Компании", icon: Building2 },
