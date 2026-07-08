@@ -21,6 +21,7 @@ export const Route = createFileRoute("/_admin/calendar")({
 });
 
 type CalendarTab = "registry" | "contracts" | "top20" | "control";
+type CalendarMode = "tenders" | "contracts";
 type DateFilter = "all" | "h2" | "renewals" | "top20";
 type CalendarRow = (typeof tenderCalendarData.calendar)[number];
 type SamrukContract = (typeof tenderCalendarData.samrukContracts)[number];
@@ -28,18 +29,23 @@ type Top20Row = (typeof tenderCalendarData.top20Audit)[number];
 
 const pageSizeOptions = [10, 25, 50, 100];
 
-const tabLabels: Record<CalendarTab, string> = {
+const tenderTabLabels: Record<Exclude<CalendarTab, "contracts">, string> = {
   registry: "Общий календарь",
-  contracts: "Договора Самрук-Казына",
   top20: "Топ 20",
   control: "Контроль",
 };
 
-const dateFilters: { value: DateFilter; label: string }[] = [
+const tenderDateFilters: { value: DateFilter; label: string }[] = [
   { value: "all", label: "Все даты" },
   { value: "h2", label: "Июль-декабрь 2026" },
   { value: "renewals", label: "Окончание договора 2026" },
   { value: "top20", label: "Только Топ-20" },
+];
+
+const contractDateFilters: { value: DateFilter; label: string }[] = [
+  { value: "all", label: "Все сроки" },
+  { value: "renewals", label: "Срок в 2026" },
+  { value: "h2", label: "Срок июль-декабрь 2026" },
 ];
 
 function TenderCalendar() {
@@ -49,16 +55,23 @@ function TenderCalendar() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const activeMode: CalendarMode = activeTab === "contracts" ? "contracts" : "tenders";
+  const activeDateFilters = activeMode === "contracts" ? contractDateFilters : tenderDateFilters;
 
   const statuses = useMemo(() => {
     const values = new Set<string>();
-    tenderCalendarData.calendar.forEach((row) => {
+    const sourceRows = activeTab === "contracts"
+      ? tenderCalendarData.samrukContracts
+      : activeTab === "top20"
+        ? tenderCalendarData.top20Audit
+        : tenderCalendarData.calendar;
+    sourceRows.forEach((row) => {
       if (row.status) values.add(row.status);
     });
     return Array.from(values).sort((a, b) => a.localeCompare(b, "ru"));
-  }, []);
+  }, [activeTab]);
 
-  const filteredRows = useMemo(() => {
+  const filteredCalendarRows = useMemo(() => {
     const needle = normalize(query);
     return tenderCalendarData.calendar.filter((row) => {
       if (statusFilter !== "all" && row.status !== statusFilter) return false;
@@ -80,12 +93,50 @@ function TenderCalendar() {
     });
   }, [query, dateFilter, statusFilter]);
 
+  const filteredContracts = useMemo(() => {
+    const needle = normalize(query);
+    return tenderCalendarData.samrukContracts.filter((row) => {
+      if (statusFilter !== "all" && row.status !== statusFilter) return false;
+      if (dateFilter === "h2" && !isH2Date(row.validUntil)) return false;
+      if (dateFilter === "renewals" && !is2026Date(row.validUntil)) return false;
+      if (!needle) return true;
+      return [
+        row.customer,
+        row.subject,
+        row.status,
+        row.owner,
+        row.documentUrl,
+        row.contractNumber,
+        row.supplier,
+        row.purchaseMethod,
+      ].some((value) => normalize(value).includes(needle));
+    });
+  }, [query, dateFilter, statusFilter]);
+
+  const filteredTop20Rows = useMemo(() => {
+    const needle = normalize(query);
+    return tenderCalendarData.top20Audit.filter((row) => {
+      if (statusFilter !== "all" && row.status !== statusFilter) return false;
+      if (dateFilter === "h2" && !isH2Date(row.publishedAt) && !isH2Date(row.deadlineAt)) return false;
+      if (!needle) return true;
+      return [
+        row.announcement,
+        row.lot,
+        row.title,
+        row.organizer,
+        row.status,
+        row.url,
+        row.mergeResult,
+      ].some((value) => normalize(value).includes(needle));
+    });
+  }, [query, dateFilter, statusFilter]);
+
   const currentRows = activeTab === "registry"
-    ? filteredRows
+    ? filteredCalendarRows
     : activeTab === "contracts"
-      ? tenderCalendarData.samrukContracts
+      ? filteredContracts
       : activeTab === "top20"
-        ? tenderCalendarData.top20Audit
+        ? filteredTop20Rows
         : [];
   const pagination = getPagination(currentRows.length, page, pageSize);
   const visibleRows = currentRows.slice(pagination.startIndex, pagination.endIndex);
@@ -94,11 +145,30 @@ function TenderCalendar() {
     setPage(1);
   }
 
+  function resetFilters() {
+    setQuery("");
+    setDateFilter("all");
+    setStatusFilter("all");
+    setPage(1);
+  }
+
+  function switchMode(mode: CalendarMode) {
+    setActiveTab(mode === "contracts" ? "contracts" : "registry");
+    resetFilters();
+  }
+
+  function switchTenderTab(tab: Exclude<CalendarTab, "contracts">) {
+    setActiveTab(tab);
+    setDateFilter("all");
+    setStatusFilter("all");
+    setPage(1);
+  }
+
   return (
     <>
       <PageHeader
         title="Календарь"
-        description="Сводный календарь тендеров, договоров и будущих перезаключений"
+        description="Календарь тендеров отделен от реестра договоров Самрук-Казына"
         actions={
           <a
             href={tenderCalendarData.xlsxPath}
@@ -112,76 +182,110 @@ function TenderCalendar() {
       />
 
       <main className="space-y-5 bg-[#f7faf8] p-8">
-        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard icon={TableProperties} label="Строк в календаре" value={fmtN(tenderCalendarData.metrics.final_count)} detail="после слияния" />
-          <MetricCard icon={BadgeCheck} label="Топ-20" value={fmtN(countTop20())} detail="флаг проставлен" accent="amber" />
-          <MetricCard icon={Clock3} label="H2 2026" value={fmtN(tenderCalendarData.metrics.h2_2026)} detail="видно фильтром по датам" accent="blue" />
-          <MetricCard icon={ShieldCheck} label="Договоры Самрук" value={fmtN(tenderCalendarData.metrics.samruk_contracts)} detail="отдельная вкладка" accent="emerald" />
+        <section className="grid gap-3 xl:grid-cols-2">
+          <ModeButton
+            active={activeMode === "tenders"}
+            icon={CalendarDays}
+            title="Календарь тендеров"
+            meta={`${fmtN(tenderCalendarData.metrics.final_count)} строк`}
+            description="Общий список после слияния, флаг Топ-20 и будущие перезаключения."
+            onClick={() => switchMode("tenders")}
+          />
+          <ModeButton
+            active={activeMode === "contracts"}
+            icon={ShieldCheck}
+            title="Договора Самрук-Казына"
+            meta={`${fmtN(tenderCalendarData.samrukContracts.length)} договоров`}
+            description="Отдельный реестр договоров: заказчик, предмет, сумма, срок, статус, ответственный и документ."
+            onClick={() => switchMode("contracts")}
+          />
         </section>
 
-        <section className="rounded-xl border border-emerald-100 bg-white p-4 shadow-[0_18px_50px_rgba(15,78,58,0.07)]">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-            <div className="relative min-w-0 flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                value={query}
+        {activeMode === "tenders" ? (
+          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard icon={TableProperties} label="Строк в календаре" value={fmtN(tenderCalendarData.metrics.final_count)} detail="после слияния" />
+            <MetricCard icon={BadgeCheck} label="Топ-20" value={fmtN(countTop20())} detail="флаг проставлен" accent="amber" />
+            <MetricCard icon={Clock3} label="H2 2026" value={fmtN(tenderCalendarData.metrics.h2_2026)} detail="видно фильтром по датам" accent="blue" />
+            <MetricCard icon={CalendarDays} label="Перезаключения" value={fmtN(tenderCalendarData.metrics.renewals_2026)} detail="по окончанию договоров 2026" accent="emerald" />
+          </section>
+        ) : (
+          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard icon={ShieldCheck} label="Договоры Самрук" value={fmtN(tenderCalendarData.samrukContracts.length)} detail="отдельный реестр" accent="emerald" />
+            <MetricCard icon={TableProperties} label="Сумма договоров" value={fmtMoneyShort(sumContracts())} detail="по текущему источнику" />
+            <MetricCard icon={Clock3} label="Срок в 2026" value={fmtN(countContracts2026())} detail="видно фильтром по срокам" accent="blue" />
+            <MetricCard icon={FileSpreadsheet} label="Ссылки на документы" value={fmtN(countContractLinks())} detail="SharePoint / площадка" accent="amber" />
+          </section>
+        )}
+
+        {activeTab !== "control" && (
+          <section className="rounded-xl border border-emerald-100 bg-white p-4 shadow-[0_18px_50px_rgba(15,78,58,0.07)]">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    resetPage();
+                  }}
+                  placeholder={activeMode === "contracts" ? "Поиск по заказчику, предмету, договору или документу" : "Поиск по заказчику, предмету, договору или источнику"}
+                  className="h-11 w-full rounded-lg border border-emerald-100 bg-[#fbfdfb] pl-10 pr-3 text-sm outline-none transition duration-200 placeholder:text-muted-foreground/70 focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10"
+                />
+              </div>
+              <select
+                value={dateFilter}
                 onChange={(event) => {
-                  setQuery(event.target.value);
+                  setDateFilter(event.target.value as DateFilter);
                   resetPage();
                 }}
-                placeholder="Поиск по заказчику, предмету, договору или источнику"
-                className="h-11 w-full rounded-lg border border-emerald-100 bg-[#fbfdfb] pl-10 pr-3 text-sm outline-none transition duration-200 placeholder:text-muted-foreground/70 focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10"
-              />
+                className="h-11 rounded-lg border border-emerald-100 bg-[#fbfdfb] px-3 text-sm outline-none transition duration-200 focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10"
+              >
+                {activeDateFilters.map((filter) => (
+                  <option key={filter.value} value={filter.value}>{filter.label}</option>
+                ))}
+              </select>
+              <select
+                value={statusFilter}
+                onChange={(event) => {
+                  setStatusFilter(event.target.value);
+                  resetPage();
+                }}
+                className="h-11 min-w-56 rounded-lg border border-emerald-100 bg-[#fbfdfb] px-3 text-sm outline-none transition duration-200 focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10"
+              >
+                <option value="all">Все статусы</option>
+                {statuses.map((status) => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
+              </select>
             </div>
-            <select
-              value={dateFilter}
-              onChange={(event) => {
-                setDateFilter(event.target.value as DateFilter);
-                resetPage();
-              }}
-              className="h-11 rounded-lg border border-emerald-100 bg-[#fbfdfb] px-3 text-sm outline-none transition duration-200 focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10"
-            >
-              {dateFilters.map((filter) => (
-                <option key={filter.value} value={filter.value}>{filter.label}</option>
-              ))}
-            </select>
-            <select
-              value={statusFilter}
-              onChange={(event) => {
-                setStatusFilter(event.target.value);
-                resetPage();
-              }}
-              className="h-11 min-w-56 rounded-lg border border-emerald-100 bg-[#fbfdfb] px-3 text-sm outline-none transition duration-200 focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10"
-            >
-              <option value="all">Все статусы</option>
-              {statuses.map((status) => (
-                <option key={status} value={status}>{status}</option>
-              ))}
-            </select>
-          </div>
-        </section>
+          </section>
+        )}
 
         <section className="overflow-hidden rounded-xl border border-emerald-100 bg-white shadow-[0_22px_70px_rgba(15,78,58,0.08)]">
           <div className="border-b border-emerald-100 bg-gradient-to-r from-white via-emerald-50/60 to-white p-4">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-              <div className="flex flex-wrap gap-2">
-                {(Object.keys(tabLabels) as CalendarTab[]).map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => {
-                      setActiveTab(tab);
-                      resetPage();
-                    }}
-                    className={`rounded-lg px-3.5 py-2 text-sm font-medium transition duration-200 ${
-                      activeTab === tab
-                        ? "bg-primary text-primary-foreground shadow-sm shadow-emerald-900/15"
-                        : "text-muted-foreground hover:bg-white hover:text-foreground hover:shadow-sm"
-                    }`}
-                  >
-                    {tabLabels[tab]}
-                  </button>
-                ))}
-              </div>
+              {activeMode === "tenders" ? (
+                <div className="flex flex-wrap gap-2">
+                  {(Object.keys(tenderTabLabels) as Array<Exclude<CalendarTab, "contracts">>).map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => switchTenderTab(tab)}
+                      className={`rounded-lg px-3.5 py-2 text-sm font-medium transition duration-200 ${
+                        activeTab === tab
+                          ? "bg-primary text-primary-foreground shadow-sm shadow-emerald-900/15"
+                          : "text-muted-foreground hover:bg-white hover:text-foreground hover:shadow-sm"
+                      }`}
+                    >
+                      {tenderTabLabels[tab]}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Отдельная вкладка</p>
+                  <h2 className="mt-1 text-base font-semibold text-foreground">Договора Самрук-Казына</h2>
+                </div>
+              )}
 
               {activeTab !== "control" && (
                 <PaginationToolbar
@@ -320,6 +424,7 @@ function ContractsTable({ rows }: { rows: readonly SamrukContract[] }) {
           ))}
         </tbody>
       </table>
+      {rows.length === 0 && <EmptyState />}
     </div>
   );
 }
@@ -369,6 +474,7 @@ function Top20Table({ rows }: { rows: readonly Top20Row[] }) {
           ))}
         </tbody>
       </table>
+      {rows.length === 0 && <EmptyState />}
     </div>
   );
 }
@@ -423,6 +529,45 @@ function MetricCard({
       <p className="mt-1 text-2xl font-semibold text-foreground">{value}</p>
       <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
     </div>
+  );
+}
+
+function ModeButton({
+  active,
+  icon: Icon,
+  title,
+  meta,
+  description,
+  onClick,
+}: {
+  active: boolean;
+  icon: typeof CalendarDays;
+  title: string;
+  meta: string;
+  description: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`group rounded-xl border p-5 text-left transition duration-200 ${
+        active
+          ? "border-primary/30 bg-white shadow-[0_20px_60px_rgba(15,78,58,0.10)]"
+          : "border-emerald-100 bg-white/70 hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_18px_50px_rgba(15,78,58,0.07)]"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className={`flex h-11 w-11 items-center justify-center rounded-lg transition duration-200 ${active ? "bg-primary text-primary-foreground" : "bg-emerald-50 text-primary group-hover:bg-primary/10"}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${active ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+          {meta}
+        </span>
+      </div>
+      <h2 className="mt-4 text-lg font-semibold text-foreground">{title}</h2>
+      <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">{description}</p>
+    </button>
   );
 }
 
@@ -570,6 +715,13 @@ function fmtMoney(value: number | null | undefined) {
   return `₸ ${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(value)}`;
 }
 
+function fmtMoneyShort(value: number | null | undefined) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "—";
+  if (Math.abs(value) >= 1_000_000_000) return `₸ ${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(value / 1_000_000_000)} млрд`;
+  if (Math.abs(value) >= 1_000_000) return `₸ ${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(value / 1_000_000)} млн`;
+  return fmtMoney(value);
+}
+
 function fmtN(value: number) {
   return new Intl.NumberFormat("ru-RU").format(value);
 }
@@ -599,6 +751,18 @@ function normalize(value: string | number | null | undefined) {
 
 function countTop20() {
   return tenderCalendarData.calendar.filter((row) => row.top20).length;
+}
+
+function sumContracts() {
+  return tenderCalendarData.samrukContracts.reduce((sum, row) => sum + (typeof row.amount === "number" ? row.amount : 0), 0);
+}
+
+function countContracts2026() {
+  return tenderCalendarData.samrukContracts.filter((row) => is2026Date(row.validUntil)).length;
+}
+
+function countContractLinks() {
+  return tenderCalendarData.samrukContracts.filter((row) => Boolean(row.documentUrl)).length;
 }
 
 function getPagination(total: number, page: number, pageSize: number) {
