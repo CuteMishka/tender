@@ -17,6 +17,10 @@ func LotAmount(lot Lot) float64 {
 	return 0
 }
 
+func LotAmountAvailable(lot Lot) bool {
+	return LotAmount(lot) > 0
+}
+
 func LotOrganizationName(lot Lot) string {
 	if lot.LotBuy == nil {
 		return ""

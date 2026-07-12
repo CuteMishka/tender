@@ -44,7 +44,9 @@ import {
   fmtDate,
   fmtLotNumber,
   fmtM,
+  fmtMoney,
   fmtN,
+  hasKnownAmount,
   type CompanyContract,
   type CompanyRecentEvent,
   type CompanyTender,
@@ -117,8 +119,8 @@ function Analytics() {
         }
       />
 
-      <div className="space-y-5 p-8">
-        <section className="rounded-lg border border-border bg-card p-5" style={{ boxShadow: "var(--shadow-sm)" }}>
+      <div className="space-y-6 p-6 xl:p-8">
+        <section className="overflow-hidden rounded-lg border border-primary/15 bg-gradient-to-br from-white via-white to-emerald-50/60 p-5 shadow-[0_18px_45px_-34px_rgba(0,132,83,0.55)]">
           <form onSubmit={onSubmit} className="flex flex-col gap-3 lg:flex-row lg:items-center">
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -173,11 +175,13 @@ function Analytics() {
               <CompanyProfile result={result} model={model} />
               <div className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <KpiCard icon={Activity} label="Активность" value={fmtN(model.totalEvents)} detail="лоты, договоры, заявки" />
-                <KpiCard icon={Banknote} label="Деньги в анализе" value={`₸ ${fmtM(model.totalAmount)}`} detail="публикации и договоры" />
-                <KpiCard icon={Gavel} label="Средний лот" value={`₸ ${fmtM(model.avgPublishedLot)}`} detail="по опубликованным закупкам" />
+                <KpiCard icon={Banknote} label="Деньги в анализе" value={fmtMoney(model.totalAmount, model.totalAmount > 0)} detail={model.missingAmountCount > 0 ? `${fmtN(model.missingAmountCount)} лотов без суммы` : "публикации и договоры"} />
+                <KpiCard icon={Gavel} label="Средний лот" value={fmtMoney(model.avgPublishedLot, model.avgPublishedLot > 0)} detail="по опубликованным закупкам" />
                 <KpiCard icon={Trophy} label="Индекс побед" value={`${model.winIndex}%`} detail="победы к участию" />
               </div>
             </section>
+
+            {model.missingAmountCount > 0 && <AmountNotice count={model.missingAmountCount} />}
 
             <section className="grid gap-4 xl:grid-cols-[1.4fr_0.9fr_0.9fr]">
               <ChartCard title="Динамика активности" icon={CalendarClock}>
@@ -306,7 +310,7 @@ function CompanyProfile({ result, model }: { result: CompanyTenderIntelligence; 
       <div className="mt-5 grid gap-3 text-sm">
         <MetricRow label="Публикует тендеры" value={fmtN(result.summary.published_count)} />
         <MetricRow label="Выигрывает договоры" value={fmtN(result.summary.won_contracts_count)} />
-        <MetricRow label="Покупает / публикует" value={`${fmtN(model.buyingCount)} · ₸ ${fmtM(model.buyingAmount)}`} />
+        <MetricRow label="Договоры заказчика" value={`${fmtN(model.buyingCount)} · ${fmtMoney(model.buyingAmount, model.buyingAmount > 0)}`} />
         <MetricRow label="Последняя активность" value={fmtDate(result.summary.last_activity_at)} />
       </div>
 
@@ -324,7 +328,7 @@ function CompanyProfile({ result, model }: { result: CompanyTenderIntelligence; 
 
 function KpiCard({ icon: Icon, label, value, detail }: { icon: LucideIcon; label: string; value: string; detail: string }) {
   return (
-    <section className="min-w-0 rounded-lg border border-border bg-card p-4" style={{ boxShadow: "var(--shadow-sm)" }}>
+    <section className="min-w-0 rounded-lg border border-border bg-card p-4 shadow-[0_10px_30px_-26px_rgba(0,0,0,0.45)] transition duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-[0_18px_36px_-28px_rgba(0,132,83,0.65)]">
       <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
         <Icon className="h-4 w-4" />
       </div>
@@ -337,7 +341,7 @@ function KpiCard({ icon: Icon, label, value, detail }: { icon: LucideIcon; label
 
 function ChartCard({ title, icon: Icon, children }: { title: string; icon: LucideIcon; children: ReactNode }) {
   return (
-    <section className="rounded-lg border border-border bg-card p-5" style={{ boxShadow: "var(--shadow-sm)" }}>
+    <section className="rounded-lg border border-border bg-card p-5 shadow-[0_14px_34px_-30px_rgba(0,0,0,0.42)]">
       <div className="mb-4 flex items-center gap-2">
         <Icon className="h-4 w-4 text-primary" />
         <h3 className="font-semibold">{title}</h3>
@@ -425,7 +429,7 @@ function CounterpartyPanel({ contracts }: { contracts: NamedMoney[] }) {
                   <p className="truncate text-sm font-medium">{item.name}</p>
                   <p className="mt-1 text-xs text-muted-foreground">{fmtN(item.count)} договоров</p>
                 </div>
-                <p className="shrink-0 text-sm font-semibold">₸ {fmtM(item.amount)}</p>
+                <p className="shrink-0 text-sm font-semibold">{fmtMoney(item.amount, item.amount > 0)}</p>
               </div>
             </div>
           ))}
@@ -461,7 +465,7 @@ function RecentActivityPanel({ items }: { items: CompanyRecentEvent[] }) {
                 <p className="mt-2 line-clamp-2 text-sm font-medium">{item.title || "Без названия"}</p>
                 <p className="mt-1 truncate text-xs text-muted-foreground">{item.subtitle || "—"}</p>
               </div>
-              <div className="text-sm font-semibold">₸ {fmtM(item.amount)}</div>
+              <div className="text-sm font-semibold">{fmtMoney(item.amount, item.amount_available)}</div>
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <span>{fmtDate(item.date)}</span>
                 {item.link && (
@@ -518,7 +522,7 @@ function OpportunityTable({ items }: { items: CompanyTender[] }) {
                   <td className="px-5 py-4">
                     <span className="rounded-full bg-muted px-2.5 py-1 text-xs">{item.status || "—"}</span>
                   </td>
-                  <td className="px-5 py-4 text-right font-medium">₸ {fmtM(item.amount)}</td>
+                  <td className="px-5 py-4 text-right font-medium">{fmtMoney(item.amount, item.amount_available)}</td>
                   <td className="px-5 py-4 text-muted-foreground">{fmtDate(item.end_date)}</td>
                   <td className="px-5 py-4 text-muted-foreground">{item.platform || "—"}</td>
                   <td className="px-5 py-4 text-right">
@@ -569,6 +573,20 @@ function MetricRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function AmountNotice({ count }: { count: number }) {
+  return (
+    <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50/80 p-4 text-sm text-amber-900">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+      <div>
+        <p className="font-medium">У {fmtN(count)} лотов сумма не указана в источнике</p>
+        <p className="mt-1 text-xs leading-5 opacity-85">
+          В графиках такие суммы не превращаются в бюджет, а в таблицах отображаются как “—”.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function LoadingState() {
   return (
     <div className="rounded-lg border border-border bg-card p-10 text-center text-sm text-muted-foreground">
@@ -590,6 +608,7 @@ type AnalyticsModel = {
   buyingAmount: number;
   avgPublishedLot: number;
   winIndex: number;
+  missingAmountCount: number;
   roleBars: NamedValue[];
   statusMix: NamedValue[];
   platformMix: NamedValue[];
@@ -613,18 +632,20 @@ type AnalyticsModel = {
 
 function buildModel(result: CompanyTenderIntelligence): AnalyticsModel {
   const summary = result.summary;
-  const buyingCount = summary.customer_contracts_count || summary.published_count;
-  const buyingAmount = summary.customer_contracts_amount || summary.published_budget;
+  const buyingCount = summary.customer_contracts_count;
+  const buyingAmount = summary.customer_contracts_amount;
   const totalEvents = summary.published_count + summary.won_contracts_count + summary.customer_contracts_count + summary.participated_count;
   const totalAmount = summary.published_budget + summary.won_contracts_amount + summary.customer_contracts_amount;
-  const avgPublishedLot = summary.published_count ? summary.published_budget / summary.published_count : 0;
+  const publishedAmountCount = summary.published_amount_count ?? result.published.filter((item) => hasKnownAmount(item.amount, item.amount_available)).length;
+  const avgPublishedLot = publishedAmountCount ? summary.published_budget / publishedAmountCount : 0;
   const winIndex = summary.participated_count ? Math.round((summary.won_contracts_count / summary.participated_count) * 100) : summary.won_contracts_count > 0 ? 100 : 0;
+  const missingAmountCount = Math.max(summary.published_count - publishedAmountCount, 0);
 
   const roleBars = [
     { name: "Публикует", value: summary.published_count },
     { name: "Активно", value: summary.active_published_count },
     { name: "Выигрывает", value: summary.won_contracts_count },
-    { name: "Покупает", value: buyingCount },
+    { name: "Договоры заказчика", value: buyingCount },
     { name: "Участвует", value: summary.participated_count },
   ].filter((item) => item.value > 0);
 
@@ -656,6 +677,7 @@ function buildModel(result: CompanyTenderIntelligence): AnalyticsModel {
     buyingAmount,
     avgPublishedLot,
     winIndex,
+    missingAmountCount,
     roleBars: roleBars.length ? roleBars : [{ name: "Нет данных", value: 1 }],
     statusMix,
     platformMix,
@@ -741,6 +763,7 @@ function buildRecentEvents(result: CompanyTenderIntelligence): CompanyRecentEven
       title: item.title,
       subtitle: item.platform,
       amount: item.amount,
+      amount_available: item.amount_available,
       status: item.status,
       date: item.publish_date || item.end_date || item.begin_date,
       link: item.link,
@@ -752,6 +775,7 @@ function buildRecentEvents(result: CompanyTenderIntelligence): CompanyRecentEven
       title: item.tender_title,
       subtitle: item.customer_name,
       amount: item.amount,
+      amount_available: item.amount_available,
       status: item.status,
       date: item.sign_date,
       link: "",
@@ -763,6 +787,7 @@ function buildRecentEvents(result: CompanyTenderIntelligence): CompanyRecentEven
       title: item.tender_title,
       subtitle: item.supplier_name,
       amount: item.amount,
+      amount_available: item.amount_available,
       status: item.status,
       date: item.sign_date,
       link: "",
@@ -774,6 +799,7 @@ function buildRecentEvents(result: CompanyTenderIntelligence): CompanyRecentEven
       title: item.lot?.title || `Лот ${item.lot_id}`,
       subtitle: item.organization,
       amount: item.discount_price || item.amount,
+      amount_available: item.amount_available,
       status: item.status,
       date: item.request_date,
       link: item.lot?.link || "",

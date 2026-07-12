@@ -13,10 +13,13 @@ export type CompanySummary = {
   published_count: number;
   active_published_count: number;
   published_budget: number;
+  published_amount_count?: number;
   won_contracts_count: number;
   won_contracts_amount: number;
+  won_contracts_amount_count?: number;
   customer_contracts_count: number;
   customer_contracts_amount: number;
+  customer_contracts_amount_count?: number;
   participated_count: number;
   last_activity_at: string | null;
   confidence: "high" | "medium" | "low" | string;
@@ -34,6 +37,7 @@ export type CompanyTender = {
   lot_number: string;
   title: string;
   amount: number;
+  amount_available?: boolean;
   status: string;
   customer_name: string;
   customer_bin: string;
@@ -51,6 +55,7 @@ export type CompanyContract = {
   id: number;
   contract_number: string;
   amount: number;
+  amount_available?: boolean;
   sign_date: string | null;
   status: string;
   supplier_name: string;
@@ -65,6 +70,7 @@ export type CompanyOffer = {
   id: number;
   lot_id: number;
   amount: number;
+  amount_available?: boolean;
   discount_price: number;
   request_date: string | null;
   status: string;
@@ -100,6 +106,7 @@ export type CompanyRecentEvent = {
   title: string;
   subtitle: string;
   amount: number;
+  amount_available?: boolean;
   status: string;
   date: string | null;
   link: string;
@@ -219,6 +226,15 @@ export function fmtM(value: number): string {
   if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} млн`;
   if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(0)} тыс`;
   return value.toFixed(0);
+}
+
+export function hasKnownAmount(value: number | null | undefined, amountAvailable?: boolean): boolean {
+  if (amountAvailable === false) return false;
+  return typeof value === "number" && value > 0;
+}
+
+export function fmtMoney(value: number | null | undefined, amountAvailable?: boolean): string {
+  return hasKnownAmount(value, amountAvailable) ? `₸ ${fmtM(Number(value))}` : "—";
 }
 
 export function fmtN(value: number): string {

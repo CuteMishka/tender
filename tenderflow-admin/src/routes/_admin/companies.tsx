@@ -27,8 +27,9 @@ import {
   analyticsApi,
   fmtDate,
   fmtLotNumber,
-  fmtM,
+  fmtMoney,
   fmtN,
+  hasKnownAmount,
   type CompanyContract,
   type CompanyInsight,
   type CompanyOffer,
@@ -126,8 +127,14 @@ function Companies() {
     () => filterCompanyTendersByKeywords(result?.published ?? [], profileKeywords),
     [result?.published, profileKeywords],
   );
-  const buyingCount = summary ? (summary.customer_contracts_count || summary.published_count) : 0;
-  const buyingAmount = summary ? (summary.customer_contracts_amount || summary.published_budget) : 0;
+  const missingAmountCount = useMemo(() => {
+    if (!summary) return 0;
+    if (typeof summary.published_amount_count === "number") {
+      return Math.max(summary.published_count - summary.published_amount_count, 0);
+    }
+    const published = result?.published ?? [];
+    return published.filter((item) => !hasKnownAmount(item.amount, item.amount_available)).length;
+  }, [result?.published, summary]);
   const stats = useMemo(() => {
     if (!summary) return [];
     return [
@@ -139,20 +146,20 @@ function Companies() {
       },
       {
         label: "Бюджет публикаций",
-        value: `₸ ${fmtM(summary.published_budget)}`,
-        detail: "по найденным лотам",
+        value: fmtMoney(summary.published_budget, summary.published_budget > 0),
+        detail: missingAmountCount > 0 ? `${fmtN(missingAmountCount)} без суммы` : "по найденным лотам",
         icon: Banknote,
       },
       {
         label: "Выигрывает",
         value: fmtN(summary.won_contracts_count),
-        detail: `₸ ${fmtM(summary.won_contracts_amount)}`,
+        detail: fmtMoney(summary.won_contracts_amount, summary.won_contracts_amount > 0),
         icon: Trophy,
       },
       {
-        label: "Покупает",
-        value: fmtN(buyingCount),
-        detail: `₸ ${fmtM(buyingAmount)}`,
+        label: "Договоры заказчика",
+        value: fmtN(summary.customer_contracts_count),
+        detail: summary.customer_contracts_count > 0 ? fmtMoney(summary.customer_contracts_amount, summary.customer_contracts_amount > 0) : "TenderPlus не вернул",
         icon: Building2,
       },
       {
@@ -162,7 +169,7 @@ function Companies() {
         icon: Users,
       },
     ];
-  }, [summary, buyingCount, buyingAmount]);
+  }, [summary, missingAmountCount]);
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -202,8 +209,8 @@ function Companies() {
         }
       />
 
-      <div className="min-w-0 space-y-5 overflow-x-hidden p-8">
-        <section className="min-w-0 rounded-lg border border-border bg-card p-5" style={{ boxShadow: "var(--shadow-sm)" }}>
+      <div className="min-w-0 space-y-6 overflow-x-hidden p-6 xl:p-8">
+        <section className="min-w-0 overflow-hidden rounded-lg border border-primary/15 bg-gradient-to-br from-white via-white to-emerald-50/60 p-5 shadow-[0_18px_45px_-34px_rgba(0,132,83,0.55)]">
           <form onSubmit={onSubmit} className="flex flex-col gap-3 lg:flex-row lg:items-center">
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -349,7 +356,10 @@ function Companies() {
                 {stats.map((stat) => {
                   const Icon = stat.icon;
                   return (
-                    <div key={stat.label} className="min-w-0 self-start rounded-lg border border-border bg-card p-4" style={{ boxShadow: "var(--shadow-sm)" }}>
+                    <div
+                      key={stat.label}
+                      className="min-w-0 self-start rounded-lg border border-border bg-card p-4 shadow-[0_10px_30px_-26px_rgba(0,0,0,0.45)] transition duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-[0_18px_36px_-28px_rgba(0,132,83,0.65)]"
+                    >
                       <div className="flex items-center justify-between">
                         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
                           <Icon className="h-4 w-4" />
@@ -386,7 +396,7 @@ function Companies() {
                   <Row label="Последняя активность" value={fmtDate(summary.last_activity_at)} />
                   <Row label="Активные публикации" value={fmtN(summary.active_published_count)} />
                   <Row label="Победы поставщика" value={fmtN(summary.won_contracts_count)} />
-                  <Row label="Покупки / публикации" value={fmtN(buyingCount)} />
+                  <Row label="Договоры заказчика" value={fmtN(summary.customer_contracts_count)} />
                 </dl>
               </div>
             </section>
@@ -396,6 +406,8 @@ function Companies() {
                 {result.warnings.slice(0, 2).join(" ")}
               </div>
             )}
+
+            {missingAmountCount > 0 && <MissingAmountNotice count={missingAmountCount} />}
 
             <RecentActivityPanel items={result.aggregates?.recent ?? []} />
             <div className="rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm text-primary">
@@ -431,6 +443,20 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
+function MissingAmountNotice({ count }: { count: number }) {
+  return (
+    <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50/80 p-4 text-sm text-amber-900">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+      <div>
+        <p className="font-medium">У {fmtN(count)} лотов сумма не опубликована источником</p>
+        <p className="mt-1 text-xs leading-5 opacity-85">
+          Такие строки теперь помечаются как “сумма не указана”, чтобы не выглядеть как реальные нулевые бюджеты.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function RecentActivityPanel({ items }: { items: CompanyRecentEvent[] }) {
   return (
     <section className="min-w-0 overflow-hidden rounded-lg border border-border bg-card" style={{ boxShadow: "var(--shadow-sm)" }}>
@@ -449,7 +475,7 @@ function RecentActivityPanel({ items }: { items: CompanyRecentEvent[] }) {
                 <p className="mt-2 line-clamp-2 text-sm font-medium text-foreground">{item.title || "Без названия"}</p>
                 <p className="mt-1 truncate text-xs text-muted-foreground">{item.subtitle || "—"}</p>
               </div>
-              <div className="text-sm font-semibold">₸ {fmtM(item.amount)}</div>
+              <div className="text-sm font-semibold">{fmtMoney(item.amount, item.amount_available)}</div>
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <span>{fmtDate(item.date)}</span>
                 {item.link && (
@@ -663,7 +689,7 @@ function TenderTable({ title, icon: Icon, items, total }: { title: string; icon:
                   <td className="px-5 py-4">
                     <span className="rounded-full bg-muted px-2.5 py-1 text-xs">{item.status || "—"}</span>
                   </td>
-                  <td className="px-5 py-4 text-right font-medium">₸ {fmtM(item.amount)}</td>
+                  <td className="px-5 py-4 text-right font-medium">{fmtMoney(item.amount, item.amount_available)}</td>
                   <td className="px-5 py-4 text-muted-foreground">{fmtDate(item.end_date)}</td>
                   <td className="px-5 py-4 text-muted-foreground">{item.platform || "—"}</td>
                   <td className="px-5 py-4 text-right">
@@ -818,7 +844,7 @@ function ContractTable({ title, icon: Icon, items, role, total }: { title: strin
                   <td className="px-5 py-4">
                     <span className="rounded-full bg-muted px-2.5 py-1 text-xs">{item.status || "—"}</span>
                   </td>
-                  <td className="px-5 py-4 text-right font-medium">₸ {fmtM(item.amount)}</td>
+                  <td className="px-5 py-4 text-right font-medium">{fmtMoney(item.amount, item.amount_available)}</td>
                   <td className="px-5 py-4 text-muted-foreground">{fmtDate(item.sign_date)}</td>
                   <td className="max-w-[260px] px-5 py-4">
                     <p className="line-clamp-2">{item.tender_title || "—"}</p>
@@ -866,7 +892,7 @@ function OfferTable({ items, total }: { items: CompanyOffer[]; total?: number })
                   <td className="px-5 py-4">
                     <span className="rounded-full bg-muted px-2.5 py-1 text-xs">{item.status || "—"}</span>
                   </td>
-                  <td className="px-5 py-4 text-right font-medium">₸ {fmtM(item.discount_price || item.amount)}</td>
+                  <td className="px-5 py-4 text-right font-medium">{fmtMoney(item.discount_price || item.amount, item.amount_available)}</td>
                   <td className="px-5 py-4 text-muted-foreground">{fmtDate(item.request_date)}</td>
                 </tr>
               ))}

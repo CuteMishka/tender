@@ -45,16 +45,19 @@ type CompanyMatch struct {
 }
 
 type CompanySummary struct {
-	PublishedCount          int        `json:"published_count"`
-	ActivePublishedCount    int        `json:"active_published_count"`
-	PublishedBudget         float64    `json:"published_budget"`
-	WonContractsCount       int        `json:"won_contracts_count"`
-	WonContractsAmount      float64    `json:"won_contracts_amount"`
-	CustomerContractsCount  int        `json:"customer_contracts_count"`
-	CustomerContractsAmount float64    `json:"customer_contracts_amount"`
-	ParticipatedCount       int        `json:"participated_count"`
-	LastActivityAt          *time.Time `json:"last_activity_at"`
-	Confidence              string     `json:"confidence"`
+	PublishedCount               int        `json:"published_count"`
+	ActivePublishedCount         int        `json:"active_published_count"`
+	PublishedBudget              float64    `json:"published_budget"`
+	PublishedAmountCount         int        `json:"published_amount_count"`
+	WonContractsCount            int        `json:"won_contracts_count"`
+	WonContractsAmount           float64    `json:"won_contracts_amount"`
+	WonContractsAmountCount      int        `json:"won_contracts_amount_count"`
+	CustomerContractsCount       int        `json:"customer_contracts_count"`
+	CustomerContractsAmount      float64    `json:"customer_contracts_amount"`
+	CustomerContractsAmountCount int        `json:"customer_contracts_amount_count"`
+	ParticipatedCount            int        `json:"participated_count"`
+	LastActivityAt               *time.Time `json:"last_activity_at"`
+	Confidence                   string     `json:"confidence"`
 }
 
 type CompanyInsight struct {
@@ -97,51 +100,55 @@ type CompanyNamedMoney struct {
 }
 
 type CompanyRecentEvent struct {
-	Kind     string     `json:"kind"`
-	Title    string     `json:"title"`
-	Subtitle string     `json:"subtitle"`
-	Amount   float64    `json:"amount"`
-	Status   string     `json:"status"`
-	Date     *time.Time `json:"date"`
-	Link     string     `json:"link"`
+	Kind            string     `json:"kind"`
+	Title           string     `json:"title"`
+	Subtitle        string     `json:"subtitle"`
+	Amount          float64    `json:"amount"`
+	AmountAvailable bool       `json:"amount_available"`
+	Status          string     `json:"status"`
+	Date            *time.Time `json:"date"`
+	Link            string     `json:"link"`
 }
 
 type CompanyTender struct {
-	ID           int        `json:"id"`
-	LotNumber    string     `json:"lot_number"`
-	Title        string     `json:"title"`
-	Amount       float64    `json:"amount"`
-	Status       string     `json:"status"`
-	CustomerName string     `json:"customer_name"`
-	CustomerBIN  string     `json:"customer_bin"`
-	Organizer    string     `json:"organizer"`
-	Platform     string     `json:"platform"`
-	PurchaseType string     `json:"purchase_type"`
-	Region       string     `json:"region"`
-	BeginDate    *time.Time `json:"begin_date"`
-	EndDate      *time.Time `json:"end_date"`
-	PublishDate  *time.Time `json:"publish_date"`
-	Link         string     `json:"link"`
+	ID              int        `json:"id"`
+	LotNumber       string     `json:"lot_number"`
+	Title           string     `json:"title"`
+	Amount          float64    `json:"amount"`
+	AmountAvailable bool       `json:"amount_available"`
+	Status          string     `json:"status"`
+	CustomerName    string     `json:"customer_name"`
+	CustomerBIN     string     `json:"customer_bin"`
+	Organizer       string     `json:"organizer"`
+	Platform        string     `json:"platform"`
+	PurchaseType    string     `json:"purchase_type"`
+	Region          string     `json:"region"`
+	BeginDate       *time.Time `json:"begin_date"`
+	EndDate         *time.Time `json:"end_date"`
+	PublishDate     *time.Time `json:"publish_date"`
+	Link            string     `json:"link"`
 }
 
 type CompanyContract struct {
-	ID             int        `json:"id"`
-	ContractNumber string     `json:"contract_number"`
-	Amount         float64    `json:"amount"`
-	SignDate       *time.Time `json:"sign_date"`
-	Status         string     `json:"status"`
-	SupplierName   string     `json:"supplier_name"`
-	SupplierBIN    string     `json:"supplier_bin"`
-	CustomerName   string     `json:"customer_name"`
-	CustomerBIN    string     `json:"customer_bin"`
-	TenderNumber   string     `json:"tender_number"`
-	TenderTitle    string     `json:"tender_title"`
+	ID              int        `json:"id"`
+	ContractNumber  string     `json:"contract_number"`
+	Amount          float64    `json:"amount"`
+	AmountAvailable bool       `json:"amount_available"`
+	SignDate        *time.Time `json:"sign_date"`
+	Status          string     `json:"status"`
+	SupplierName    string     `json:"supplier_name"`
+	SupplierBIN     string     `json:"supplier_bin"`
+	CustomerName    string     `json:"customer_name"`
+	CustomerBIN     string     `json:"customer_bin"`
+	TenderNumber    string     `json:"tender_number"`
+	TenderTitle     string     `json:"tender_title"`
 }
 
 type CompanyOffer struct {
 	ID              int            `json:"id"`
 	LotID           int            `json:"lot_id"`
 	Amount          float64        `json:"amount"`
+	AmountAvailable bool           `json:"amount_available"`
 	DiscountPrice   float64        `json:"discount_price"`
 	RequestDate     *time.Time     `json:"request_date"`
 	Status          string         `json:"status"`
@@ -746,11 +753,12 @@ func onlyDigits(value string) string {
 
 func companyTenderFromLot(lot tenderplus.Lot) CompanyTender {
 	dto := CompanyTender{
-		ID:        lot.ID,
-		LotNumber: cleanLotNumber(derefStr(lot.Lot)),
-		Title:     derefStr(lot.Title),
-		Amount:    tenderplus.LotAmount(lot),
-		Link:      cleanTenderPlusLink(lot.ID, derefStr(lot.PartnerLink)),
+		ID:              lot.ID,
+		LotNumber:       cleanLotNumber(derefStr(lot.Lot)),
+		Title:           derefStr(lot.Title),
+		Amount:          tenderplus.LotAmount(lot),
+		AmountAvailable: tenderplus.LotAmountAvailable(lot),
+		Link:            cleanTenderPlusLink(lot.ID, derefStr(lot.PartnerLink)),
 	}
 	if lot.Region != nil {
 		dto.Region = derefStr(lot.Region.Name)
@@ -781,16 +789,17 @@ func cleanLotNumber(value string) string {
 
 func companyContractFromTP(contract tenderplus.Contract) CompanyContract {
 	dto := CompanyContract{
-		ID:             contract.ID,
-		ContractNumber: derefStr(contract.ContractNumber),
-		Amount:         derefFloat(contract.ContractSum),
-		SignDate:       parseTP(derefStr(contract.SignDate)),
-		SupplierName:   derefStr(contract.SupplierName),
-		SupplierBIN:    derefStr(contract.SupplierBIIN),
-		CustomerName:   derefStr(contract.CustomerNameRU),
-		CustomerBIN:    derefStr(contract.CustomerBIIN),
-		TenderNumber:   derefStr(contract.TrdBuyNumberAnno),
-		TenderTitle:    derefStr(contract.TrdBuyNameRU),
+		ID:              contract.ID,
+		ContractNumber:  derefStr(contract.ContractNumber),
+		Amount:          derefFloat(contract.ContractSum),
+		AmountAvailable: contract.ContractSum != nil && *contract.ContractSum > 0,
+		SignDate:        parseTP(derefStr(contract.SignDate)),
+		SupplierName:    derefStr(contract.SupplierName),
+		SupplierBIN:     derefStr(contract.SupplierBIIN),
+		CustomerName:    derefStr(contract.CustomerNameRU),
+		CustomerBIN:     derefStr(contract.CustomerBIIN),
+		TenderNumber:    derefStr(contract.TrdBuyNumberAnno),
+		TenderTitle:     derefStr(contract.TrdBuyNameRU),
 	}
 	if contract.Status != nil {
 		dto.Status = derefStr(contract.Status.Name)
@@ -800,12 +809,13 @@ func companyContractFromTP(contract tenderplus.Contract) CompanyContract {
 
 func companyOfferFromTP(offer tenderplus.LotOffer) CompanyOffer {
 	dto := CompanyOffer{
-		ID:            offer.ID,
-		LotID:         derefInt(offer.LotID),
-		Amount:        derefFloat(offer.Cost),
-		DiscountPrice: derefFloat(offer.DiscountPrice),
-		RequestDate:   parseTP(derefStr(offer.RequestDate)),
-		Status:        derefStr(offer.StatusTitle),
+		ID:              offer.ID,
+		LotID:           derefInt(offer.LotID),
+		Amount:          derefFloat(offer.Cost),
+		AmountAvailable: hasPositiveFloat(offer.Cost) || hasPositiveFloat(offer.DiscountPrice),
+		DiscountPrice:   derefFloat(offer.DiscountPrice),
+		RequestDate:     parseTP(derefStr(offer.RequestDate)),
+		Status:          derefStr(offer.StatusTitle),
 	}
 	if offer.Organization != nil {
 		dto.Organization = derefStr(offer.Organization.ShortName)
@@ -894,6 +904,9 @@ func buildCompanySummary(out CompanyTenderIntelligence) CompanySummary {
 	now := time.Now()
 	for _, lot := range out.Published {
 		summary.PublishedBudget += lot.Amount
+		if lot.AmountAvailable {
+			summary.PublishedAmountCount++
+		}
 		if isTenderActive(lot.Status, lot.EndDate, now) {
 			summary.ActivePublishedCount++
 		}
@@ -901,10 +914,16 @@ func buildCompanySummary(out CompanyTenderIntelligence) CompanySummary {
 	}
 	for _, contract := range out.WonContracts {
 		summary.WonContractsAmount += contract.Amount
+		if contract.AmountAvailable {
+			summary.WonContractsAmountCount++
+		}
 		summary.LastActivityAt = latestTime(summary.LastActivityAt, contract.SignDate)
 	}
 	for _, contract := range out.CustomerContracts {
 		summary.CustomerContractsAmount += contract.Amount
+		if contract.AmountAvailable {
+			summary.CustomerContractsAmountCount++
+		}
 		summary.LastActivityAt = latestTime(summary.LastActivityAt, contract.SignDate)
 	}
 	for _, offer := range out.Participated {
@@ -990,33 +1009,36 @@ func buildCompanyRecentEvents(out CompanyTenderIntelligence) []CompanyRecentEven
 	events := make([]CompanyRecentEvent, 0, 24)
 	for _, lot := range out.Published {
 		events = append(events, CompanyRecentEvent{
-			Kind:     "published",
-			Title:    lot.Title,
-			Subtitle: lot.Platform,
-			Amount:   lot.Amount,
-			Status:   lot.Status,
-			Date:     latestTime(nil, lot.PublishDate, lot.EndDate, lot.BeginDate),
-			Link:     lot.Link,
+			Kind:            "published",
+			Title:           lot.Title,
+			Subtitle:        lot.Platform,
+			Amount:          lot.Amount,
+			AmountAvailable: lot.AmountAvailable,
+			Status:          lot.Status,
+			Date:            latestTime(nil, lot.PublishDate, lot.EndDate, lot.BeginDate),
+			Link:            lot.Link,
 		})
 	}
 	for _, contract := range out.WonContracts {
 		events = append(events, CompanyRecentEvent{
-			Kind:     "won",
-			Title:    contract.TenderTitle,
-			Subtitle: contract.CustomerName,
-			Amount:   contract.Amount,
-			Status:   contract.Status,
-			Date:     contract.SignDate,
+			Kind:            "won",
+			Title:           contract.TenderTitle,
+			Subtitle:        contract.CustomerName,
+			Amount:          contract.Amount,
+			AmountAvailable: contract.AmountAvailable,
+			Status:          contract.Status,
+			Date:            contract.SignDate,
 		})
 	}
 	for _, contract := range out.CustomerContracts {
 		events = append(events, CompanyRecentEvent{
-			Kind:     "customer_contract",
-			Title:    contract.TenderTitle,
-			Subtitle: contract.SupplierName,
-			Amount:   contract.Amount,
-			Status:   contract.Status,
-			Date:     contract.SignDate,
+			Kind:            "customer_contract",
+			Title:           contract.TenderTitle,
+			Subtitle:        contract.SupplierName,
+			Amount:          contract.Amount,
+			AmountAvailable: contract.AmountAvailable,
+			Status:          contract.Status,
+			Date:            contract.SignDate,
 		})
 	}
 	for _, offer := range out.Participated {
@@ -1027,13 +1049,14 @@ func buildCompanyRecentEvents(out CompanyTenderIntelligence) []CompanyRecentEven
 			link = offer.Lot.Link
 		}
 		events = append(events, CompanyRecentEvent{
-			Kind:     "participated",
-			Title:    title,
-			Subtitle: offer.Organization,
-			Amount:   maxFloat(offer.DiscountPrice, offer.Amount),
-			Status:   offer.Status,
-			Date:     offer.RequestDate,
-			Link:     link,
+			Kind:            "participated",
+			Title:           title,
+			Subtitle:        offer.Organization,
+			Amount:          maxFloat(offer.DiscountPrice, offer.Amount),
+			AmountAvailable: offer.AmountAvailable,
+			Status:          offer.Status,
+			Date:            offer.RequestDate,
+			Link:            link,
 		})
 	}
 	sort.SliceStable(events, func(i, j int) bool {
@@ -1227,6 +1250,10 @@ func derefFloat(v *float64) float64 {
 		return 0
 	}
 	return *v
+}
+
+func hasPositiveFloat(v *float64) bool {
+	return v != nil && *v > 0
 }
 
 func derefInt(v *int) int {
