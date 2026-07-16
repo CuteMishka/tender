@@ -124,7 +124,7 @@ compose+=(--env-file "$legacy_env")
 # Only recreate services that carry database credentials.  Pulling the whole
 # legacy stack would unnecessarily fetch the old Ollama image from Docker Hub
 # and could fail on a restricted outbound registry path.
-"${compose[@]}" up -d --no-build --pull never postgres rag-db backend parser rag-api frontend >/dev/null
+"${compose[@]}" up -d --no-build --pull never --no-deps postgres rag-db backend parser rag-api frontend >/dev/null
 
 for service in postgres rag-db; do
   if [ "$(sudo docker ps -q --filter "label=com.docker.compose.project=$legacy_project" --filter "label=com.docker.compose.service=$service" | wc -l)" -ne 1 ]; then
