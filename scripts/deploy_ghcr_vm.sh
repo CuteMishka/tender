@@ -470,9 +470,9 @@ sudo systemctl reload nginx
 # This VPS provider does not support hairpin access to the instance's own
 # public address.  Exercise the real TLS vhost and certificate locally; the
 # workflow runner performs the external reachability check separately.
-curl --resolve qolab.kz:443:127.0.0.1 -fsS https://qolab.kz/healthz >/dev/null
-public_api_status="$(curl --resolve qolab.kz:443:127.0.0.1 -sS -o /dev/null -w '%{http_code}' https://qolab.kz/api/v1/tenders)"
-public_rag_status="$(curl --resolve qolab.kz:443:127.0.0.1 -sS -o /dev/null -w '%{http_code}' https://qolab.kz/rag/health)"
+curl --noproxy '*' --resolve qolab.kz:443:127.0.0.1 -fsS https://qolab.kz/healthz >/dev/null
+public_api_status="$(curl --noproxy '*' --resolve qolab.kz:443:127.0.0.1 -sS -o /dev/null -w '%{http_code}' https://qolab.kz/api/v1/tenders)"
+public_rag_status="$(curl --noproxy '*' --resolve qolab.kz:443:127.0.0.1 -sS -o /dev/null -w '%{http_code}' https://qolab.kz/rag/health)"
 if [ "$public_api_status" != "401" ]; then
   echo "Public protected API returned $public_api_status instead of 401" >&2
   exit 1
