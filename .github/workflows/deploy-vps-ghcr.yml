@@ -216,7 +216,9 @@ jobs:
 
       - name: Install SSH key
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
+          # The VPS address is public infrastructure metadata; keep a safe
+          # fallback so a blank legacy secret cannot silently skip deployment.
+          VPS_HOST: ${{ secrets.VPS_HOST || '85.116.182.35' }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
         run: |
@@ -233,7 +235,7 @@ jobs:
 
       - name: Upload compose files and deploy script
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_HOST: ${{ secrets.VPS_HOST || '85.116.182.35' }}
           VPS_USER: ${{ secrets.VPS_USER }}
           APP_DIR: ${{ env.APP_DIR }}
         run: |
@@ -257,7 +259,7 @@ jobs:
 
       - name: Pull images and restart services
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_HOST: ${{ secrets.VPS_HOST || '85.116.182.35' }}
           VPS_USER: ${{ secrets.VPS_USER }}
           APP_DIR: ${{ env.APP_DIR }}
           GHCR_IMAGE_PREFIX: ${{ needs.build.outputs.image_prefix }}
