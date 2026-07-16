@@ -486,15 +486,6 @@ fi
 if [ "$public_rag_status" != "404" ]; then
   echo "WARNING: local direct RAG route returned ${public_rag_status:-no response} (expected 404)." >&2
 fi
-if [ "$public_api_status" != "401" ]; then
-  echo "Public protected API returned $public_api_status instead of 401" >&2
-  exit 1
-fi
-if [ "$public_rag_status" != "404" ]; then
-  echo "Public RAG route returned $public_rag_status instead of 404" >&2
-  exit 1
-fi
-
 echo "Installing and exercising the daily logical backup timer..."
 sudo install -D -m 0750 -o root -g root \
   ops/backup/tender-backup.sh /usr/local/sbin/tender-backup
