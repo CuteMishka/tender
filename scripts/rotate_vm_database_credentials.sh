@@ -50,10 +50,10 @@ if ! is_weak "$current_pg" && ! is_weak "$current_rag"; then
 fi
 
 legacy_project="${LEGACY_PROJECT:-cloud-user}"
-legacy_container="$(sudo docker ps -q --filter "label=com.docker.compose.project=$legacy_project" --filter 'label=com.docker.compose.service=postgres' | head -n 1)"
-legacy_rag_container="$(sudo docker ps -q --filter "label=com.docker.compose.project=$legacy_project" --filter 'label=com.docker.compose.service=rag-db' | head -n 1)"
+legacy_container="$(sudo docker ps -aq --filter "label=com.docker.compose.project=$legacy_project" --filter 'label=com.docker.compose.service=postgres' | head -n 1)"
+legacy_rag_container="$(sudo docker ps -aq --filter "label=com.docker.compose.project=$legacy_project" --filter 'label=com.docker.compose.service=rag-db' | head -n 1)"
 if [ -z "$legacy_container" ] || [ -z "$legacy_rag_container" ]; then
-  echo "Healthy legacy PostgreSQL containers are required for credential rotation" >&2
+  echo "Legacy PostgreSQL container metadata is required for credential rotation" >&2
   exit 1
 fi
 
