@@ -18,6 +18,10 @@ fi
 
 cd "$APP_DIR"
 
+# Keep the nested volume mountpoint present on the host.  The image cannot
+# create it at runtime because /files is a read-only bind mount in production.
+sudo install -d -m 0755 "$APP_DIR/tender-rag/files/generated"
+
 required_files=(
   .env
   docker-compose.prod.yml

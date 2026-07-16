@@ -21,6 +21,10 @@ if [ ! -f "$canonical_env" ]; then
   echo "Missing canonical environment file: $canonical_env" >&2
   exit 1
 fi
+# The production compose mounts a named volume below the read-only /files
+# bind mount.  Docker needs this child mountpoint to exist in the host bind
+# source before it can create the container, including during rotation.
+install -d -m 0755 "$APP_DIR/tender-rag/files/generated"
 
 env_value() {
   local file="$1" key="$2"
