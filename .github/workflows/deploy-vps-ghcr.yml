@@ -257,7 +257,7 @@ jobs:
           # rate-limits SSH and GitHub runners otherwise open too many short-lived
           # scp/ssh sessions in one minute.
           tar -czf - "${files[@]}" | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$user@$VPS_HOST" \
-            "mkdir -p '$APP_DIR/scripts' '$APP_DIR/tender-rag/db' '$APP_DIR/tender-rag/files' '$APP_DIR/ops' && tar -xzf - -C '$APP_DIR' && chmod 700 '$APP_DIR/scripts/deploy_ghcr_vm.sh' '$APP_DIR/scripts/enqueue_parser_vm.sh' '$APP_DIR/scripts/rotate_vm_database_credentials.sh' '$APP_DIR/ops/harden_host.sh' && sudo env APP_DIR='$APP_DIR' bash '$APP_DIR/scripts/rotate_vm_database_credentials.sh'"
+            "mkdir -p '$APP_DIR/scripts' '$APP_DIR/tender-rag/db' '$APP_DIR/tender-rag/files' '$APP_DIR/ops' && tar -xzf - -C '$APP_DIR' && chmod 700 '$APP_DIR/scripts/deploy_ghcr_vm.sh' '$APP_DIR/scripts/enqueue_parser_vm.sh' '$APP_DIR/scripts/rotate_vm_database_credentials.sh' '$APP_DIR/ops/harden_host.sh'"
 
       - name: Pull images and restart services
         env:
@@ -279,6 +279,7 @@ jobs:
           printf -v q_image_tag '%q' "$IMAGE_TAG"
           printf -v q_ghcr_username '%q' "$GHCR_USERNAME"
           printf -v q_deploy_script '%q' "$APP_DIR/scripts/deploy_ghcr_vm.sh"
+          printf -v q_rotate_script '%q' "$APP_DIR/scripts/rotate_vm_database_credentials.sh"
           printf '%s' "$GHCR_TOKEN" | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$user@$VPS_HOST" "
             set -euo pipefail
             sudo docker login ghcr.io -u $q_ghcr_username --password-stdin >/dev/null
@@ -287,5 +288,9 @@ jobs:
             export APP_DIR=$q_app_dir
             export GHCR_IMAGE_PREFIX=$q_image_prefix
             export IMAGE_TAG=$q_image_tag
+            for service in backend parser rag-api frontend; do
+              sudo docker pull \"$q_image_prefix/\$service:$q_image_tag\" >/dev/null
+            done
+            sudo env APP_DIR=$q_app_dir GHCR_IMAGE_PREFIX=$q_image_prefix IMAGE_TAG=$q_image_tag bash $q_rotate_script
             bash $q_deploy_script
           "

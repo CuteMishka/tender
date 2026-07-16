@@ -126,7 +126,9 @@ compose+=(--env-file "$legacy_env")
 # and could fail on a restricted outbound registry path.
 parser_container="$(sudo docker ps -aq --filter "label=com.docker.compose.project=$legacy_project" --filter 'label=com.docker.compose.service=parser' | head -n 1)"
 parser_image="$(sudo docker inspect --format '{{.Config.Image}}' "$parser_container" 2>/dev/null || true)"
-if [[ "$parser_image" == */parser:* ]]; then
+if [ -n "${GHCR_IMAGE_PREFIX:-}" ]; then
+  ghcr_prefix="$GHCR_IMAGE_PREFIX"
+elif [[ "$parser_image" == */parser:* ]]; then
   ghcr_prefix="${parser_image%/parser:*}"
 else
   ghcr_prefix="ghcr.io/cutemishka/tender"
@@ -134,7 +136,10 @@ fi
 for service in backend parser rag-api frontend; do
   service_container="$(sudo docker ps -aq --filter "label=com.docker.compose.project=$legacy_project" --filter "label=com.docker.compose.service=$service" | head -n 1)"
   image_id=""
-  if [ -n "$service_container" ]; then
+  if [ -n "${GHCR_IMAGE_PREFIX:-}" ] && [ -n "${IMAGE_TAG:-}" ] && \
+     sudo docker image inspect "$GHCR_IMAGE_PREFIX/$service:$IMAGE_TAG" >/dev/null 2>&1; then
+    image_id="$GHCR_IMAGE_PREFIX/$service:$IMAGE_TAG"
+  elif [ -n "$service_container" ]; then
     image_id="$(sudo docker inspect --format '{{.Image}}' "$service_container")"
   fi
   if [ -z "$image_id" ]; then
