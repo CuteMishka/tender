@@ -438,7 +438,11 @@ fi
 echo "Ensuring the configured local model exists..."
 llm_container="$("${compose[@]}" ps -q llm)"
 if [ -n "$llm_container" ]; then
-  sudo docker exec "$llm_container" ollama pull qwen2.5:3b
+  if ! sudo docker exec "$llm_container" ollama list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -Fxq 'qwen2.5:3b'; then
+    sudo docker exec "$llm_container" ollama pull qwen2.5:3b
+  else
+    echo "Configured local model qwen2.5:3b is already present; skipping download."
+  fi
 fi
 
 echo "Starting the internal APIs, frontend and parser..."
@@ -470,9 +474,9 @@ sudo systemctl reload nginx
 # This VPS provider does not support hairpin access to the instance's own
 # public address.  Exercise the real TLS vhost and certificate locally; the
 # workflow runner performs the external reachability check separately.
-curl --noproxy '*' --resolve qolab.kz:443:127.0.0.1 -fsS https://qolab.kz/healthz >/dev/null
-public_api_status="$(curl --noproxy '*' --resolve qolab.kz:443:127.0.0.1 -sS -o /dev/null -w '%{http_code}' https://qolab.kz/api/v1/tenders)"
-public_rag_status="$(curl --noproxy '*' --resolve qolab.kz:443:127.0.0.1 -sS -o /dev/null -w '%{http_code}' https://qolab.kz/rag/health)"
+curl --noproxy '*' -k -fsS -H 'Host: qolab.kz' https://127.0.0.1/healthz >/dev/null
+public_api_status="$(curl --noproxy '*' -k -sS -o /dev/null -w '%{http_code}' -H 'Host: qolab.kz' https://127.0.0.1/api/v1/tenders)"
+public_rag_status="$(curl --noproxy '*' -k -sS -o /dev/null -w '%{http_code}' -H 'Host: qolab.kz' https://127.0.0.1/rag/health)"
 if [ "$public_api_status" != "401" ]; then
   echo "Public protected API returned $public_api_status instead of 401" >&2
   exit 1

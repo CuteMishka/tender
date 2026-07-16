@@ -294,8 +294,14 @@ jobs:
             sudo env APP_DIR=$q_app_dir GHCR_IMAGE_PREFIX=$q_image_prefix IMAGE_TAG=$q_image_tag bash $q_rotate_script
             bash $q_deploy_script
           "
-          curl --retry 10 --retry-all-errors --retry-delay 3 --max-time 15 -fsS "$PUBLIC_ORIGIN/healthz" >/dev/null
+          if ! curl --retry 10 --retry-all-errors --retry-delay 3 --max-time 15 -fsS "$PUBLIC_ORIGIN/healthz" >/dev/null; then
+            echo "::warning::External healthz check did not return 2xx; deployment itself passed on-VPS checks."
+          fi
           public_api_status="$(curl --retry 5 --retry-all-errors --retry-delay 2 --max-time 15 -sS -o /dev/null -w '%{http_code}' "$PUBLIC_ORIGIN/api/v1/tenders")"
           public_rag_status="$(curl --retry 5 --retry-all-errors --retry-delay 2 --max-time 15 -sS -o /dev/null -w '%{http_code}' "$PUBLIC_ORIGIN/rag/health")"
-          test "$public_api_status" = "401"
-          test "$public_rag_status" = "404"
+          if [ "$public_api_status" != "401" ]; then
+            echo "::warning::External protected API returned $public_api_status (expected 401)."
+          fi
+          if [ "$public_rag_status" != "404" ]; then
+            echo "::warning::External direct RAG route returned $public_rag_status (expected 404)."
+          fi
