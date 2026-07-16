@@ -75,7 +75,7 @@ jobs:
         env:
           PYTHONPATH: parser:tender-rag
         run: |
-          python -m pip install --disable-pip-version-check -q fastapi httpx pytest pydantic-settings structlog
+          python -m pip install --disable-pip-version-check -q fastapi httpx pytest pydantic-settings structlog SQLAlchemy==2.0.36
           PYTHONPATH=parser python -m pytest -q parser/tests/test_internal_auth.py
           PYTHONPATH=tender-rag python -m pytest -q tender-rag/tests/test_internal_auth.py tender-rag/tests/test_health.py
 
