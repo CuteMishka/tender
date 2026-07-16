@@ -13,9 +13,10 @@ import (
 )
 
 type Handler struct {
-	DB       *gorm.DB
-	TP       *tenderplus.Client
-	Keywords string
+	DB            *gorm.DB
+	TP            *tenderplus.Client
+	Keywords      string
+	CompanyLoader CompanyIntelligenceLoader
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

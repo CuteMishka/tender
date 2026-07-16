@@ -1,41 +1,59 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-tender}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tender}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       POSTGRES_DB: ${POSTGRES_DB:-tender}
     volumes:
       - tender_postgres_data:/var/lib/postgresql/data
-    ports:
-      - "${POSTGRES_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tender} -d ${POSTGRES_DB:-tender}"]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 20s
+    networks:
+      - data
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    stop_grace_period: 45s
+    logging: *default-logging
 
   rag-db:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${RAG_POSTGRES_USER:-rag}
-      POSTGRES_PASSWORD: ${RAG_POSTGRES_PASSWORD:-rag}
+      POSTGRES_PASSWORD: ${RAG_POSTGRES_PASSWORD:?RAG_POSTGRES_PASSWORD is required}
       POSTGRES_DB: ${RAG_POSTGRES_DB:-rag}
     volumes:
       - rag_postgres_data:/var/lib/postgresql/data
       - ./tender-rag/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-    ports:
-      - "${RAG_POSTGRES_PORT:-5434}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${RAG_POSTGRES_USER:-rag} -d ${RAG_POSTGRES_DB:-rag}"]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 20s
+    networks:
+      - data
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    stop_grace_period: 45s
+    logging: *default-logging
 
   llm:
-    image: ollama/ollama:latest
+    image: ollama/ollama:${OLLAMA_IMAGE_TAG:-0.30.0}
     restart: unless-stopped
     deploy:
       resources:
@@ -49,13 +67,20 @@ services:
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-24h}
     volumes:
       - ollama_data:/root/.ollama
-    ports:
-      - "127.0.0.1:${LLM_PORT:-11434}:11434"
     healthcheck:
       test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 20
+      start_period: 30s
+    networks:
+      - app
+      - ai
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 2048
+    stop_grace_period: 45s
+    logging: *default-logging
 
   backend:
     build:
@@ -64,73 +89,129 @@ services:
         GOPROXY: ${GOPROXY:-https://goproxy.io,https://proxy.golang.org,direct}
         GOSUMDB: ${GOSUMDB:-sum.golang.org}
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "127.0.0.1:${BACKEND_INTERNAL_PORT:-8082}:8082"
     environment:
-      PORT: ${BACKEND_INTERNAL_PORT:-8082}
-      DATABASE_URL: host=127.0.0.1 user=${POSTGRES_USER:-tender} password=${POSTGRES_PASSWORD:-tender} dbname=${POSTGRES_DB:-tender} port=${POSTGRES_PORT:-5433} sslmode=disable TimeZone=Asia/Almaty
+      PORT: "8082"
+      DATABASE_URL: host=postgres user=${POSTGRES_USER:-tender} password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required} dbname=${POSTGRES_DB:-tender} port=5432 sslmode=disable TimeZone=Asia/Almaty
       PARSER_RUNNER_MODE: ${PARSER_RUNNER_MODE:-vm}
       TENDERPLUS_URL: ${TENDERPLUS_URL:-https://api.tenderplus.kz/graphql}
       TENDERPLUS_TOKEN: ${TENDERPLUS_TOKEN:-}
       TENDERS_KEYWORDS: ${TENDERS_KEYWORDS:-}
-      RAG_API_BASE: http://127.0.0.1:${RAG_PORT:-8083}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:5173}
+      RAG_API_BASE: http://rag-api:8083
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://qolab.kz,https://www.qolab.kz}
+      AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME:-tender_session}
+      AUTH_CSRF_COOKIE_NAME: ${AUTH_CSRF_COOKIE_NAME:-tender_csrf}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
+      AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-strict}
+      AUTH_SESSION_TTL: ${AUTH_SESSION_TTL:-12h}
+      AUTH_SESSION_TOUCH_INTERVAL: ${AUTH_SESSION_TOUCH_INTERVAL:-5m}
+      AUTH_ALLOWED_HOSTS: ${AUTH_ALLOWED_HOSTS:-qolab.kz,www.qolab.kz,127.0.0.1,localhost,backend}
+      AUTH_ALLOWED_ORIGINS: ${AUTH_ALLOWED_ORIGINS:-https://qolab.kz,https://www.qolab.kz}
+      AUTH_TRUSTED_PROXY_CIDRS: ${AUTH_TRUSTED_PROXY_CIDRS:-127.0.0.0/8,::1/128,172.16.0.0/12}
+      AUTH_LOGIN_ACCOUNT_RATE_LIMIT: ${AUTH_LOGIN_ACCOUNT_RATE_LIMIT:-5}
+      AUTH_LOGIN_IP_RATE_LIMIT: ${AUTH_LOGIN_IP_RATE_LIMIT:-60}
+      AUTH_LOGIN_RATE_WINDOW: ${AUTH_LOGIN_RATE_WINDOW:-15m}
+      AUTH_REGISTER_RATE_LIMIT: ${AUTH_REGISTER_RATE_LIMIT:-3}
+      AUTH_REGISTER_RATE_WINDOW: ${AUTH_REGISTER_RATE_WINDOW:-1h}
+      BACKEND_INTERNAL_SERVICE_TOKEN: ${BACKEND_INTERNAL_SERVICE_TOKEN:?BACKEND_INTERNAL_SERVICE_TOKEN is required}
+      RAG_INTERNAL_SERVICE_TOKEN: ${RAG_INTERNAL_SERVICE_TOKEN:?RAG_INTERNAL_SERVICE_TOKEN is required}
       FETCH_DOCUMENT_ALLOWED_HOSTS: ${FETCH_DOCUMENT_ALLOWED_HOSTS:-v3bl.goszakup.gov.kz,goszakup.gov.kz,zakup.gov.kz,ows.goszakup.gov.kz,api.tenderplus.kz,.tenderplus.kz,eep.mitwork.kz}
       PARSER_POLL_INTERVAL_SECONDS: ${PARSER_POLL_INTERVAL_SECONDS:-300}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${BACKEND_INTERNAL_PORT:-8082}/health >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/health >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 15s
     depends_on:
       postgres:
         condition: service_healthy
+      rag-api:
+        condition: service_healthy
+    networks:
+      - app
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    stop_grace_period: 30s
+    logging: *default-logging
 
   rag-api:
     build:
       context: ./tender-rag
     restart: unless-stopped
-    network_mode: host
+    init: true
+    ports:
+      - "127.0.0.1:${RAG_PORT:-8083}:8083"
     environment:
-      DATABASE_URL: postgresql://${RAG_POSTGRES_USER:-rag}:${RAG_POSTGRES_PASSWORD:-rag}@127.0.0.1:${RAG_POSTGRES_PORT:-5434}/${RAG_POSTGRES_DB:-rag}
+      PORT: "8083"
+      DATABASE_URL: postgresql://${RAG_POSTGRES_USER:-rag}:${RAG_POSTGRES_PASSWORD:?RAG_POSTGRES_PASSWORD is required}@rag-db:5432/${RAG_POSTGRES_DB:-rag}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-small}
       FILES_DIR: /files
+      LOCAL_STORAGE_DIR: /files/generated
       AI_PROVIDER: ${AI_PROVIDER:-groq}
       LOT_ANALYZE_AI_PROVIDER: ${LOT_ANALYZE_AI_PROVIDER:-groq}
       SPEC_AI_PROVIDER: ${SPEC_AI_PROVIDER:-groq}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-ollama}
-      GROQ_BASE_URL: ${RAG_GROQ_BASE_URL:-http://127.0.0.1:11434/v1}
+      GROQ_BASE_URL: ${RAG_GROQ_BASE_URL:-http://llm:11434/v1}
       CHAT_MODEL: ${CHAT_MODEL:-qwen2.5:3b}
       LOT_ANALYZE_CHAT_MODEL: ${LOT_ANALYZE_CHAT_MODEL:-qwen2.5:3b}
       SPEC_CHAT_MODEL: ${SPEC_CHAT_MODEL:-qwen2.5:3b}
       COMPANY_PROFILE: ${COMPANY_PROFILE:-}
       COMPANY_PROFILE_FILE: ${COMPANY_PROFILE_FILE:-/files/company_profile.txt}
+      CORS_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://qolab.kz,https://www.qolab.kz}
+      RAG_INTERNAL_SERVICE_TOKEN: ${RAG_INTERNAL_SERVICE_TOKEN:?RAG_INTERNAL_SERVICE_TOKEN is required}
     volumes:
       - ./tender-rag/files:/files:ro
+      - rag_generated:/files/generated
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8083/health', timeout=5).read()\""]
       interval: 15s
       timeout: 5s
       retries: 20
+      start_period: 30s
     depends_on:
       rag-db:
         condition: service_healthy
       llm:
         condition: service_healthy
+    networks:
+      - app
+      - data
+      - ai
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    stop_grace_period: 45s
+    logging: *default-logging
 
   parser:
     build:
       context: ./parser
     restart: unless-stopped
-    network_mode: host
     init: true
     shm_size: "1gb"
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tender}:${POSTGRES_PASSWORD:-tender}@127.0.0.1:${POSTGRES_PORT:-5433}/${POSTGRES_DB:-tender}
-      RAG_API_BASE: http://127.0.0.1:${RAG_PORT:-8083}
-      DICTIONARIES_API_URL: http://127.0.0.1:${BACKEND_PORT:-8082}/api/v1/dictionaries?kind=keywords
-      STOP_WORDS_API_URL: http://127.0.0.1:${BACKEND_PORT:-8082}/api/v1/dictionaries?kind=stop_words
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tender}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-tender}
+      RAG_API_BASE: http://rag-api:8083
+      DICTIONARIES_API_URL: http://backend:8082/api/v1/dictionaries?kind=keywords
+      STOP_WORDS_API_URL: http://backend:8082/api/v1/dictionaries?kind=stop_words
+      BACKEND_INTERNAL_SERVICE_TOKEN: ${BACKEND_INTERNAL_SERVICE_TOKEN:?BACKEND_INTERNAL_SERVICE_TOKEN is required}
+      RAG_INTERNAL_SERVICE_TOKEN: ${RAG_INTERNAL_SERVICE_TOKEN:?RAG_INTERNAL_SERVICE_TOKEN is required}
       POLL_INTERVAL_SECONDS: ${PARSER_POLL_INTERVAL_SECONDS:-1800}
       MAX_WORKERS: ${PARSER_MAX_WORKERS:-1}
       HEADLESS: "true"
@@ -149,7 +230,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       GROQ_API_KEY: ${GROQ_API_KEY:-ollama}
-      GROQ_API_BASE: ${GROQ_API_BASE:-http://127.0.0.1:11434/v1}
+      GROQ_API_BASE: ${GROQ_API_BASE:-http://llm:11434/v1}
       GROQ_MODEL: ${GROQ_MODEL:-qwen2.5:3b}
       AI_REQUEST_DELAY_SECONDS: ${AI_REQUEST_DELAY_SECONDS:-1.5}
       AI_RATE_LIMIT_COOLDOWN_SECONDS: ${AI_RATE_LIMIT_COOLDOWN_SECONDS:-300}
@@ -172,11 +253,20 @@ services:
       REQUEST_TIMEOUT_SECONDS: ${PARSER_REQUEST_TIMEOUT_SECONDS:-90}
     volumes:
       - parser_downloads:/app/downloads
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    networks:
+      - app
+      - data
+      - ai
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    stop_grace_period: 45s
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -184,24 +274,51 @@ services:
         condition: service_healthy
       llm:
         condition: service_healthy
+      rag-api:
+        condition: service_healthy
 
   frontend:
     build:
       context: ./tenderflow-admin
       args:
-        VITE_BACK_API: ${PUBLIC_BACKEND_URL:-http://localhost:8082}
-        VITE_LOCAL_API: ${PUBLIC_BACKEND_URL:-http://localhost:8082}
-        VITE_RAG_API: ${PUBLIC_RAG_URL:-http://localhost:8083}
+        VITE_BACK_API: ${PUBLIC_BACKEND_URL:-https://qolab.kz}
+        VITE_LOCAL_API: ${PUBLIC_BACKEND_URL:-https://qolab.kz}
+        VITE_RAG_API: ${PUBLIC_RAG_URL:-https://qolab.kz/api/v1/rag}
         VITE_FETCH_DOCUMENT_PROXY_URL: /api/v1/fetch-document
     restart: unless-stopped
     ports:
-      - "${FRONTEND_PORT:-8080}:3000"
+      - "127.0.0.1:${FRONTEND_PORT:-18080}:3000"
     depends_on:
       backend:
         condition: service_healthy
+    networks:
+      - app
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    stop_grace_period: 30s
+    logging: *default-logging
 
 volumes:
   tender_postgres_data:
+    name: cloud-user_tender_postgres_data
   rag_postgres_data:
+    name: cloud-user_rag_postgres_data
   parser_downloads:
+    name: cloud-user_parser_downloads
   ollama_data:
+    name: cloud-user_ollama_data
+  rag_generated:
+    name: cloud-user_rag_generated
+
+networks:
+  app:
+  data:
+    internal: true
+  ai:
+    internal: true

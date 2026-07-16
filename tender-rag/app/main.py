@@ -21,6 +21,8 @@ from app.cloudy import answer_cloudy_question, extract_cloudy_documents
 from app.database import create_async_schema
 from app.document_extract import extract_text_from_bytes
 from app.embeddings import embed_chunks, embed_profile
+from app.health import build_health_response
+from app.internal_auth import InternalServiceAuthMiddleware
 from app.openai_analyze import analyze_lot_without_index, analyze_match_context
 from app.spec_summary import summarize_specification
 from app.store import (
@@ -55,6 +57,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Tender RAG", version="0.1.0", lifespan=lifespan)
+app.add_middleware(InternalServiceAuthMiddleware)
 app.include_router(crm_router)
 app.include_router(tailoring_router)
 app.include_router(knowledge_router)
@@ -175,17 +178,9 @@ class LotAnalyzeResponse(BaseModel):
     checks: str | None = None
 
 
-@app.get("/health")
-def health() -> dict[str, Any]:
-    db_ok, db_err = health_db()
-    out: dict[str, Any] = {
-        "ok": True,
-        "database": db_ok,
-        "ai": ai_configuration(),
-    }
-    if db_err is not None:
-        out["database_error"] = db_err
-    return out
+@app.get("/health", response_class=JSONResponse)
+def health() -> JSONResponse:
+    return build_health_response(health_db, ai_configuration)
 
 
 @app.post("/v1/lots/{lot_id}/index")

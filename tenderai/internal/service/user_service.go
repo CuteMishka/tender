@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"net/mail"
 	"strings"
 	"unicode"
 
@@ -17,6 +18,16 @@ type UserService struct {
 	repo repository.UserRepository
 }
 
+var ErrInvalidCredentials = errors.New("invalid credentials")
+var ErrAccountAlreadyExists = errors.New("account or pending request already exists")
+var ErrInvalidRegistration = errors.New("registration fields are invalid")
+var ErrWeakPassword = errors.New("password does not meet policy")
+
+var dummyPasswordHash = func() []byte {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("not-a-real-password-value"), bcrypt.DefaultCost)
+	return hash
+}()
+
 func NewUserService(repo repository.UserRepository) *UserService {
 	return &UserService{repo: repo}
 }
@@ -25,26 +36,31 @@ func (s *UserService) List(ctx context.Context) ([]domain.User, error) {
 	return s.repo.List(ctx)
 }
 
-func (s *UserService) Login(ctx context.Context, email string, password string) (*domain.User, error) {
+func CanonicalLoginEmail(email string) string {
 	email = strings.TrimSpace(strings.ToLower(email))
 	if email == "admin" {
-		email = "admin@tender.local"
+		return "admin@tender.local"
 	}
-	if email == "" || strings.TrimSpace(password) == "" {
-		return nil, errors.New("email and password are required")
+	return email
+}
+
+func (s *UserService) Login(ctx context.Context, email string, password string) (*domain.User, error) {
+	email = CanonicalLoginEmail(email)
+	if email == "" || len(email) > 254 || strings.TrimSpace(password) == "" || len([]byte(password)) > 72 {
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password))
+		return nil, ErrInvalidCredentials
 	}
 	user, err := s.repo.GetByEmail(ctx, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, errors.New("invalid credentials")
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password))
+		return nil, ErrInvalidCredentials
 	}
 	if err != nil {
 		return nil, err
 	}
-	if user.Status != "" && user.Status != "active" {
-		return nil, errors.New("user is not active")
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
-		return nil, errors.New("invalid credentials")
+	passwordErr := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
+	if passwordErr != nil || (user.Status != "" && user.Status != "active") {
+		return nil, ErrInvalidCredentials
 	}
 	return user, nil
 }
@@ -52,16 +68,17 @@ func (s *UserService) Login(ctx context.Context, email string, password string) 
 func (s *UserService) CreateRegistrationRequest(ctx context.Context, req *domain.RegistrationRequest) error {
 	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 	req.Name = strings.TrimSpace(req.Name)
-	if req.Email == "" || req.Name == "" || strings.TrimSpace(req.Password) == "" {
-		return errors.New("name, email and password are required")
+	req.Company = strings.TrimSpace(req.Company)
+	req.Position = strings.TrimSpace(req.Position)
+	req.Comment = strings.TrimSpace(req.Comment)
+	parsedEmail, emailErr := mail.ParseAddress(req.Email)
+	if req.Email == "" || len(req.Email) > 254 || emailErr != nil || parsedEmail.Address != req.Email ||
+		req.Name == "" || len([]rune(req.Name)) > 255 || len([]rune(req.Company)) > 255 ||
+		len([]rune(req.Position)) > 255 || len([]rune(req.Comment)) > 5000 || strings.TrimSpace(req.Password) == "" {
+		return ErrInvalidRegistration
 	}
 	if !isStrongPassword(req.Password) {
-		return errors.New("password must be at least 12 characters and include upper, lower, digit and symbol")
-	}
-	if _, err := s.repo.GetByEmail(ctx, req.Email); err == nil {
-		return errors.New("user already exists")
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return err
+		return ErrWeakPassword
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
@@ -70,12 +87,19 @@ func (s *UserService) CreateRegistrationRequest(ctx context.Context, req *domain
 	req.Password = string(hash)
 	req.Status = "pending"
 	req.Role = ""
-	return s.repo.CreateRegistrationRequest(ctx, req)
+	created, err := s.repo.CreateRegistrationRequestExclusive(ctx, req)
+	if err != nil {
+		return err
+	}
+	if !created {
+		return ErrAccountAlreadyExists
+	}
+	return nil
 }
 
 func isStrongPassword(password string) bool {
 	var hasUpper, hasLower, hasDigit, hasSymbol bool
-	if len([]rune(password)) < 12 {
+	if len([]rune(password)) < 12 || len([]byte(password)) > 72 {
 		return false
 	}
 	for _, r := range password {
@@ -97,76 +121,28 @@ func (s *UserService) ListRegistrationRequests(ctx context.Context, status strin
 	return s.repo.ListRegistrationRequests(ctx, strings.TrimSpace(status))
 }
 
-func (s *UserService) ApproveRegistrationRequest(ctx context.Context, id uint, role string) (*domain.User, error) {
+func (s *UserService) ApproveRegistrationRequest(ctx context.Context, actorID uint, id uint, role string) (*domain.User, error) {
 	role = NormalizeRole(role)
 	if role == "" {
 		return nil, errors.New("invalid role")
 	}
-	req, err := s.repo.GetRegistrationRequest(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if req.Status != "pending" {
-		return nil, errors.New("request is already processed")
-	}
-	user := &domain.User{
-		Email:        req.Email,
-		PasswordHash: req.Password,
-		Name:         req.Name,
-		Role:         role,
-		Company:      req.Company,
-		Position:     req.Position,
-		Status:       "active",
-	}
-	if err := s.repo.Create(ctx, user); err != nil {
-		return nil, err
-	}
-	req.Status = "approved"
-	req.Role = role
-	if err := s.repo.UpdateRegistrationRequest(ctx, req); err != nil {
-		return nil, err
-	}
-	return user, nil
+	return s.repo.ApproveRegistrationRequestAtomic(ctx, actorID, id, role)
 }
 
-func (s *UserService) RejectRegistrationRequest(ctx context.Context, id uint) error {
-	req, err := s.repo.GetRegistrationRequest(ctx, id)
-	if err != nil {
-		return err
-	}
-	if req.Status != "pending" {
-		return errors.New("request is already processed")
-	}
-	req.Status = "rejected"
-	return s.repo.UpdateRegistrationRequest(ctx, req)
+func (s *UserService) RejectRegistrationRequest(ctx context.Context, actorID uint, id uint) error {
+	return s.repo.RejectRegistrationRequestAtomic(ctx, actorID, id)
 }
 
-func (s *UserService) Delete(ctx context.Context, id uint) error {
-	return s.repo.Delete(ctx, id)
+func (s *UserService) Delete(ctx context.Context, actorID uint, id uint) error {
+	return s.repo.DeleteUserAtomic(ctx, actorID, id)
 }
 
-func (s *UserService) UpdateRole(ctx context.Context, id uint, role string) (*domain.User, error) {
+func (s *UserService) UpdateRole(ctx context.Context, actorID uint, id uint, role string) (*domain.User, error) {
 	role = NormalizeRole(role)
 	if role == "" {
 		return nil, errors.New("invalid role")
 	}
-	users, err := s.repo.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for i := range users {
-		if users[i].ID == id {
-			users[i].Role = role
-			if users[i].Status == "" {
-				users[i].Status = "active"
-			}
-			if err := s.repo.Update(ctx, &users[i]); err != nil {
-				return nil, err
-			}
-			return &users[i], nil
-		}
-	}
-	return nil, gorm.ErrRecordNotFound
+	return s.repo.UpdateUserRoleAtomic(ctx, actorID, id, role)
 }
 
 func NormalizeRole(role string) string {

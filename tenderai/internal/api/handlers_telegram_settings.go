@@ -77,6 +77,9 @@ func (h *Handler) GetUserTelegramBinding(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	if !authorizeUserResource(w, r, userID) {
+		return
+	}
 	var binding domain.UserTelegramBinding
 	_ = h.DB.Where("user_id = ?", userID).First(&binding).Error
 	w.Header().Set("Content-Type", "application/json")
@@ -90,6 +93,9 @@ func (h *Handler) UpdateUserTelegramBinding(w http.ResponseWriter, r *http.Reque
 	}
 	userID, ok := parseUintParam(w, r, "id")
 	if !ok {
+		return
+	}
+	if !authorizeUserResource(w, r, userID) {
 		return
 	}
 	var req UserTelegramBindingRequest
@@ -137,6 +143,9 @@ func (h *Handler) TestUserTelegramBinding(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	if !authorizeUserResource(w, r, userID) {
+		return
+	}
 	botToken := h.effectiveTelegramBotToken()
 	if botToken == "" {
 		writeJSONError(w, http.StatusBadRequest, "Telegram bot token не настроен")
@@ -154,6 +163,15 @@ func (h *Handler) TestUserTelegramBinding(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+func authorizeUserResource(w http.ResponseWriter, r *http.Request, userID uint) bool {
+	principal := PrincipalFromContext(r.Context())
+	if principal == nil || principal.User == nil || (principal.User.ID != userID && principal.Role() != "admin") {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
 }
 
 func (h *Handler) UpdateTelegramSettings(w http.ResponseWriter, r *http.Request) {

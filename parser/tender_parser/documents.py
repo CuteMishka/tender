@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -7,7 +8,9 @@ from tender_parser.fingerprints import bytes_sha256
 from tender_parser.schemas import TenderDocument, TenderLot
 from tender_parser.text_extract import extract_text_from_bytes
 
-SPEC_MARKERS = ("тех", "специф", "тз", "техничес", "technical", "specification")
+SPEC_MARKERS = ("спецификац", "технич", "technical", "specification")
+SPEC_COMPACT_MARKERS = ("техспек", "техзадан", "techspec")
+SPEC_ABBREVIATION_RE = re.compile(r"(?<![^\W_])т[\s._-]*[сз](?![^\W_])", re.IGNORECASE)
 PROTOCOL_MARKERS = ("протокол", "итог", "итоги", "protocol", "result")
 SUPPORTED_EXTENSIONS = (".pdf", ".docx", ".doc", ".txt")
 RAG_SPEC_EXTENSIONS = (".pdf", ".docx")
@@ -26,7 +29,11 @@ class DocumentService:
         self.download_dir.mkdir(parents=True, exist_ok=True)
 
     def pick_spec_documents(self, lot: TenderLot) -> list[TenderDocument]:
-        selected = [doc for doc in lot.documents if self.is_rag_spec_supported(doc) and self._has_marker(doc.name, SPEC_MARKERS)]
+        selected = [
+            doc
+            for doc in lot.documents
+            if self.is_rag_spec_supported(doc) and self._has_spec_marker(f"{doc.name} {doc.url}")
+        ]
         if selected:
             return selected
         supported = [doc for doc in lot.documents if self.is_rag_spec_supported(doc)]
@@ -73,11 +80,15 @@ class DocumentService:
 
     def is_rag_spec_supported(self, doc: TenderDocument) -> bool:
         name = (doc.name or doc.url).lower()
-        return any(name.endswith(ext) for ext in RAG_SPEC_EXTENSIONS) or self._has_marker(name, SPEC_MARKERS)
+        return any(name.endswith(ext) for ext in RAG_SPEC_EXTENSIONS) or self._has_spec_marker(f"{doc.name} {doc.url}")
 
     def _is_supported(self, doc: TenderDocument) -> bool:
         name = (doc.name or doc.url).lower()
-        return any(name.endswith(ext) for ext in SUPPORTED_EXTENSIONS) or any(marker in name for marker in (*SPEC_MARKERS, *PROTOCOL_MARKERS))
+        return (
+            any(name.endswith(ext) for ext in SUPPORTED_EXTENSIONS)
+            or self._has_spec_marker(f"{doc.name} {doc.url}")
+            or self._has_marker(name, PROTOCOL_MARKERS)
+        )
 
     def _looks_like_supported_file(self, url: str, name: str, content_type: str, data: bytes) -> bool:
         lowered = f"{url} {name}".lower()
@@ -94,6 +105,15 @@ class DocumentService:
     def _has_marker(self, value: str, markers: tuple[str, ...]) -> bool:
         lowered = value.lower()
         return any(marker in lowered for marker in markers)
+
+    def _has_spec_marker(self, value: str) -> bool:
+        lowered = value.lower()
+        if any(marker in lowered for marker in SPEC_MARKERS):
+            return True
+        compact = re.sub(r"[\s._-]+", "", lowered)
+        if any(marker in compact for marker in SPEC_COMPACT_MARKERS):
+            return True
+        return SPEC_ABBREVIATION_RE.search(lowered) is not None
 
     def _safe_filename(self, value: str) -> str:
         return "".join(ch if ch.isalnum() or ch in ".-_() " else "_" for ch in value).strip()[:160] or "document"

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { Check, Search, Trash2, X } from "lucide-react";
 import { canManageUsers, getCurrentUser, roleLabels, type UserRole } from "@/lib/auth";
+import { apiFetch } from "@/lib/api-client";
 import { getLocalApiBase } from "@/lib/tenders-api";
 
 export const Route = createFileRoute("/_admin/users")({
@@ -48,8 +49,8 @@ function Users() {
     setLoadError(null);
     try {
       const [usersRes, requestsRes] = await Promise.all([
-        fetch(`${getLocalApiBase()}/api/v1/users`),
-        fetch(`${getLocalApiBase()}/api/v1/registration-requests?status=pending`),
+        apiFetch(`${getLocalApiBase()}/api/v1/users`),
+        apiFetch(`${getLocalApiBase()}/api/v1/registration-requests?status=pending`),
       ]);
       if (!usersRes.ok) throw new Error(`${usersRes.status}: ${(await usersRes.text()).slice(0, 160)}`);
       if (!requestsRes.ok) throw new Error(`${requestsRes.status}: ${(await requestsRes.text()).slice(0, 160)}`);
@@ -81,7 +82,7 @@ function Users() {
     const role = selectedRoles[request.id] || "tender_specialist";
     setActionLoading(`approve-${request.id}`);
     try {
-      const res = await fetch(`${getLocalApiBase()}/api/v1/registration-requests/${request.id}/approve`, {
+      const res = await apiFetch(`${getLocalApiBase()}/api/v1/registration-requests/${request.id}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role }),
@@ -98,7 +99,7 @@ function Users() {
   const rejectRequest = async (request: RegistrationRequest) => {
     setActionLoading(`reject-${request.id}`);
     try {
-      const res = await fetch(`${getLocalApiBase()}/api/v1/registration-requests/${request.id}/reject`, { method: "POST" });
+      const res = await apiFetch(`${getLocalApiBase()}/api/v1/registration-requests/${request.id}/reject`, { method: "POST" });
       if (!res.ok) throw new Error(await res.text());
       await loadData();
     } catch (e) {
@@ -111,7 +112,7 @@ function Users() {
   const updateUserRole = async (user: BackendUser, role: UserRole) => {
     setActionLoading(`role-${user.id}`);
     try {
-      const res = await fetch(`${getLocalApiBase()}/api/v1/users/${user.id}/role`, {
+      const res = await apiFetch(`${getLocalApiBase()}/api/v1/users/${user.id}/role`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role }),
@@ -132,7 +133,7 @@ function Users() {
     }
     setActionLoading(`delete-${user.id}`);
     try {
-      const res = await fetch(`${getLocalApiBase()}/api/v1/users/${user.id}`, { method: "DELETE" });
+      const res = await apiFetch(`${getLocalApiBase()}/api/v1/users/${user.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(await res.text());
       await loadData();
     } catch (e) {

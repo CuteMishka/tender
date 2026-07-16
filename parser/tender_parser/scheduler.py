@@ -41,6 +41,7 @@ class ParserScheduler:
             settings.keywords_file_path,
             settings.stop_words_api_url,
             settings.default_stop_words,
+            settings.backend_internal_service_token,
         )
         self.documents = DocumentService(settings.download_dir, settings.request_timeout_seconds)
         self.rag = RagClient(
@@ -48,6 +49,7 @@ class ParserScheduler:
             settings.request_timeout_seconds,
             settings.rag_extract_spec_points,
             settings.rag_include_extracted_text,
+            settings.rag_internal_service_token,
         )
         self.ai_suitability = GroqSuitabilityClient(
             settings.gemini_api_key if settings.ai_provider.strip().lower() == "gemini" else settings.groq_api_key,

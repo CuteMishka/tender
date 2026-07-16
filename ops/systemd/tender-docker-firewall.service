@@ -1,0 +1,13 @@
+[Unit]
+Description=Block accidental public Tender container ports
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/tender-docker-firewall
+ExecStop=/usr/local/sbin/tender-docker-firewall remove
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

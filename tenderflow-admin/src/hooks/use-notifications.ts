@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { apiFetch } from "@/lib/api-client";
 import { getLocalApiBase } from "@/lib/tenders-api";
 
 export type NotificationType = "success" | "warning" | "error" | "info";
@@ -142,7 +143,7 @@ async function syncServerNotifications(silent: boolean): Promise<void> {
   const lastId = readLastServerId();
   const params = new URLSearchParams({ limit: "50" });
   if (lastId > 0) params.set("after", String(lastId));
-  const res = await fetch(`${getLocalApiBase()}/api/v1/notifications?${params.toString()}`);
+  const res = await apiFetch(`${getLocalApiBase()}/api/v1/notifications?${params.toString()}`);
   if (!res.ok) return;
   const body = (await res.json().catch(() => null)) as ServerNotificationsResponse | null;
   const items = Array.isArray(body?.items) ? body.items : [];

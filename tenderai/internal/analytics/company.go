@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"regexp"
 	"sort"
@@ -36,6 +37,8 @@ type CompanyTenderIntelligence struct {
 	Participated      []CompanyOffer    `json:"participated"`
 	Warnings          []string          `json:"warnings,omitempty"`
 }
+
+type CompanyIntelligenceLoader func(context.Context, string, int) (CompanyTenderIntelligence, error)
 
 type CompanyMatch struct {
 	Name  string   `json:"name"`
@@ -113,6 +116,10 @@ type CompanyRecentEvent struct {
 type CompanyTender struct {
 	ID              int        `json:"id"`
 	LotNumber       string     `json:"lot_number"`
+	LotSource       string     `json:"lot_source"`
+	BuyID           int        `json:"buy_id"`
+	BuySourceID     string     `json:"buy_source_id"`
+	BuyNumber       string     `json:"buy_number"`
 	Title           string     `json:"title"`
 	Amount          float64    `json:"amount"`
 	AmountAvailable bool       `json:"amount_available"`
@@ -122,6 +129,10 @@ type CompanyTender struct {
 	Organizer       string     `json:"organizer"`
 	Platform        string     `json:"platform"`
 	PurchaseType    string     `json:"purchase_type"`
+	Category        string     `json:"category"`
+	SubjectType     string     `json:"subject_type"`
+	EnstruCode      string     `json:"enstru_code"`
+	EnstruTitle     string     `json:"enstru_title"`
 	Region          string     `json:"region"`
 	BeginDate       *time.Time `json:"begin_date"`
 	EndDate         *time.Time `json:"end_date"`
@@ -158,26 +169,50 @@ type CompanyOffer struct {
 }
 
 var (
-	binLikeRE          = regexp.MustCompile(`\d{12}`)
-	emptyParenSuffixRE = regexp.MustCompile(`\s*\(\s*\)\s*$`)
+	binLikeRE                  = regexp.MustCompile(`\d{12}`)
+	emptyParenSuffixRE         = regexp.MustCompile(`\s*\(\s*\)\s*$`)
+	ErrTenderPlusNotConfigured = errors.New("TenderPlus не настроен")
+	ErrCompanyQueryRequired    = errors.New("Введите название компании или БИН")
 )
 
 func (h *Handler) GetCompanyTenderIntelligence(w http.ResponseWriter, r *http.Request) {
-	if h.TP == nil || !h.TP.Configured() {
-		writeError(w, http.StatusServiceUnavailable, "TenderPlus не настроен")
-		return
-	}
-
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	if len([]rune(query)) < 2 {
-		writeError(w, http.StatusBadRequest, "Введите название компании или БИН")
-		return
-	}
 	limit := companyDisplayLimitDefault
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, _ := strconv.Atoi(v); n > 0 && n <= companyDisplayLimitMax {
 			limit = n
 		}
+	}
+	out, err := h.loadCompanyTenderIntelligence(r.Context(), query, limit)
+	if err != nil {
+		writeCompanyIntelligenceError(w, err)
+		return
+	}
+	writeJSON(w, out)
+}
+
+func (h *Handler) loadCompanyTenderIntelligence(ctx context.Context, query string, limit int) (CompanyTenderIntelligence, error) {
+	if h.CompanyLoader != nil {
+		return h.CompanyLoader(ctx, query, limit)
+	}
+	return LoadCompanyTenderIntelligence(ctx, h.TP, query, limit)
+}
+
+// LoadCompanyTenderIntelligence is the reusable live TenderPlus loader used by
+// both the existing company-intelligence endpoint and analytical reports.
+func LoadCompanyTenderIntelligence(ctx context.Context, client *tenderplus.Client, query string, limit int) (CompanyTenderIntelligence, error) {
+	if client == nil || !client.Configured() {
+		return CompanyTenderIntelligence{}, ErrTenderPlusNotConfigured
+	}
+	query = strings.TrimSpace(query)
+	if len([]rune(query)) < 2 {
+		return CompanyTenderIntelligence{}, ErrCompanyQueryRequired
+	}
+	if limit <= 0 {
+		limit = companyDisplayLimitDefault
+	}
+	if limit > companyDisplayLimitMax {
+		limit = companyDisplayLimitMax
 	}
 
 	out := CompanyTenderIntelligence{
@@ -225,7 +260,7 @@ func (h *Handler) GetCompanyTenderIntelligence(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	lots, publishedTotal, publishedTotalOK, err := listAllCompanyLotsByKeywords(r.Context(), h.TP, []string{query})
+	lots, publishedTotal, publishedTotalOK, err := listAllCompanyLotsByKeywords(ctx, client, []string{query})
 	if err != nil {
 		warnings = append(warnings, "Лоты TenderPlus временно недоступны: "+err.Error())
 	} else {
@@ -234,7 +269,7 @@ func (h *Handler) GetCompanyTenderIntelligence(w http.ResponseWriter, r *http.Re
 		appendLots(lots, query)
 	}
 
-	keywordContracts, _, _, err := listAllCompanyContractsByKeywords(r.Context(), h.TP, []string{query})
+	keywordContracts, _, _, err := listAllCompanyContractsByKeywords(ctx, client, []string{query})
 	if err != nil {
 		warnings = append(warnings, "Договоры TenderPlus по названию временно недоступны: "+err.Error())
 	} else {
@@ -267,7 +302,7 @@ func (h *Handler) GetCompanyTenderIntelligence(w http.ResponseWriter, r *http.Re
 	}
 
 	for _, bin := range binHints.first(4) {
-		binLots, binPublishedTotal, binPublishedTotalOK, err := listAllCompanyLotsByKeywords(r.Context(), h.TP, []string{bin})
+		binLots, binPublishedTotal, binPublishedTotalOK, err := listAllCompanyLotsByKeywords(ctx, client, []string{bin})
 		if err != nil {
 			warnings = append(warnings, "Лоты заказчика "+bin+" недоступны: "+err.Error())
 		} else {
@@ -277,7 +312,7 @@ func (h *Handler) GetCompanyTenderIntelligence(w http.ResponseWriter, r *http.Re
 			appendLots(binLots, bin)
 		}
 
-		supplierContracts, supplierTotal, supplierTotalOK, err := listAllCompanySupplierContracts(r.Context(), h.TP, bin)
+		supplierContracts, supplierTotal, supplierTotalOK, err := listAllCompanySupplierContracts(ctx, client, bin)
 		if err != nil {
 			warnings = append(warnings, "Договоры поставщика "+bin+" недоступны: "+err.Error())
 		} else if supplierTotalOK {
@@ -292,7 +327,7 @@ func (h *Handler) GetCompanyTenderIntelligence(w http.ResponseWriter, r *http.Re
 			}
 		}
 
-		customerContracts, customerTotal, customerTotalOK, err := listAllCompanyCustomerContracts(r.Context(), h.TP, bin)
+		customerContracts, customerTotal, customerTotalOK, err := listAllCompanyCustomerContracts(ctx, client, bin)
 		if err != nil {
 			warnings = append(warnings, "Договоры заказчика "+bin+" недоступны: "+err.Error())
 		} else if customerTotalOK {
@@ -307,7 +342,7 @@ func (h *Handler) GetCompanyTenderIntelligence(w http.ResponseWriter, r *http.Re
 			}
 		}
 
-		offers, offerTotal, offerTotalOK, err := listCompanyOfferPreview(r.Context(), h.TP, bin)
+		offers, offerTotal, offerTotalOK, err := listCompanyOfferPreview(ctx, client, bin)
 		if err != nil {
 			warnings = append(warnings, "Заявки участника "+bin+" недоступны: "+err.Error())
 		} else if offerTotalOK {
@@ -335,7 +370,18 @@ func (h *Handler) GetCompanyTenderIntelligence(w http.ResponseWriter, r *http.Re
 	out.Aggregates = buildCompanyAggregates(out)
 	trimCompanyResponse(&out, limit)
 	out.Warnings = warnings
-	writeJSON(w, out)
+	return out, nil
+}
+
+func writeCompanyIntelligenceError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrTenderPlusNotConfigured):
+		writeError(w, http.StatusServiceUnavailable, ErrTenderPlusNotConfigured.Error())
+	case errors.Is(err, ErrCompanyQueryRequired):
+		writeError(w, http.StatusBadRequest, ErrCompanyQueryRequired.Error())
+	default:
+		writeError(w, http.StatusBadGateway, err.Error())
+	}
 }
 
 func listAllCompanyLotsByKeywords(ctx context.Context, client *tenderplus.Client, keywords []string) ([]tenderplus.Lot, int, bool, error) {
@@ -755,13 +801,28 @@ func companyTenderFromLot(lot tenderplus.Lot) CompanyTender {
 	dto := CompanyTender{
 		ID:              lot.ID,
 		LotNumber:       cleanLotNumber(derefStr(lot.Lot)),
+		LotSource:       strings.TrimSpace(derefStr(lot.LotSourceID)),
 		Title:           derefStr(lot.Title),
 		Amount:          tenderplus.LotAmount(lot),
 		AmountAvailable: tenderplus.LotAmountAvailable(lot),
 		Link:            cleanTenderPlusLink(lot.ID, derefStr(lot.PartnerLink)),
+		PurchaseType:    tenderplus.LotPurchaseType(lot),
+	}
+	if lot.BuyID != nil {
+		dto.BuyID = *lot.BuyID
 	}
 	if lot.Region != nil {
 		dto.Region = derefStr(lot.Region.Name)
+	}
+	if lot.Category != nil {
+		dto.Category = derefStr(lot.Category.Name)
+	}
+	if lot.SubjectType != nil {
+		dto.SubjectType = derefStr(lot.SubjectType.Name)
+	}
+	if lot.Enstru != nil {
+		dto.EnstruCode = derefStr(lot.Enstru.Code)
+		dto.EnstruTitle = derefStr(lot.Enstru.Title)
 	}
 	if lot.LotBuy != nil {
 		lb := lot.LotBuy
@@ -774,11 +835,12 @@ func companyTenderFromLot(lot tenderplus.Lot) CompanyTender {
 		dto.PublishDate = parseTP(derefStr(lb.PubDate))
 		dto.CustomerName = tenderplus.LotOrganizationName(lot)
 		dto.CustomerBIN = tenderplus.LotOrganizationBIN(lot)
+		dto.BuySourceID = strings.TrimSpace(derefStr(lb.SourceID))
+		dto.BuyNumber = strings.TrimSpace(derefStr(lb.Buy))
 		if lb.Partner != nil {
 			dto.Platform = derefStr(lb.Partner.Name)
 		}
 		dto.Status = tenderplus.LotStatusName(lot)
-		dto.PurchaseType = tenderplus.LotPurchaseType(lot)
 	}
 	return dto
 }

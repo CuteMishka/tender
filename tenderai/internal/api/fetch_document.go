@@ -151,6 +151,10 @@ func (h *Handler) FetchDocument(w http.ResponseWriter, r *http.Request) {
 		writeJSONDetail(w, http.StatusBadRequest, "response too large")
 		return
 	}
+	if len(data) == 0 {
+		writeJSONDetail(w, http.StatusBadGateway, "upstream returned empty document")
+		return
+	}
 
 	ctype := pickContentType(resp.Header.Get("Content-Type"), u.Path)
 	if ctype != "" {
@@ -213,7 +217,7 @@ func logFetchDocumentReject(kind string, u *url.URL, cause error) {
 }
 
 func pickContentType(upstream, requestPath string) string {
-	upstream = strings.TrimSpace(strings.Split(upstream, ";")[0])
+	upstream = strings.TrimSpace(strings.Trim(strings.TrimSpace(strings.Split(upstream, ";")[0]), "\"'"))
 	if upstream != "" && !strings.EqualFold(upstream, "application/octet-stream") &&
 		!strings.EqualFold(upstream, "binary/octet-stream") {
 		return upstream

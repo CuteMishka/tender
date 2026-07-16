@@ -55,8 +55,10 @@ func TestPostCloudyChatToRAG(t *testing.T) {
 	var gotWarnings string
 	var gotFileName string
 	var gotFileBody string
+	var gotInternalToken string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotInternalToken = r.Header.Get(InternalTokenHeader)
 		if r.Method != http.MethodPost {
 			t.Fatalf("method = %s", r.Method)
 		}
@@ -111,6 +113,7 @@ func TestPostCloudyChatToRAG(t *testing.T) {
 		map[string]interface{}{"overview": "тест"},
 		[]string{"document-2: не удалось скачать"},
 		[]cloudyDocumentPayload{{Name: "spec.txt", Data: []byte("срок 10 дней")}},
+		"internal-service-secret",
 	)
 	if err != nil {
 		t.Fatalf("postCloudyChatToRAG error: %v", err)
@@ -129,5 +132,8 @@ func TestPostCloudyChatToRAG(t *testing.T) {
 	}
 	if gotFileName != "spec.txt" || gotFileBody != "срок 10 дней" {
 		t.Fatalf("file = %q %q", gotFileName, gotFileBody)
+	}
+	if gotInternalToken != "internal-service-secret" {
+		t.Fatalf("internal token header = %q", gotInternalToken)
 	}
 }

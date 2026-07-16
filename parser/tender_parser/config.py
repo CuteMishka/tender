@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Any
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,6 +9,8 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://tender:tender@localhost:5433/tender"
     rag_api_base: str = "http://localhost:8083"
+    backend_internal_service_token: str | None = Field(default=None, validation_alias="BACKEND_INTERNAL_SERVICE_TOKEN")
+    rag_internal_service_token: str | None = Field(default=None, validation_alias="RAG_INTERNAL_SERVICE_TOKEN")
     poll_interval_seconds: int = Field(default=1800, ge=30)
     max_workers: int = Field(default=4, ge=1, le=32)
     headless: bool = True
@@ -124,6 +126,25 @@ class Settings(BaseSettings):
         if str(value).strip() == "":
             return None
         return value
+
+    @field_validator("backend_internal_service_token", "rag_internal_service_token", mode="before")
+    @classmethod
+    def validate_internal_service_token(cls, value: Any) -> str | None:
+        if value is None or str(value).strip() == "":
+            return None
+        token = str(value).strip()
+        if len(token) < 32:
+            raise ValueError("internal service tokens must contain at least 32 characters")
+        return token
+
+    @model_validator(mode="after")
+    def require_distinct_internal_service_tokens(self) -> "Settings":
+        if (
+            self.backend_internal_service_token
+            and self.backend_internal_service_token == self.rag_internal_service_token
+        ):
+            raise ValueError("BACKEND_INTERNAL_SERVICE_TOKEN and RAG_INTERNAL_SERVICE_TOKEN must be distinct")
+        return self
 
     @property
     def platforms(self) -> list[str]:

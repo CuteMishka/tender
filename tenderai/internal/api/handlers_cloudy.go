@@ -185,7 +185,7 @@ func (h *Handler) CloudyChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	specSummary, _, _ := getRAGSpecSummary(r.Context(), ragBase, ragLotID)
+	specSummary, _, _ := getRAGSpecSummary(r.Context(), ragBase, ragLotID, h.RAGInternalServiceToken)
 	ragResponse, err := postCloudyChatToRAG(
 		r.Context(),
 		ragBase,
@@ -196,6 +196,7 @@ func (h *Handler) CloudyChat(w http.ResponseWriter, r *http.Request) {
 		specSummary,
 		fetchWarnings,
 		payloadDocs,
+		h.RAGInternalServiceToken,
 	)
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, err.Error())
@@ -347,6 +348,7 @@ func postCloudyChatToRAG(
 	specSummary map[string]interface{},
 	warnings []string,
 	docs []cloudyDocumentPayload,
+	internalToken string,
 ) (ragCloudyChatResponse, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -387,6 +389,7 @@ func postCloudyChatToRAG(
 		return ragCloudyChatResponse{}, err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	setRAGInternalToken(req, internalToken)
 
 	resp, err := (&http.Client{Timeout: 180 * time.Second}).Do(req)
 	if err != nil {

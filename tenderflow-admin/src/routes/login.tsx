@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
-import { AlertCircle, Building2, Gavel, Lock, MessageSquare, Send, User } from "lucide-react";
-import { login, submitRegistrationRequest } from "@/lib/auth";
+import { AlertCircle, Building2, Gavel, Lock, MessageSquare, Send, ShieldCheck, User } from "lucide-react";
+import { login, safeNextPath, submitRegistrationRequest } from "@/lib/auth";
 
 export const Route = createFileRoute("/login")({
   head: () => ({
@@ -23,6 +23,8 @@ function LoginPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
+  const sessionExpired = typeof window !== "undefined"
+    && new URLSearchParams(window.location.search).get("reason") === "session-expired";
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -31,7 +33,8 @@ function LoginPage() {
     setLoading(true);
     try {
       await login(username.trim(), password);
-      window.location.href = "/dashboard";
+      const requested = new URLSearchParams(window.location.search).get("next");
+      window.location.href = safeNextPath(requested, window.location.origin);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Неверный логин или пароль");
       setLoading(false);
@@ -106,6 +109,13 @@ function LoginPage() {
             {mode === "login" ? "Войдите, чтобы продолжить работу" : "После одобрения директор назначит вашу роль"}
           </p>
 
+          {mode === "login" && sessionExpired && !error && (
+            <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              Сессия завершена. Войдите снова, чтобы продолжить.
+            </div>
+          )}
+
           {mode === "login" ? (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -114,6 +124,7 @@ function LoginPage() {
                 <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <input
                   type="email"
+                  autoComplete="username"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="name@company.kz"
@@ -129,6 +140,7 @@ function LoginPage() {
                 <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <input
                   type="password"
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••"
@@ -177,15 +189,16 @@ function LoginPage() {
               <label className="mb-1.5 block text-sm font-medium text-foreground">Email</label>
               <div className="relative">
                 <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <input type="email" value={requestEmail} onChange={(e) => setRequestEmail(e.target.value)} required className="w-full rounded-lg border border-input bg-background py-2.5 pl-10 pr-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20" />
+                <input type="email" autoComplete="email" value={requestEmail} onChange={(e) => setRequestEmail(e.target.value)} required className="w-full rounded-lg border border-input bg-background py-2.5 pl-10 pr-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20" />
               </div>
             </div>
             <div>
               <label className="mb-1.5 block text-sm font-medium text-foreground">Пароль</label>
               <div className="relative">
                 <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <input type="password" value={requestPassword} onChange={(e) => setRequestPassword(e.target.value)} required className="w-full rounded-lg border border-input bg-background py-2.5 pl-10 pr-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20" />
+                <input type="password" autoComplete="new-password" minLength={12} value={requestPassword} onChange={(e) => setRequestPassword(e.target.value)} required className="w-full rounded-lg border border-input bg-background py-2.5 pl-10 pr-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20" />
               </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">От 12 символов: заглавная и строчная буквы, цифра и спецсимвол.</p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
@@ -225,6 +238,12 @@ function LoginPage() {
           {success && (
             <div className="mt-4 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
               {success}
+            </div>
+          )}
+          {mode === "login" && (
+            <div className="mt-5 flex items-center justify-center gap-2 border-t border-border pt-4 text-xs text-muted-foreground">
+              <ShieldCheck className="h-4 w-4 text-primary" />
+              Защищённая серверная сессия
             </div>
           )}
         </div>

@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Check, Edit2, Plus, Save, Trash2, X, Download, Search } from "lucide-react";
 import { PageHeader } from "@/components/admin/PageHeader";
+import { apiFetch } from "@/lib/api-client";
 import { getLocalApiBase } from "@/lib/tenders-api";
 
 export const Route = createFileRoute("/_admin/dictionaries")({
@@ -84,14 +85,14 @@ function normalizeData(items: DictItem[]): Record<DictKind, DictItem[]> {
 }
 
 async function fetchDictionaries(): Promise<Record<DictKind, DictItem[]>> {
-  const res = await fetch(`${getLocalApiBase()}/api/v1/dictionaries`);
+  const res = await apiFetch(`${getLocalApiBase()}/api/v1/dictionaries`);
   if (!res.ok) throw new Error(`Dictionaries API ${res.status}`);
   const payload = await res.json() as { items?: DictItem[]; data?: DictItem[] };
   return normalizeData(Array.isArray(payload.items) ? payload.items : Array.isArray(payload.data) ? payload.data : []);
 }
 
 async function createDictionaryItem(kind: DictKind, value: string, minAmount?: number | null): Promise<DictItem> {
-  const res = await fetch(`${getLocalApiBase()}/api/v1/dictionaries`, {
+  const res = await apiFetch(`${getLocalApiBase()}/api/v1/dictionaries`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ kind, value, active: true, minAmount: kind === "keywords" ? minAmount || 0 : 0 }),
@@ -101,7 +102,7 @@ async function createDictionaryItem(kind: DictKind, value: string, minAmount?: n
 }
 
 async function updateDictionaryItem(item: DictItem): Promise<DictItem> {
-  const res = await fetch(`${getLocalApiBase()}/api/v1/dictionaries/${encodeURIComponent(item.id)}`, {
+  const res = await apiFetch(`${getLocalApiBase()}/api/v1/dictionaries/${encodeURIComponent(item.id)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ kind: item.kind, value: item.value, active: item.active, minAmount: item.kind === "keywords" ? item.minAmount || 0 : 0, lastLot: item.lastLot || "" }),
@@ -111,7 +112,7 @@ async function updateDictionaryItem(item: DictItem): Promise<DictItem> {
 }
 
 async function deleteDictionaryItem(id: string): Promise<void> {
-  const res = await fetch(`${getLocalApiBase()}/api/v1/dictionaries/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const res = await apiFetch(`${getLocalApiBase()}/api/v1/dictionaries/${encodeURIComponent(id)}`, { method: "DELETE" });
   if (!res.ok && res.status !== 404) throw new Error((await res.text()).slice(0, 200));
 }
 

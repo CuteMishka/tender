@@ -38,6 +38,7 @@ import {
   type CompanyTenderIntelligence,
 } from "@/lib/analytics-api";
 import { getLocalApiBase } from "@/lib/tenders-api";
+import { apiFetch } from "@/lib/api-client";
 import { exportStyledXlsx } from "@/lib/xlsx-export";
 
 export const Route = createFileRoute("/_admin/companies")({
@@ -733,7 +734,7 @@ function saveMonitoredCompanies(items: string[]): void {
 }
 
 async function fetchProfileKeywords(): Promise<string[]> {
-  const res = await fetch(`${getLocalApiBase()}/api/v1/dictionaries`);
+  const res = await apiFetch(`${getLocalApiBase()}/api/v1/dictionaries`);
   if (!res.ok) throw new Error(`Dictionaries API ${res.status}`);
   const payload = await res.json() as { items?: DictItem[]; data?: DictItem[] };
   const items = Array.isArray(payload.items) ? payload.items : Array.isArray(payload.data) ? payload.data : [];

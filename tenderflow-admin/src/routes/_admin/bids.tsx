@@ -18,6 +18,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { getCurrentUser, type UserRole } from "@/lib/auth";
+import { apiFetch } from "@/lib/api-client";
 import { getLocalApiBase } from "@/lib/tenders-api";
 
 export const Route = createFileRoute("/_admin/bids")({
@@ -163,8 +164,8 @@ function Bids() {
   useEffect(() => {
     const base = getLocalApiBase();
     Promise.all([
-      fetch(`${base}/api/v1/lots/saved`).then((res) => res.json()).catch(() => []),
-      fetch(`${base}/api/v1/users`).then((res) => res.json()).catch(() => []),
+      apiFetch(`${base}/api/v1/lots/saved`).then((res) => res.json()).catch(() => []),
+      apiFetch(`${base}/api/v1/users`).then((res) => res.json()).catch(() => []),
     ])
       .then(([lots, users]) => {
         if (Array.isArray(lots)) setBids(lots);
@@ -179,7 +180,7 @@ function Bids() {
   const handleDelete = async (id: number) => {
     if (!confirm("Вы уверены, что хотите удалить этот тендер из заявок?")) return;
     try {
-      const res = await fetch(`${getLocalApiBase()}/api/v1/lots/saved/${id}`, { method: "DELETE" });
+      const res = await apiFetch(`${getLocalApiBase()}/api/v1/lots/saved/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Ошибка при удалении");
       setBids((prev) => prev.filter((b) => b.id !== id));
     } catch (err) {
@@ -191,7 +192,7 @@ function Bids() {
   const updateStatus = async (lot: SavedLot, status: SavedLot["status"]) => {
     const comment = window.prompt(status === "in_work" ? "Комментарий при принятии в работу" : "Комментарий", lot.comment || "") ?? lot.comment ?? "";
     try {
-      const res = await fetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
+      const res = await apiFetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -212,7 +213,7 @@ function Bids() {
 
   const updateManager = async (lot: SavedLot, assignedTo: string) => {
     try {
-      const res = await fetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
+      const res = await apiFetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

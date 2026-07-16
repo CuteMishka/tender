@@ -11,18 +11,23 @@ import (
 func NewRouter(h *Handler, allowedOrigins []string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Compress(5, "application/json", "text/plain"))
+	secureCookies := h != nil && h.Auth != nil && h.Auth.cookieSecure
+	r.Use(securityHeadersMiddleware(secureCookies))
 
 	r.Use(cors.New(cors.Options{
 		AllowedOrigins:   allowedOrigins,
 		AllowedMethods:   []string{"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Request-ID"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Request-ID", CSRFHeaderName},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}).Handler)
+	if h == nil {
+		h = &Handler{}
+	}
+	r.Use(authMiddleware(h.Auth))
 
 	r.Get("/health", h.Health)
 	r.Route("/api/v1", func(s chi.Router) {
@@ -30,6 +35,10 @@ func NewRouter(h *Handler, allowedOrigins []string) http.Handler {
 		s.Get("/tenders/{tenderId}", h.GetTender)
 		s.Post("/tenders/{tenderId}/spec-summary/auto", h.AutoExtractTenderSpecSummary)
 		s.Post("/tenders/{tenderId}/cloudy/chat", h.CloudyChat)
+		s.Post("/rag/lot/analyze", h.RAGAnalyzeLot)
+		s.Post("/rag/lots/{lotId}/index", h.RAGIndexLot)
+		s.Post("/rag/lots/{lotId}/index-document", h.RAGIndexDocument)
+		s.Get("/rag/lots/{lotId}/spec-summary", h.RAGSpecSummary)
 		s.Delete("/tenders/{tenderId}/suitable", h.RemoveTenderFromSuitable)
 		s.Get("/notifications", h.ListNotifications)
 		s.Get("/dictionaries", h.ListDictionaries)
@@ -49,9 +58,13 @@ func NewRouter(h *Handler, allowedOrigins []string) http.Handler {
 		if h.Users != nil {
 			s.Post("/auth/login", h.Login)
 			s.Post("/auth/register-request", h.CreateRegistrationRequest)
+			s.Get("/auth/me", h.Me)
+			s.Post("/auth/logout", h.Logout)
+			s.Post("/auth/logout-all", h.LogoutAll)
 			s.Get("/users", h.ListUsers)
 			s.Patch("/users/{id}/role", h.UpdateUserRole)
 			s.Delete("/users/{id}", h.DeleteUser)
+			s.Post("/users/{id}/sessions/revoke", h.RevokeUserSessions)
 			s.Get("/users/{id}/telegram", h.GetUserTelegramBinding)
 			s.Put("/users/{id}/telegram", h.UpdateUserTelegramBinding)
 			s.Post("/users/{id}/telegram/test", h.TestUserTelegramBinding)

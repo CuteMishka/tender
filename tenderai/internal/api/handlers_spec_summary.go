@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -34,7 +35,10 @@ type ragIndexResponse struct {
 	SpecSummary   map[string]interface{} `json:"spec_summary,omitempty"`
 }
 
-var fetchDocumentRetryDelays = []time.Duration{750 * time.Millisecond, 2 * time.Second}
+var (
+	fetchDocumentRetryDelays       = []time.Duration{750 * time.Millisecond, 2 * time.Second}
+	specDocumentAbbreviationRegexp = regexp.MustCompile(`(?i)(^|[^\pL\pN])т[[:space:]._-]*[сз]($|[^\pL\pN])`)
+)
 
 func (h *Handler) AutoExtractTenderSpecSummary(w http.ResponseWriter, r *http.Request) {
 	if h.DB == nil {
@@ -65,7 +69,7 @@ func (h *Handler) AutoExtractTenderSpecSummary(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if summary, found, err := getRAGSpecSummary(r.Context(), ragBase, ragLotID); err == nil && found {
+	if summary, found, err := getRAGSpecSummary(r.Context(), ragBase, ragLotID, h.RAGInternalServiceToken); err == nil && found {
 		writeSpecSummaryAuto(w, SpecSummaryAutoResponse{
 			RagLotID:    ragLotID,
 			Source:      "cached",
@@ -78,7 +82,7 @@ func (h *Handler) AutoExtractTenderSpecSummary(w http.ResponseWriter, r *http.Re
 	}
 
 	if text := specTextFromRow(row); text != "" {
-		indexed, err := indexRAGText(r.Context(), ragBase, ragLotID, text, fmt.Sprintf("%s;backend_auto_spec_text", derefString(dto.Source)))
+		indexed, err := indexRAGText(r.Context(), ragBase, ragLotID, text, fmt.Sprintf("%s;backend_auto_spec_text", derefString(dto.Source)), h.RAGInternalServiceToken)
 		if err != nil {
 			writeJSONError(w, http.StatusBadGateway, err.Error())
 			return
@@ -106,7 +110,7 @@ func (h *Handler) AutoExtractTenderSpecSummary(w http.ResponseWriter, r *http.Re
 		writeJSONError(w, http.StatusBadGateway, "не удалось скачать документ ТС: "+err.Error())
 		return
 	}
-	indexed, err := indexRAGDocument(r.Context(), ragBase, ragLotID, derefString(doc.Name), data, fmt.Sprintf("%s;backend_auto_spec_document;%s", derefString(dto.Source), derefString(doc.Name)))
+	indexed, err := indexRAGDocument(r.Context(), ragBase, ragLotID, derefString(doc.Name), data, fmt.Sprintf("%s;backend_auto_spec_document;%s", derefString(dto.Source), derefString(doc.Name)), h.RAGInternalServiceToken)
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, err.Error())
 		return
@@ -185,8 +189,8 @@ func pickSpecDocumentDTO(docs []LotDocumentDTO) *LotDocumentDTO {
 		if first == nil {
 			first = doc
 		}
-		name := strings.ToLower(derefString(doc.Name))
-		if strings.Contains(name, "спецификац") || strings.Contains(name, "технич") || strings.Contains(name, "тз") || strings.Contains(name, "tech") {
+		markerText := derefString(doc.Name) + " " + derefString(doc.DownloadLink)
+		if hasSpecDocumentMarker(markerText) {
 			preferred = doc
 			break
 		}
@@ -195,6 +199,25 @@ func pickSpecDocumentDTO(docs []LotDocumentDTO) *LotDocumentDTO {
 		return preferred
 	}
 	return first
+}
+
+func hasSpecDocumentMarker(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{"спецификац", "технич", "technical", "specification"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	compact := strings.NewReplacer(" ", "", "\t", "", "\r", "", "\n", "", ".", "", "_", "", "-", "").Replace(lower)
+	for _, marker := range []string{"техспек", "техзадан", "techspec"} {
+		if strings.Contains(compact, marker) {
+			return true
+		}
+	}
+	return specDocumentAbbreviationRegexp.MatchString(lower)
 }
 
 func specDocumentExt(name string, rawURL string) string {
@@ -306,11 +329,12 @@ func isRetryableDocumentStatus(status int) bool {
 	}
 }
 
-func getRAGSpecSummary(ctx context.Context, ragBase string, lotID string) (map[string]interface{}, bool, error) {
+func getRAGSpecSummary(ctx context.Context, ragBase string, lotID string, internalToken string) (map[string]interface{}, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ragBase+"/v1/lots/"+url.PathEscape(lotID)+"/spec-summary", nil)
 	if err != nil {
 		return nil, false, err
 	}
+	setRAGInternalToken(req, internalToken)
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return nil, false, err
@@ -330,7 +354,7 @@ func getRAGSpecSummary(ctx context.Context, ragBase string, lotID string) (map[s
 	return out, true, nil
 }
 
-func indexRAGText(ctx context.Context, ragBase string, lotID string, text string, sourceHint string) (ragIndexResponse, error) {
+func indexRAGText(ctx context.Context, ragBase string, lotID string, text string, sourceHint string, internalToken string) (ragIndexResponse, error) {
 	payload := map[string]interface{}{
 		"text":                text,
 		"source_hint":         sourceHint,
@@ -342,10 +366,11 @@ func indexRAGText(ctx context.Context, ragBase string, lotID string, text string
 		return ragIndexResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	setRAGInternalToken(req, internalToken)
 	return doRAGIndexRequest(req)
 }
 
-func indexRAGDocument(ctx context.Context, ragBase string, lotID string, filename string, data []byte, sourceHint string) (ragIndexResponse, error) {
+func indexRAGDocument(ctx context.Context, ragBase string, lotID string, filename string, data []byte, sourceHint string, internalToken string) (ragIndexResponse, error) {
 	if strings.TrimSpace(filename) == "" {
 		filename = "technical-specification.pdf"
 	}
@@ -369,7 +394,14 @@ func indexRAGDocument(ctx context.Context, ragBase string, lotID string, filenam
 		return ragIndexResponse{}, err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	setRAGInternalToken(req, internalToken)
 	return doRAGIndexRequest(req)
+}
+
+func setRAGInternalToken(req *http.Request, token string) {
+	if token = strings.TrimSpace(token); token != "" {
+		req.Header.Set(InternalTokenHeader, token)
+	}
 }
 
 func doRAGIndexRequest(req *http.Request) (ragIndexResponse, error) {

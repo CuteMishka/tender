@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { isAuthenticated } from "@/lib/auth";
+import { getSession } from "@/lib/auth";
 
 export const Route = createFileRoute("/")({
   component: IndexRedirect,
@@ -10,11 +10,16 @@ function IndexRedirect() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (isAuthenticated()) {
-      navigate({ to: "/dashboard", replace: true });
-    } else {
-      navigate({ to: "/login", replace: true });
-    }
+    let active = true;
+    getSession()
+      .then((user) => {
+        if (!active) return;
+        navigate({ to: user ? "/dashboard" : "/login", replace: true });
+      })
+      .catch(() => {
+        if (active) navigate({ to: "/login", replace: true });
+      });
+    return () => { active = false; };
   }, [navigate]);
 
   return (

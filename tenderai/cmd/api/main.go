@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 	_ "time/tzdata"
 
 	"github.com/dauren/tender/internal/analytics"
@@ -37,12 +38,18 @@ func run() error {
 	fd := api.NewFetchDocumentProxy(cfg.FetchDocument)
 	db := database.InitDB()
 	users := service.NewUserService(repository.NewUserRepository(db))
+	auth, err := api.NewAuthManager(api.NewGormSessionStore(db), cfg.Auth)
+	if err != nil {
+		return fmt.Errorf("authentication: %w", err)
+	}
 	srv := api.NewRouter(&api.Handler{
-		DB:         db,
-		Users:      users,
-		FetchDoc:   fd,
-		TP:         tp,
-		RagAPIBase: cfg.RagAPIBase,
+		DB:                      db,
+		Users:                   users,
+		FetchDoc:                fd,
+		TP:                      tp,
+		RagAPIBase:              cfg.RagAPIBase,
+		Auth:                    auth,
+		RAGInternalServiceToken: cfg.RAGInternalServiceToken,
 	}, cfg.CORSAllowedOrigins)
 
 	// Подключаем локальную БД и добавляем новые эндпоинты
@@ -70,6 +77,8 @@ func run() error {
 			s.Get("/filters", ah.GetFilters)
 			s.Get("/export", ah.Export)
 			s.Get("/company-tenders", ah.GetCompanyTenderIntelligence)
+			s.Post("/reports/preview", ah.ReportPreview)
+			s.Post("/reports/docx", ah.ReportDOCX)
 			s.Get("/customers/candidates", ah.ListCustomerCandidates)
 			s.Get("/customers", ah.ListCustomers)
 			s.Post("/customers", ah.AddCustomer)
@@ -82,7 +91,16 @@ func run() error {
 	}
 
 	log.Printf("listening on %s (GET /health, GET /api/v1/tenders?keywords=IaaS&limit=10, POST /api/v1/fetch-document)", cfg.Addr)
-	if err := http.ListenAndServe(cfg.Addr, srv); err != nil && err != http.ErrServerClosed {
+	httpServer := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           srv,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       5 * time.Minute,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil

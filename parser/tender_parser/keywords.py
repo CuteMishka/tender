@@ -47,6 +47,7 @@ class KeywordService:
         keywords_file_path: Path | None = None,
         stop_words_api_url: str | None = None,
         fallback_stop_words: list[str] | None = None,
+        backend_internal_service_token: str | None = None,
     ) -> None:
         self.db = db
         self.fallback = fallback
@@ -56,6 +57,7 @@ class KeywordService:
         self.stop_words_api_url = stop_words_api_url
         self.fallback_stop_words = fallback_stop_words or []
         self._active_rules: dict[str, KeywordRule] = {}
+        self.headers = {"X-Internal-Service-Token": backend_internal_service_token.strip()} if backend_internal_service_token and backend_internal_service_token.strip() else {}
 
     def load_active(self, stop_words: list[str] | None = None) -> list[str]:
         return [rule.value for rule in self.load_active_rules(stop_words)]
@@ -90,7 +92,7 @@ class KeywordService:
             return
         payload: dict[str, Any] = {"lastLot": str(last_lot)}
         try:
-            with httpx.Client(timeout=self.timeout_seconds, follow_redirects=True) as client:
+            with httpx.Client(timeout=self.timeout_seconds, follow_redirects=True, headers=self.headers) as client:
                 response = client.put(url, json=payload)
                 response.raise_for_status()
         except Exception as exc:
@@ -152,7 +154,7 @@ class KeywordService:
         if not self.dictionaries_api_url:
             return []
         try:
-            with httpx.Client(timeout=self.timeout_seconds, follow_redirects=True) as client:
+            with httpx.Client(timeout=self.timeout_seconds, follow_redirects=True, headers=self.headers) as client:
                 response = client.get(self.dictionaries_api_url)
                 response.raise_for_status()
                 payload = response.json()
@@ -171,7 +173,7 @@ class KeywordService:
         if not url:
             return []
         try:
-            with httpx.Client(timeout=self.timeout_seconds, follow_redirects=True) as client:
+            with httpx.Client(timeout=self.timeout_seconds, follow_redirects=True, headers=self.headers) as client:
                 response = client.get(url)
                 response.raise_for_status()
                 payload = response.json()

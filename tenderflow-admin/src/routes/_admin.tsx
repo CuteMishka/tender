@@ -1,7 +1,7 @@
 import { createFileRoute, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { Sidebar } from "@/components/admin/Sidebar";
-import { isAuthenticated } from "@/lib/auth";
+import { getSession } from "@/lib/auth";
 import { Bell, CheckCheck, Trash2, X } from "lucide-react";
 import { useNotifications, useServerNotificationsSync, type AppNotification } from "@/hooks/use-notifications";
 import { useTheme } from "@/hooks/use-theme";
@@ -230,14 +230,21 @@ function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [ready, setReady] = useState(false);
+  const [authError, setAuthError] = useState(false);
   useTheme();
 
   useEffect(() => {
-    if (!isAuthenticated()) {
-      navigate({ to: "/login", replace: true });
-    } else {
-      setReady(true);
-    }
+    let active = true;
+    getSession()
+      .then((user) => {
+        if (!active) return;
+        if (!user) navigate({ to: "/login", replace: true });
+        else setReady(true);
+      })
+      .catch(() => {
+        if (active) setAuthError(true);
+      });
+    return () => { active = false; };
   }, [navigate]);
 
   useServerNotificationsSync(ready);
@@ -245,7 +252,21 @@ function AdminLayout() {
   if (!ready) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
-        <div className="h-10 w-10 animate-spin rounded-full border-2 border-muted border-t-primary" />
+        {authError ? (
+          <div className="max-w-sm text-center">
+            <p className="text-sm font-medium text-foreground">Не удалось проверить защищённую сессию</p>
+            <p className="mt-2 text-xs text-muted-foreground">Проверьте соединение и повторите попытку.</p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+            >
+              Повторить
+            </button>
+          </div>
+        ) : (
+          <div className="h-10 w-10 animate-spin rounded-full border-2 border-muted border-t-primary" />
+        )}
       </div>
     );
   }

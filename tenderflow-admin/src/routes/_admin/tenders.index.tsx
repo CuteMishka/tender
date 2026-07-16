@@ -18,6 +18,7 @@ import {
   type TenderItem,
   type TenderViewInfo,
 } from "@/lib/tenders-api";
+import { apiFetch } from "@/lib/api-client";
 
 type TendersSearch = { page: number; limit: number };
 
@@ -249,7 +250,7 @@ function TendersList() {
   const [removingSuitableIds, setRemovingSuitableIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
-    fetch(`${getLocalApiBase()}/api/v1/lots/saved`)
+    apiFetch(`${getLocalApiBase()}/api/v1/lots/saved`)
       .then((r) => r.json())
       .then((d) => {
         if (!Array.isArray(d)) return;

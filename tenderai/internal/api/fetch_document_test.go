@@ -1,8 +1,15 @@
 package api
 
 import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/dauren/tender/internal/config"
 )
 
 func TestValidateFetchURL(t *testing.T) {
@@ -40,10 +47,42 @@ func TestValidateFetchURL(t *testing.T) {
 }
 
 func TestPickContentType(t *testing.T) {
-	if got := pickContentType("application/pdf; charset=binary", "/x"); got != "application/pdf" {
+	if got := pickContentType(`"application/pdf"; charset=binary`, "/x"); got != "application/pdf" {
 		t.Fatalf("upstream pdf: got %q", got)
 	}
 	if got := pickContentType("application/octet-stream", "/a/b.docx"); got != "application/vnd.openxmlformats-officedocument.wordprocessingml.document" {
 		t.Fatalf("from ext docx: got %q", got)
+	}
+}
+
+func TestFetchDocumentRejectsEmptyUpstreamBody(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	u, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := NewFetchDocumentProxy(config.FetchDocumentConfig{
+		AllowedHosts: []string{u.Hostname()},
+		MaxBytes:     1024,
+		Timeout:      time.Second,
+	})
+	proxy.client = upstream.Client()
+	h := &Handler{FetchDoc: proxy}
+	body := bytes.NewBufferString(`{"url":"` + upstream.URL + `/empty.pdf"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/fetch-document", body)
+	recorder := httptest.NewRecorder()
+
+	h.FetchDocument(recorder, req)
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status: want %d got %d; body=%s", http.StatusBadGateway, recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "empty document") {
+		t.Fatalf("unexpected body: %s", recorder.Body.String())
 	}
 }

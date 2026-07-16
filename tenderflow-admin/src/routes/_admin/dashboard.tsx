@@ -1,8 +1,9 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { Gavel, FileText, Building2, DollarSign, Download, ArrowRight, ChevronRight, Bell } from "lucide-react";
+import { Gavel, FileText, Building2, DollarSign, Download, ArrowRight, ChevronRight, Bell, AlertCircle } from "lucide-react";
 import { getLocalApiBase, formatTenderAmount, formatDate, getTenderStatus } from "@/lib/tenders-api";
+import { apiFetch } from "@/lib/api-client";
 import { useNotifications } from "@/hooks/use-notifications";
 
 export const Route = createFileRoute("/_admin/dashboard")({
@@ -31,10 +32,60 @@ interface DashboardDynamicsPoint {
   updated_count?: number;
 }
 
+interface DashboardStats {
+  active_count: number;
+  participating_count: number;
+  total_amount: number;
+  participating_amount: number;
+}
+
+function isDashboardStats(value: unknown): value is DashboardStats {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<DashboardStats>;
+  return [candidate.active_count, candidate.participating_count, candidate.total_amount, candidate.participating_amount]
+    .every((item) => typeof item === "number" && Number.isFinite(item));
+}
+
+async function fetchDashboardResource<T>(url: string, label: string): Promise<T> {
+  let response: Response;
+  try {
+    response = await apiFetch(url);
+  } catch {
+    throw new Error(`${label}: нет соединения с сервером`);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(`${label}: сервер вернул некорректный ответ`);
+  }
+
+  const apiError = payload && typeof payload === "object" && "error" in payload
+    ? String((payload as { error?: unknown }).error || "")
+    : "";
+  if (!response.ok || apiError) {
+    throw new Error(`${label}: ${apiError || `ошибка HTTP ${response.status}`}`);
+  }
+  return payload as T;
+}
+
+function formatDashboardKzt(amount: number): string {
+  return `${formatTenderAmount(amount).replace(/[\u00a0\u202f]/g, " ")} ₸`;
+}
+
 const STATUS_RU: Record<string, { label: string; cls: string }> = {
-  active:        { label: "Активный",   cls: "bg-green-100 text-green-700" },
-  participating: { label: "Участвуем",  cls: "bg-blue-100 text-blue-700" },
-  rejected:      { label: "Отклонён",   cls: "bg-red-100 text-red-600" },
+  active:               { label: "Активный",             cls: "bg-green-100 text-green-700" },
+  review:               { label: "На проверке",            cls: "bg-amber-100 text-amber-700" },
+  assignment_requested: { label: "Ожидает назначения",     cls: "bg-amber-100 text-amber-700" },
+  in_work:              { label: "В работе",                cls: "bg-blue-100 text-blue-700" },
+  participating:        { label: "Участвуем",              cls: "bg-blue-100 text-blue-700" },
+  submitted:            { label: "Заявка подана",          cls: "bg-indigo-100 text-indigo-700" },
+  waiting_result:       { label: "Ожидает результата",     cls: "bg-violet-100 text-violet-700" },
+  won:                  { label: "Выигран",                 cls: "bg-green-100 text-green-700" },
+  lost:                 { label: "Проигран",               cls: "bg-red-100 text-red-600" },
+  rejected:             { label: "Отклонён",                cls: "bg-red-100 text-red-600" },
+  archived:             { label: "В архиве",                cls: "bg-muted text-muted-foreground" },
 };
 
 const deadlineClass: Record<string, string> = {
@@ -47,58 +98,102 @@ const deadlineClass: Record<string, string> = {
 function Dashboard() {
   const navigate = useNavigate();
   const { unreadCount } = useNotifications();
-  const [dbStats, setDbStats] = useState({
+  const [dbStats, setDbStats] = useState<DashboardStats>({
     active_count: 0, participating_count: 0, total_amount: 0, participating_amount: 0,
   });
   const [savedLots, setSavedLots] = useState<SavedLot[]>([]);
   const [dynamics, setDynamics] = useState<DashboardDynamicsPoint[]>([]);
   const [loading, setLoading] = useState(true);
+  const [statsAvailable, setStatsAvailable] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     const base = getLocalApiBase();
-    Promise.all([
-      fetch(`${base}/api/v1/dashboard`).then((r) => r.json()).catch(() => null),
-      fetch(`${base}/api/v1/dashboard/dynamics?range=all`).then((r) => r.json()).catch(() => []),
-      fetch(`${base}/api/v1/lots/saved`).then((r) => r.json()).catch(() => []),
-    ]).then(([stats, dynamicsRows, lots]) => {
-      if (stats && !stats.error) setDbStats(stats);
-      if (Array.isArray(dynamicsRows)) setDynamics(dynamicsRows);
-      if (Array.isArray(lots)) setSavedLots(lots);
-    }).finally(() => setLoading(false));
-  }, []);
+    let cancelled = false;
+    setLoading(true);
+    setStatsAvailable(false);
+    setLoadError(null);
+
+    Promise.allSettled([
+      fetchDashboardResource<DashboardStats>(`${base}/api/v1/dashboard`, "Показатели"),
+      fetchDashboardResource<DashboardDynamicsPoint[]>(`${base}/api/v1/dashboard/dynamics?range=all`, "Динамика"),
+      fetchDashboardResource<SavedLot[]>(`${base}/api/v1/lots/saved`, "Рабочие лоты"),
+    ]).then(([statsResult, dynamicsResult, lotsResult]) => {
+      if (cancelled) return;
+      const errors: string[] = [];
+
+      if (statsResult.status === "fulfilled" && isDashboardStats(statsResult.value)) {
+        setDbStats(statsResult.value);
+        setStatsAvailable(true);
+      } else {
+        errors.push(statsResult.status === "rejected" && statsResult.reason instanceof Error
+          ? statsResult.reason.message
+          : "Показатели: сервер вернул неверный формат");
+      }
+
+      if (dynamicsResult.status === "fulfilled" && Array.isArray(dynamicsResult.value)) {
+        setDynamics(dynamicsResult.value);
+      } else {
+        errors.push(dynamicsResult.status === "rejected" && dynamicsResult.reason instanceof Error
+          ? dynamicsResult.reason.message
+          : "Динамика: сервер вернул неверный формат");
+      }
+
+      if (lotsResult.status === "fulfilled" && Array.isArray(lotsResult.value)) {
+        setSavedLots(lotsResult.value);
+      } else {
+        errors.push(lotsResult.status === "rejected" && lotsResult.reason instanceof Error
+          ? lotsResult.reason.message
+          : "Рабочие лоты: сервер вернул неверный формат");
+      }
+
+      setLoadError(errors.length > 0 ? errors.join(" · ") : null);
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+
+    return () => { cancelled = true; };
+  }, [reloadKey]);
 
   const stats = [
     {
-      label: "Активные тендеры",
+      label: "Рабочие лоты",
       value: dbStats.active_count,
       display: String(dbStats.active_count),
+      available: statsAvailable,
       icon: Gavel,
       accent: "bg-primary/10 text-primary",
       border: "hover:border-primary/40",
       link: "/tenders",
     },
     {
-      label: "Участвуем тендеров",
+      label: "Лоты на этапе участия",
       value: dbStats.participating_count,
       display: String(dbStats.participating_count),
+      available: statsAvailable,
       icon: FileText,
       accent: "bg-green-100 text-green-600",
       border: "hover:border-green-400/40",
       link: "/bids",
     },
     {
-      label: "Валидация лота",
+      label: "Сумма рабочих лотов",
       value: dbStats.participating_amount,
-      display: `₸ ${(dbStats.participating_amount / 1_000_000).toFixed(1)}М`,
+      display: formatDashboardKzt(dbStats.participating_amount),
+      available: statsAvailable,
+      amount: true,
       icon: Building2,
       accent: "bg-orange-100 text-orange-600",
       border: "hover:border-orange-400/40",
       link: "/bids",
     },
     {
-      label: "Объём контрактов (всего)",
+      label: "Общий бюджет закупок",
       value: dbStats.total_amount,
-      display: `₸ ${(dbStats.total_amount / 1_000_000).toFixed(1)}М`,
+      display: formatDashboardKzt(dbStats.total_amount),
+      available: statsAvailable,
+      amount: true,
       icon: DollarSign,
       accent: "bg-violet-100 text-violet-600",
       border: "hover:border-violet-400/40",
@@ -108,6 +203,7 @@ function Dashboard() {
       label: "Непрочитанных уведомлений",
       value: unreadCount,
       display: String(unreadCount),
+      available: true,
       icon: Bell,
       accent: "bg-red-100 text-red-600",
       border: "hover:border-red-400/40",
@@ -167,6 +263,23 @@ function Dashboard() {
       />
 
       <div className="space-y-6 p-8">
+        {loadError && (
+          <div role="alert" className="flex flex-col gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-800 sm:flex-row sm:items-center">
+            <AlertCircle className="h-5 w-5 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold">Не все данные дашборда загрузились</p>
+              <p className="mt-0.5 break-words text-xs text-red-700">{loadError}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReloadKey((value) => value + 1)}
+              className="shrink-0 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-red-100"
+            >
+              Повторить
+            </button>
+          </div>
+        )}
+
         {/* Карточки статистики */}
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           {stats.map((s) => {
@@ -185,8 +298,8 @@ function Dashboard() {
                   <ChevronRight className="h-4 w-4 text-muted-foreground/40 transition group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
                 </div>
                 <p className="mt-4 text-sm text-muted-foreground">{s.label}</p>
-                <p className="mt-1 text-2xl font-bold text-foreground">
-                  {loading ? <span className="inline-block h-7 w-16 animate-pulse rounded bg-muted" /> : s.display}
+                <p className={`mt-1 font-bold text-foreground ${s.amount ? "break-words text-xl leading-tight" : "text-2xl"}`}>
+                  {loading ? <span className="inline-block h-7 w-16 animate-pulse rounded bg-muted" /> : s.available ? s.display : "—"}
                 </p>
               </button>
             );

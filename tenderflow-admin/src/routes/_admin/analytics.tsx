@@ -39,6 +39,7 @@ import {
   YAxis,
 } from "recharts";
 import { PageHeader } from "@/components/admin/PageHeader";
+import { AnalyticsReportBuilder } from "@/components/admin/AnalyticsReportBuilder";
 import {
   analyticsApi,
   fmtDate,
@@ -120,6 +121,16 @@ function Analytics() {
       />
 
       <div className="space-y-6 p-6 xl:p-8">
+        <AnalyticsReportBuilder />
+
+        <div className="flex items-center gap-3 pt-1" aria-hidden="true">
+          <span className="h-px flex-1 bg-border" />
+          <span className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Тендерная разведка по компаниям
+          </span>
+          <span className="h-px flex-1 bg-border" />
+        </div>
+
         <section className="overflow-hidden rounded-lg border border-primary/15 bg-gradient-to-br from-white via-white to-emerald-50/60 p-5 shadow-[0_18px_45px_-34px_rgba(0,132,83,0.55)]">
           <form onSubmit={onSubmit} className="flex flex-col gap-3 lg:flex-row lg:items-center">
             <div className="relative flex-1">

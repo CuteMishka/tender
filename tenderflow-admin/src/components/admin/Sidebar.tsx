@@ -1,4 +1,5 @@
 import { Link, useNavigate, useLocation } from "@tanstack/react-router";
+import { useState } from "react";
 import {
   LayoutDashboard, FileText, Gavel, Settings, LogOut,
   BarChart3, Building2, Bell, BookOpen, Users, UserRound, BriefcaseBusiness, CalendarDays,
@@ -29,10 +30,20 @@ export function Sidebar() {
   const location = useLocation();
   const { unreadCount } = useNotifications();
   const user = getCurrentUser();
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
 
-  const handleLogout = () => {
-    logout();
-    navigate({ to: "/login" });
+  const handleLogout = async () => {
+    if (loggingOut) return;
+    setLogoutError("");
+    setLoggingOut(true);
+    try {
+      await logout();
+      navigate({ to: "/login" });
+    } catch {
+      setLogoutError("Не удалось завершить сессию. Повторите выход.");
+      setLoggingOut(false);
+    }
   };
 
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + "/");
@@ -114,11 +125,15 @@ export function Sidebar() {
         </div>
         <button
           onClick={handleLogout}
+          disabled={loggingOut}
           className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
         >
           <LogOut className="h-4 w-4" />
-          Выйти
+          {loggingOut ? "Выход..." : "Выйти"}
         </button>
+        {logoutError && (
+          <p className="mt-2 px-3 text-xs text-red-300" role="alert">{logoutError}</p>
+        )}
       </div>
     </aside>
   );

@@ -1,4 +1,5 @@
 import { getLocalApiBase } from "./tenders-api";
+import { apiFetch } from "./api-client.ts";
 
 const base = () => getLocalApiBase();
 
@@ -137,6 +138,113 @@ export type CompanyTenderIntelligence = {
   warnings?: string[];
 };
 
+export type AnalyticsReportRequest = {
+  organization_query: string;
+  organization?: string;
+  platforms?: string[];
+  date_from?: string;
+  date_to?: string;
+  top_n?: number;
+};
+
+export type AnalyticsReportHeader = {
+  title: string;
+  organization_query: string;
+  organization_filter?: string;
+  organizations: string[];
+  platforms: string[];
+  date_from?: string;
+  date_to?: string;
+  data_as_of: string;
+  generated_at: string;
+  source: string;
+  timezone: string;
+  date_basis: string;
+  deduplication_method: string;
+  amount_calculation_note: string;
+};
+
+export type AnalyticsReportKPIs = {
+  total_lots: number;
+  completed_lots: number;
+  cancelled_lots: number;
+  failed_lots: number;
+  lots_without_amount: number;
+  total_amount: number;
+  possible_reannouncements: number;
+};
+
+export type AnalyticsReportBreakdown = {
+  name: string;
+  count: number;
+  amount: number;
+};
+
+export type AnalyticsReportStatus =
+  | "cancelled"
+  | "failed"
+  | "completed"
+  | "active"
+  | "unknown"
+  | string;
+
+export type AnalyticsReportTopTender = {
+  lot_number: string;
+  lot_source?: string;
+  title: string;
+  amount: number;
+  amount_available: boolean;
+  deadline?: string | null;
+  status: string;
+  status_group: AnalyticsReportStatus;
+  platform: string;
+  organization: string;
+  possible_reannouncement: boolean;
+};
+
+export type AnalyticsReportRepeatedLot = {
+  lot_number: string;
+  lot_source?: string;
+  title: string;
+  platform: string;
+  occurrences: number;
+  publication_count: number;
+  stage_transition: boolean;
+  possible_reannouncement: boolean;
+  status: string;
+};
+
+export type AnalyticsReportQuality = {
+  source_rows: number;
+  filtered_rows: number;
+  unique_lots: number;
+  rows_without_lot_number: number;
+  rows_without_lot_source: number;
+  lots_with_unknown_status: number;
+  lots_with_conflicting_amounts: number;
+  lots_using_amount_fallback: number;
+  past_deadline_active_lots: number;
+  warnings?: string[];
+};
+
+export type AnalyticsReportPreview = {
+  header: AnalyticsReportHeader;
+  kpis: AnalyticsReportKPIs;
+  by_purchase_type: AnalyticsReportBreakdown[];
+  by_service_category: AnalyticsReportBreakdown[];
+  top_tenders: AnalyticsReportTopTender[];
+  repeated_lots: AnalyticsReportRepeatedLot[];
+  conclusions: string[];
+  quality: AnalyticsReportQuality;
+  available_platforms: string[];
+  available_organizations: string[];
+};
+
+export type AnalyticsReportDownload = {
+  blob: Blob;
+  filename: string;
+};
+
 export type HistoricalLot = {
   id: number;
   lot_id: number;
@@ -190,12 +298,66 @@ async function get<T>(path: string, params?: Record<string, string | number | un
       if (value !== undefined && value !== "") url.searchParams.set(key, String(value));
     }
   }
-  const res = await fetch(url.toString());
+  const res = await apiFetch(url.toString());
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(text || `${res.status}`);
   }
   return res.json() as Promise<T>;
+}
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await apiFetch(`${base()}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await responseError(res));
+  return res.json() as Promise<T>;
+}
+
+async function postBlob(path: string, body: unknown): Promise<AnalyticsReportDownload> {
+  const res = await apiFetch(`${base()}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await responseError(res));
+  const blob = await res.blob();
+  if (blob.size === 0) throw new Error("Сервер вернул пустой файл справки");
+  return {
+    blob,
+    filename:
+      filenameFromDisposition(res.headers.get("Content-Disposition")) || "analytics-report.docx",
+  };
+}
+
+async function responseError(res: Response): Promise<string> {
+  const text = await res.text().catch(() => "");
+  if (!text) return `Ошибка сервера (${res.status})`;
+  try {
+    const parsed = JSON.parse(text) as { error?: string };
+    return parsed.error || text;
+  } catch {
+    return text;
+  }
+}
+
+function filenameFromDisposition(value: string | null): string {
+  if (!value) return "";
+  const encoded = value.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded).replace(/[\\/:*?"<>|]+/g, "_");
+    } catch {
+      // fall through to the regular filename parameter
+    }
+  }
+  const plain = value.match(/filename="([^"]+)"/i)?.[1] || value.match(/filename=([^;]+)/i)?.[1];
+  return (plain || "").trim().replace(/[\\/:*?"<>|]+/g, "_");
 }
 
 export const analyticsApi = {
@@ -218,6 +380,12 @@ export const analyticsApi = {
       page: filters.page ?? 1,
       limit: filters.limit ?? 20,
     }),
+
+  previewReport: (request: AnalyticsReportRequest) =>
+    post<AnalyticsReportPreview>("/api/v1/analytics/reports/preview", request),
+
+  downloadReportDocx: (request: AnalyticsReportRequest) =>
+    postBlob("/api/v1/analytics/reports/docx", request),
 };
 
 export function fmtM(value: number): string {

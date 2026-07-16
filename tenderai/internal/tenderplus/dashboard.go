@@ -10,12 +10,13 @@ import (
 	"gorm.io/gorm"
 )
 
-// DashboardStats описывает структуру ответа для фронтенда
+// DashboardStats описывает структуру ответа для фронтенда.
+// Имена JSON-полей сохранены для обратной совместимости.
 type DashboardStats struct {
-	ActiveCount         int64   `json:"active_count"`         // Активные тендера = кол-во
-	ParticipatingCount  int64   `json:"participating_count"`  // Участвуем тендеров = кол-во
-	TotalAmount         float64 `json:"total_amount"`         // Объём контрактов = всего сумма
-	ParticipatingAmount float64 `json:"participating_amount"` // Объём контрактов участвуем = сумма
+	ActiveCount         int64   `json:"active_count"`         // Лоты в рабочем процессе
+	ParticipatingCount  int64   `json:"participating_count"`  // Лоты на этапах подготовки/подачи заявки
+	TotalAmount         float64 `json:"total_amount"`         // Общий начальный бюджет закупок
+	ParticipatingAmount float64 `json:"participating_amount"` // Сумма лотов на этапах участия
 }
 
 type DashboardDynamicsPoint struct {
@@ -38,14 +39,20 @@ func GetDashboardStats(db *gorm.DB) (*DashboardStats, error) {
 			saved.participating_amount
 		FROM (
 			SELECT
-				COUNT(*) FILTER (WHERE status = 'active') AS active_count,
-				COUNT(*) FILTER (WHERE status = 'participating') AS participating_count,
-				COALESCE(SUM(amount) FILTER (WHERE status = 'participating'), 0) AS participating_amount
+				COUNT(*) FILTER (
+					WHERE status IN ('review', 'assignment_requested', 'in_work', 'participating', 'submitted', 'waiting_result')
+				) AS active_count,
+				COUNT(*) FILTER (
+					WHERE status IN ('in_work', 'participating', 'submitted', 'waiting_result')
+				) AS participating_count,
+				COALESCE(SUM(amount) FILTER (
+					WHERE status IN ('in_work', 'participating', 'submitted', 'waiting_result')
+				), 0) AS participating_amount
 			FROM saved_lots
 		) saved
 		CROSS JOIN (
-			SELECT COALESCE(SUM(contract_amount) FILTER (
-				WHERE contract_amount > 0
+			SELECT COALESCE(SUM(initial_amount) FILTER (
+				WHERE initial_amount > 0
 				  AND COALESCE(excluded_from_analytics, false) = false
 			), 0) AS total_amount
 			FROM historical_lots

@@ -9,6 +9,7 @@ import {
   UploadCloud, Send, MessageSquare, ListTodo, Plus, CheckCircle2, Circle,
 } from "lucide-react";
 import { analyticsApi, fmtDate, fmtM, type HistoricalLot } from "@/lib/analytics-api";
+import { apiFetch } from "@/lib/api-client";
 import {
   autoExtractTenderSpecSummary,
   buildLotText,
@@ -41,6 +42,7 @@ import {
   type LotSpecSummary,
   type TenderActivity,
   type TenderComment,
+  type TenderDocument,
   type TenderItem,
   type TenderTask,
   type TenderViewInfo,
@@ -85,12 +87,21 @@ function downloadTextFile(filename: string, text: string) {
 }
 
 function downloadBlobFile(filename: string, blob: Blob) {
+  if (blob.size === 0) {
+    throw new Error("Площадка вернула пустой файл. Попробуйте скачать другой документ или повторите позже.");
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
+function tenderDocumentDownloadKey(doc: TenderDocument): string {
+  return `${doc.downloadLink.trim()}\n${doc.name.trim()}`;
 }
 
 function InfoRow({ label, value, icon: Icon }: { label: string; value: React.ReactNode; icon?: React.ElementType }) {
@@ -441,7 +452,8 @@ function TenderDetail() {
   const [ragSpecSummary, setRagSpecSummary] = useState<LotSpecSummary | null>(null);
   const [specAutoAnalyzeLoading, setSpecAutoAnalyzeLoading] = useState(false);
   const [specAutoAnalyzeMessage, setSpecAutoAnalyzeMessage] = useState<string | null>(null);
-  const [specDownloadLoading, setSpecDownloadLoading] = useState(false);
+  const [activeDocumentDownloadKey, setActiveDocumentDownloadKey] = useState<string | null>(null);
+  const [documentDownloadError, setDocumentDownloadError] = useState<{ key: string; message: string } | null>(null);
 
   const [actionLoading, setActionLoading] = useState<"participating" | "rejected" | "assignment_requested" | null>(null);
   const [viewInfo, setViewInfo] = useState<TenderViewInfo | null>(null);
@@ -481,7 +493,8 @@ function TenderDetail() {
   useEffect(() => {
     setRagUploadError(null);
     setRagUploadOk(null);
-    setSpecDownloadLoading(false);
+    setActiveDocumentDownloadKey(null);
+    setDocumentDownloadError(null);
     setSpecAutoAnalyzeLoading(false);
     setSpecAutoAnalyzeMessage(null);
     const cached = Number.isFinite(id) && id > 0 ? getTenderSpecCache(id) : null;
@@ -615,24 +628,40 @@ function TenderDetail() {
     void handleLotAnalyze();
   }, [displayTechnicalSpec, handleLotAnalyze, lotAnalysis, lotAnalysisError, lotAnalysisLoading, ragSpecSummary, ragUploadError, ragUploadOk, tender]);
 
+  async function handleDownloadDocument(doc: TenderDocument, options?: { announceAsSpec?: boolean }) {
+    if (activeDocumentDownloadKey) return;
+    const key = tenderDocumentDownloadKey(doc);
+    setActiveDocumentDownloadKey(key);
+    setDocumentDownloadError(null);
+    if (options?.announceAsSpec) {
+      setRagUploadError(null);
+      setRagUploadOk(null);
+    }
+    try {
+      const blob = await fetchDocumentBlobViaBackendProxy(doc.downloadLink);
+      downloadBlobFile(doc.name || "document", blob);
+      if (options?.announceAsSpec) {
+        setRagUploadOk(`ТС скачана: ${doc.name || "файл"}`);
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setDocumentDownloadError({ key, message });
+      if (options?.announceAsSpec) {
+        setRagUploadError(message);
+      }
+    } finally {
+      setActiveDocumentDownloadKey(null);
+    }
+  }
+
   async function handleDownloadOriginalSpec() {
-    if (!tender || specDownloadLoading) return;
+    if (!tender || activeDocumentDownloadKey) return;
     const picked = pickTenderDocumentForRag(tender.documents);
     if (!picked) {
-      setRagUploadError("В документах тендера не найдена ТС в формате PDF/DOCX.");
+      setRagUploadError("В документах тендера не найдена ТС в формате PDF/DOC/DOCX.");
       return;
     }
-    setSpecDownloadLoading(true);
-    setRagUploadError(null);
-    try {
-      const blob = await fetchDocumentBlobViaBackendProxy(picked.downloadLink);
-      downloadBlobFile(picked.name || `tender-${tender.id}-technical-specification`, blob);
-      setRagUploadOk(`ТС скачана: ${picked.name || "файл"}`);
-    } catch (err: unknown) {
-      setRagUploadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSpecDownloadLoading(false);
-    }
+    await handleDownloadDocument(picked, { announceAsSpec: true });
   }
 
   async function handleSaveSpecToKnowledgeBase() {
@@ -693,7 +722,7 @@ function TenderDetail() {
         comment: status === "assignment_requested" ? "Специалист запросил возможность взять тендер в работу" : "",
       };
 
-      const res = await fetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
+      const res = await apiFetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -723,6 +752,11 @@ function TenderDetail() {
   };
 
   const pickedSpecDocument = tender ? pickTenderDocumentForRag(tender.documents) : null;
+  const pickedSpecDocumentKey = pickedSpecDocument ? tenderDocumentDownloadKey(pickedSpecDocument) : null;
+  const specDownloadLoading = Boolean(
+    pickedSpecDocumentKey && activeDocumentDownloadKey === pickedSpecDocumentKey,
+  );
+  const anyDocumentDownloadLoading = activeDocumentDownloadKey !== null;
   const statusInfo = tender ? getTenderStatus(tender.endDate) : null;
   const companyName = tender ? tenderCompanyName(tender) : "";
   const sourceLabel = tender ? tenderSourceLabel(tender) : "";
@@ -877,10 +911,10 @@ function TenderDetail() {
                     <button
                       type="button"
                       onClick={handleDownloadOriginalSpec}
-                      disabled={!pickedSpecDocument || specDownloadLoading}
+                      disabled={!pickedSpecDocument || anyDocumentDownloadLoading}
                       className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-background px-4 text-sm font-medium hover:bg-accent disabled:opacity-50"
                     >
-                      <Download className="h-4 w-4" />
+                      {specDownloadLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                       {specDownloadLoading ? "Скачивание…" : "Скачать ТС"}
                     </button>
                     <button
@@ -1052,26 +1086,40 @@ function TenderDetail() {
                   <div className="px-4 py-3">
                     {tender.documents && tender.documents.length > 0 ? (
                       <ul className="space-y-2">
-                        {tender.documents.map((doc, i) => (
-                          <li key={`${doc.downloadLink}-${i}`}>
-                            <a
-                              href={doc.downloadLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              download
-                              className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 text-sm transition hover:border-primary/30 hover:bg-muted/40"
-                            >
-                              <FileText className="h-4 w-4 shrink-0 text-primary" />
-                              <span className="min-w-0 flex-1 truncate font-medium text-primary hover:underline">
-                                {blockText(doc.name)}
-                              </span>
-                              <span className="hidden rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground sm:inline-flex">
-                                DIRECT
-                              </span>
-                              <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                            </a>
-                          </li>
-                        ))}
+                        {tender.documents.map((doc, i) => {
+                          const downloadKey = tenderDocumentDownloadKey(doc);
+                          const isDownloading = activeDocumentDownloadKey === downloadKey;
+                          const downloadError = documentDownloadError?.key === downloadKey ? documentDownloadError.message : null;
+                          return (
+                            <li key={`${doc.downloadLink}-${i}`} className="space-y-1.5">
+                              <button
+                                type="button"
+                                onClick={() => void handleDownloadDocument(doc)}
+                                disabled={anyDocumentDownloadLoading}
+                                aria-busy={isDownloading}
+                                className="flex w-full items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 text-left text-sm transition hover:border-primary/30 hover:bg-muted/40 disabled:cursor-wait disabled:opacity-70"
+                              >
+                                <FileText className="h-4 w-4 shrink-0 text-primary" />
+                                <span className="min-w-0 flex-1 truncate font-medium text-primary">
+                                  {blockText(doc.name)}
+                                </span>
+                                <span className="hidden rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground sm:inline-flex">
+                                  {isDownloading ? "Скачивание" : "Скачать"}
+                                </span>
+                                {isDownloading ? (
+                                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+                                ) : (
+                                  <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                )}
+                              </button>
+                              {downloadError && (
+                                <p className="px-1 text-xs leading-5 text-amber-700" role="alert">
+                                  {downloadError}
+                                </p>
+                              )}
+                            </li>
+                          );
+                        })}
                       </ul>
                     ) : (
                       <div className="space-y-1 py-2">
@@ -1179,10 +1227,10 @@ function TenderDetail() {
                   <button
                     type="button"
                     onClick={handleDownloadOriginalSpec}
-                    disabled={!pickedSpecDocument || specDownloadLoading}
+                    disabled={!pickedSpecDocument || anyDocumentDownloadLoading}
                     className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
                   >
-                    <Download className="h-4 w-4" />
+                    {specDownloadLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                     {specDownloadLoading ? "Скачивание…" : "Скачать ТС"}
                   </button>
                   {displayTechnicalSpec && (

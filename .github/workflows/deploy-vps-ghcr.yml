@@ -10,27 +10,25 @@ on:
       - "docker-compose.prod.yml"
       - "docker-compose.ghcr.yml"
       - "scripts/deploy_ghcr_vm.sh"
+      - "scripts/enqueue_parser_vm.sh"
+      - "ops/**"
       - "tenderai/**"
       - "parser/**"
       - "tender-rag/**"
       - "tenderflow-admin/**"
   workflow_dispatch:
-    inputs:
-      image_tag:
-        description: "Docker tag to deploy. Empty means current commit SHA."
-        required: false
-        default: ""
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: vps-production
-  cancel-in-progress: true
+  # Never terminate a deployment between database shutdown and health checks.
+  cancel-in-progress: false
 
 env:
   APP_DIR: /home/cloud-user/tender1
+  PUBLIC_ORIGIN: https://qolab.kz
 
 jobs:
   test:
@@ -41,10 +39,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tenderflow-admin/package-lock.json
+
+      - name: Audit and test frontend
+        working-directory: tenderflow-admin
+        run: |
+          npm ci
+          npm audit --omit=dev --audit-level=high
+          node --import tsx --test src/lib/auth.test.ts src/lib/tenders-api.test.ts
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.25.12"
           cache-dependency-path: tenderai/go.sum
 
       - name: Test backend
@@ -59,10 +71,38 @@ jobs:
       - name: Check Python syntax
         run: python -m compileall -q parser tender-rag/app
 
+      - name: Test internal service authentication
+        env:
+          PYTHONPATH: parser:tender-rag
+        run: |
+          python -m pip install --disable-pip-version-check -q fastapi httpx pytest pydantic-settings structlog
+          PYTHONPATH=parser python -m pytest -q parser/tests/test_internal_auth.py
+          PYTHONPATH=tender-rag python -m pytest -q tender-rag/tests/test_internal_auth.py tender-rag/tests/test_health.py
+
+      - name: Validate deployment files
+        env:
+          POSTGRES_PASSWORD: ci-only-postgres-password
+          RAG_POSTGRES_PASSWORD: ci-only-rag-password
+          BACKEND_INTERNAL_SERVICE_TOKEN: ci-only-backend-service-token-at-least-32-characters
+          RAG_INTERNAL_SERVICE_TOKEN: ci-only-rag-service-token-at-least-32-characters
+        run: |
+          bash -n scripts/deploy_ghcr_vm.sh
+          bash -n scripts/enqueue_parser_vm.sh
+          bash -n ops/backup/tender-backup.sh
+          bash -n ops/firewall/tender-docker-firewall.sh
+          bash -n ops/harden_host.sh
+          docker compose \
+            -f docker-compose.prod.yml \
+            -f docker-compose.ghcr.yml \
+            config --quiet
+
   build:
     name: Build and push images
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: read
+      packages: write
     outputs:
       image_prefix: ${{ steps.meta.outputs.image_prefix }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
@@ -74,25 +114,21 @@ jobs:
       - name: Prepare image metadata
         id: meta
         env:
-          INPUT_IMAGE_TAG: ${{ github.event.inputs.image_tag }}
           PUBLIC_BACKEND_URL: ${{ vars.PUBLIC_BACKEND_URL }}
           PUBLIC_RAG_URL: ${{ vars.PUBLIC_RAG_URL }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           repo="$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
-          tag="${INPUT_IMAGE_TAG:-$GITHUB_SHA}"
-          backend_url="${PUBLIC_BACKEND_URL:-}"
-          rag_url="${PUBLIC_RAG_URL:-}"
-          if [ -z "$backend_url" ] && [ -n "$VPS_HOST" ]; then
-            backend_url="http://$VPS_HOST:8082"
+          tag="$GITHUB_SHA"
+          if [[ ! "$tag" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "GITHUB_SHA is not a full commit SHA" >&2
+            exit 1
           fi
-          if [ -z "$rag_url" ] && [ -n "$VPS_HOST" ]; then
-            rag_url="http://$VPS_HOST:8083"
-          fi
-          echo "image_prefix=ghcr.io/$repo" >> "$GITHUB_OUTPUT"
-          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "public_backend_url=${backend_url:-http://localhost:8082}" >> "$GITHUB_OUTPUT"
-          echo "public_rag_url=${rag_url:-http://localhost:8083}" >> "$GITHUB_OUTPUT"
+          backend_url="${PUBLIC_BACKEND_URL:-$PUBLIC_ORIGIN}"
+          rag_url="${PUBLIC_RAG_URL:-$PUBLIC_ORIGIN/api/v1/rag}"
+          printf 'image_prefix=ghcr.io/%s\n' "$repo" >> "$GITHUB_OUTPUT"
+          printf 'image_tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'public_backend_url=%s\n' "$backend_url" >> "$GITHUB_OUTPUT"
+          printf 'public_rag_url=%s\n' "$rag_url" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -103,6 +139,19 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite immutable commit tags
+        env:
+          IMAGE_PREFIX: ${{ steps.meta.outputs.image_prefix }}
+          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+        run: |
+          for service in backend parser rag-api frontend; do
+            image="$IMAGE_PREFIX/$service:$IMAGE_TAG"
+            if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
+              echo "Immutable image tag already exists: $image" >&2
+              exit 1
+            fi
+          done
 
       - name: Build backend
         uses: docker/build-push-action@v6
@@ -157,6 +206,9 @@ jobs:
     name: Deploy to VPS
     runs-on: ubuntu-latest
     needs: build
+    permissions:
+      contents: read
+      packages: read
 
     steps:
       - name: Checkout
@@ -166,13 +218,18 @@ jobs:
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
         run: |
           test -n "$VPS_HOST"
           test -n "$VPS_SSH_KEY"
+          test -n "$VPS_SSH_KNOWN_HOSTS"
           install -m 700 -d ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh-keygen -F "$VPS_HOST" -f ~/.ssh/known_hosts >/dev/null
 
       - name: Upload compose files and deploy script
         env:
@@ -181,14 +238,18 @@ jobs:
           APP_DIR: ${{ env.APP_DIR }}
         run: |
           user="${VPS_USER:-cloud-user}"
-          ssh "$user@$VPS_HOST" "mkdir -p '$APP_DIR/scripts' '$APP_DIR/tender-rag/db' '$APP_DIR/tender-rag/files'"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$user@$VPS_HOST" \
+            "mkdir -p '$APP_DIR/scripts' '$APP_DIR/tender-rag/db' '$APP_DIR/tender-rag/files' '$APP_DIR/ops'"
           scp docker-compose.prod.yml docker-compose.ghcr.yml "$user@$VPS_HOST:$APP_DIR/"
-          scp scripts/deploy_ghcr_vm.sh "$user@$VPS_HOST:$APP_DIR/scripts/deploy_ghcr_vm.sh"
+          scp scripts/deploy_ghcr_vm.sh scripts/enqueue_parser_vm.sh "$user@$VPS_HOST:$APP_DIR/scripts/"
           scp tender-rag/db/init.sql "$user@$VPS_HOST:$APP_DIR/tender-rag/db/init.sql"
+          tar -czf - ops | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$user@$VPS_HOST" \
+            "tar -xzf - -C '$APP_DIR'"
           if [ -f tender-rag/files/company_profile.txt ]; then
             scp tender-rag/files/company_profile.txt "$user@$VPS_HOST:$APP_DIR/tender-rag/files/company_profile.txt"
           fi
-          ssh "$user@$VPS_HOST" "chmod +x '$APP_DIR/scripts/deploy_ghcr_vm.sh'"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$user@$VPS_HOST" \
+            "chmod 700 '$APP_DIR/scripts/deploy_ghcr_vm.sh' '$APP_DIR/scripts/enqueue_parser_vm.sh' '$APP_DIR/ops/harden_host.sh'"
 
       - name: Pull images and restart services
         env:
@@ -201,13 +262,22 @@ jobs:
           GHCR_TOKEN: ${{ github.token }}
         run: |
           user="${VPS_USER:-cloud-user}"
-          token_b64="$(printf '%s' "$GHCR_TOKEN" | base64 -w0)"
-          ssh "$user@$VPS_HOST" "
+          if [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Invalid Docker image tag" >&2
+            exit 1
+          fi
+          printf -v q_app_dir '%q' "$APP_DIR"
+          printf -v q_image_prefix '%q' "$GHCR_IMAGE_PREFIX"
+          printf -v q_image_tag '%q' "$IMAGE_TAG"
+          printf -v q_ghcr_username '%q' "$GHCR_USERNAME"
+          printf -v q_deploy_script '%q' "$APP_DIR/scripts/deploy_ghcr_vm.sh"
+          printf '%s' "$GHCR_TOKEN" | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$user@$VPS_HOST" "
             set -euo pipefail
-            export APP_DIR='$APP_DIR'
-            export GHCR_IMAGE_PREFIX='$GHCR_IMAGE_PREFIX'
-            export IMAGE_TAG='$IMAGE_TAG'
-            export GHCR_USERNAME='$GHCR_USERNAME'
-            export GHCR_TOKEN=\$(printf '%s' '$token_b64' | base64 -d)
-            bash '$APP_DIR/scripts/deploy_ghcr_vm.sh'
+            sudo docker login ghcr.io -u $q_ghcr_username --password-stdin >/dev/null
+            cleanup() { sudo docker logout ghcr.io >/dev/null 2>&1 || true; }
+            trap cleanup EXIT
+            export APP_DIR=$q_app_dir
+            export GHCR_IMAGE_PREFIX=$q_image_prefix
+            export IMAGE_TAG=$q_image_tag
+            bash $q_deploy_script
           "

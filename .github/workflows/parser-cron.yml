@@ -1,127 +1,65 @@
-name: Parser Cron
+name: Parser schedule
 
 on:
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
     inputs:
-      max_pages:
-        description: "Max goszakup pages to scan. 0 means no explicit parser limit."
-        required: false
-        default: "6"
-      max_lots:
-        description: "Max new lots to process. 0 means no limit."
-        required: false
-        default: "600"
       run_mode:
-        description: "Run mode: parse or reanalyze_existing."
-        required: false
-        default: "parse"
-      reanalyze_limit:
-        description: "Max existing lots to re-run AI suitability for. 0 means all lots."
-        required: false
-        default: "0"
+        description: "Run mode"
+        type: choice
+        required: true
+        default: parse
+        options:
+          - parse
+          - reanalyze_existing
+
+permissions:
+  contents: read
 
 concurrency:
-  group: parser-cron
+  group: parser-schedule
   cancel-in-progress: false
 
 jobs:
-  parser:
+  enqueue:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    defaults:
-      run:
-        working-directory: parser
+    timeout-minutes: 5
+    env:
+      APP_DIR: /home/cloud-user/tender1
+      RUN_MODE: ${{ github.event.inputs.run_mode || 'parse' }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('parser/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
-
-      - name: Check goszakup.gov.kz connectivity
-        run: |
-          python - <<'PY'
-          import time
-          import socket
-          import urllib.request
-
-          host = "goszakup.gov.kz"
-          url = "https://goszakup.gov.kz/ru/search/lots"
-          for attempt in range(1, 4):
-              try:
-                  print("dns", host, socket.gethostbyname(host))
-                  req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                  with urllib.request.urlopen(req, timeout=20) as response:
-                      print("http_status", response.status)
-                      print(response.read(200).decode("utf-8", "ignore"))
-                  break
-              except Exception as exc:
-                  print(f"connectivity_check_attempt_{attempt}_failed: {exc}")
-                  if attempt < 3:
-                      time.sleep(10)
-                  else:
-                      print("::warning::goszakup.gov.kz connectivity check failed after retries; continuing to parser run")
-          PY
-
-      - name: Run parser once
+      - name: Install pinned SSH identity
         env:
-          DATABASE_URL: ${{ secrets.PARSER_DATABASE_URL }}
-          RAG_API_BASE: ${{ secrets.RAG_API_BASE }}
-          DICTIONARIES_API_URL: ${{ secrets.DICTIONARIES_API_URL }}
-          POLL_INTERVAL_SECONDS: "1800"
-          MAX_WORKERS: "4"
-          HEADLESS: "true"
-          DOWNLOAD_DIR: "./downloads"
-          STRICT_KEYWORD_FILTER: "false"
-          COLLECT_ALL_ACTIVE_LOTS: "true"
-          SMART_MATCH_ENABLED: "true"
-          SMART_MATCH_USE_MORPHOLOGY: "true"
-          SEMANTIC_MATCH_ENABLED: "false"
-          AI_LOT_FILTER_ENABLED: "true"
-          AI_LOT_FILTER_MIN_SCORE: "65"
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: "llama-3.1-8b-instant"
-          STOP_AT_FIRST_SEEN_LOT: "false"
-          PROCESS_EXISTING_LOTS: "true"
-          MAX_LOTS_PER_CYCLE: ${{ github.event.inputs.max_lots || '600' }}
-          PLATFORMS: "goszakup"
-          DEFAULT_KEYWORDS: ""
-          OUR_BINS: ${{ secrets.OUR_BINS }}
-          ZAKUP_PUBLIC_BASE_URL: "https://zakup.gov.kz"
-          ZAKUP_LOTS_URL: "https://zakup.gov.kz/home/lots"
-          ZAKUP_LOTS_LIMIT: "100"
-          ZAKUP_LOTS_MAX_PAGES: ${{ github.event.inputs.max_pages || '6' }}
-          ZAKUP_LOTS_SYSTEM_IDS: ""
-          ZAKUP_HOST_RESOLVER_IP: ${{ secrets.ZAKUP_HOST_RESOLVER_IP }}
-          GOSZAKUP_BASE_URL: "https://goszakup.gov.kz"
-          GOSZAKUP_SEARCH_URL: "https://goszakup.gov.kz/ru/search/lots"
-          GOSZAKUP_LOTS_COUNT_RECORD: "50"
-          GOSZAKUP_LOTS_MAX_PAGES: ${{ github.event.inputs.max_pages || '6' }}
-          GOSZAKUP_OWS_TOKEN: ""
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ""
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
         run: |
-          if [ "${{ github.event.inputs.run_mode || 'parse' }}" = "reanalyze_existing" ]; then
-            python main.py --reanalyze-existing --limit "${{ github.event.inputs.reanalyze_limit || '0' }}"
-          else
-            python main.py --once
-          fi
+          test -n "$VPS_HOST"
+          test -n "$VPS_SSH_KEY"
+          test -n "$VPS_SSH_KNOWN_HOSTS"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh-keygen -F "$VPS_HOST" -f ~/.ssh/known_hosts >/dev/null
+
+      - name: Enqueue over the SSH control plane
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          case "$RUN_MODE" in
+            parse|reanalyze_existing) ;;
+            *)
+              echo "Unsupported run mode: $RUN_MODE" >&2
+              exit 1
+              ;;
+          esac
+
+          user="${VPS_USER:-cloud-user}"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$user@$VPS_HOST" \
+            "APP_DIR='$APP_DIR' bash '$APP_DIR/scripts/enqueue_parser_vm.sh' '$RUN_MODE'"

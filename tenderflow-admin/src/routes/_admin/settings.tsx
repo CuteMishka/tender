@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/admin/PageHeader";
 import { pushNotification } from "@/hooks/use-notifications";
 import { useTheme, THEMES } from "@/hooks/use-theme";
 import { getCurrentUser } from "@/lib/auth";
+import { apiFetch } from "@/lib/api-client";
 import { getLocalApiBase } from "@/lib/tenders-api";
 
 export const Route = createFileRoute("/_admin/settings")({
@@ -173,7 +174,7 @@ function Settings() {
   const loadParserStatus = async () => {
     const base = getLocalApiBase();
     try {
-      const res = await fetch(`${base}/api/v1/parser/status`);
+      const res = await apiFetch(`${base}/api/v1/parser/status`);
       const body = res.ok ? await res.json() : null;
       setParserStatus(body && !body.error ? body as ParserStatus : null);
     } catch {
@@ -193,7 +194,7 @@ function Settings() {
       return;
     }
     const base = getLocalApiBase();
-    fetch(`${base}/api/v1/users/${currentUser.id}/telegram`)
+    apiFetch(`${base}/api/v1/users/${currentUser.id}/telegram`)
       .then((res) => res.ok ? res.json() : null)
       .then((body) => {
         if (!body) return;
@@ -216,7 +217,7 @@ function Settings() {
     try {
       if (!currentUser?.id) throw new Error("Пользователь не найден. Войдите заново.");
       const base = getLocalApiBase();
-      const res = await fetch(`${base}/api/v1/users/${currentUser.id}/telegram`, {
+      const res = await apiFetch(`${base}/api/v1/users/${currentUser.id}/telegram`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -244,7 +245,7 @@ function Settings() {
     try {
       if (!currentUser?.id) throw new Error("Пользователь не найден. Войдите заново.");
       const base = getLocalApiBase();
-      const res = await fetch(`${base}/api/v1/users/${currentUser.id}/telegram/test`, { method: "POST" });
+      const res = await apiFetch(`${base}/api/v1/users/${currentUser.id}/telegram/test`, { method: "POST" });
       const body = await res.json().catch(() => null);
       if (!res.ok) throw new Error(body?.error || "Не удалось отправить тест");
       pushNotification("success", "Тест отправлен", "Проверьте сообщение от Telegram-бота.", "/settings");
@@ -259,7 +260,7 @@ function Settings() {
     setParserRunning(true);
     try {
       const base = getLocalApiBase();
-      const res = await fetch(`${base}/api/v1/parser/run`, { method: "POST" });
+      const res = await apiFetch(`${base}/api/v1/parser/run`, { method: "POST" });
       const body = await res.json().catch(() => null);
       if (!res.ok) throw new Error(body?.error || "Не удалось запустить парсер");
       pushNotification("success", "Парсер запускается", "Запрос отправлен на ВМ. Статус обновится автоматически.", "/settings");
@@ -275,7 +276,7 @@ function Settings() {
     setAiReanalyzing(true);
     try {
       const base = getLocalApiBase();
-      const res = await fetch(`${base}/api/v1/parser/reanalyze-existing`, { method: "POST" });
+      const res = await apiFetch(`${base}/api/v1/parser/reanalyze-existing`, { method: "POST" });
       const body = await res.json().catch(() => null);
       if (!res.ok) throw new Error(body?.error || "Не удалось запустить AI-переоценку");
       pushNotification("success", "AI-переоценка запускается", "Переоценка отправлена в текущий runner-механизм. Статус обновится автоматически.", "/settings");

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Tender database backup
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 UTC
+RandomizedDelaySec=15m
+Persistent=true
+Unit=tender-backup.service
+
+[Install]
+WantedBy=timers.target

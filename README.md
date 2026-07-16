@@ -32,8 +32,10 @@ cp .env.production.example .env
 ```env
 POSTGRES_PASSWORD=...
 RAG_POSTGRES_PASSWORD=...
+BACKEND_INTERNAL_SERVICE_TOKEN=<distinct random value, 32+ characters>
+RAG_INTERNAL_SERVICE_TOKEN=<different random value, 32+ characters>
 PUBLIC_BACKEND_URL=https://api.example.com
-PUBLIC_RAG_URL=https://rag.example.com
+PUBLIC_RAG_URL=https://api.example.com/api/v1/rag
 CORS_ALLOWED_ORIGINS=https://app.example.com,https://api.example.com
 TENDERPLUS_TOKEN=...
 GEMINI_API_KEY=...
@@ -66,8 +68,8 @@ VPS_SSH_KEY=<private SSH key with access to the VPS>
 И GitHub Variables:
 
 ```text
-PUBLIC_BACKEND_URL=http://85.116.182.35:8082
-PUBLIC_RAG_URL=http://85.116.182.35:8083
+PUBLIC_BACKEND_URL=https://qolab.kz
+PUBLIC_RAG_URL=https://qolab.kz/api/v1/rag
 ```
 
 Пароль от VPS в GitHub не кладите. Создайте отдельный SSH-ключ для деплоя и добавьте публичную часть в `~/.ssh/authorized_keys` пользователя `cloud-user` на сервере.
@@ -116,14 +118,14 @@ curl http://localhost:8083/health
 В системе используются роли:
 
 - **Админ**: полный доступ.
-- **Директор**: почти полный доступ, включая просмотр заявок на регистрацию, назначение ролей, изменение ролей и удаление пользователей.
-- **Специалист по тендерам**: работает с лотами, справочниками ключевых слов, RAG-базой знаний, преимуществами/блокерами, критериями AI-анализа, ревью и комментариями по лотам.
+- **Директор**: управляет workflow и пользователями, но не может назначать или изменять администратора.
+- **Специалист по тендерам**: работает с лотами, аналитикой, AI-анализом, автоматической обработкой ТС, ревью и комментариями; прямую запись в общую RAG-базу и системные настройки выполняет только администратор.
 
 Страница входа больше не показывает демо-доступ. Пользователь может подать заявку на регистрацию прямо с `/login`: ФИО, email, пароль, компания, должность и комментарий. Заявка сохраняется в backend таблицу `registration_requests` со статусом `pending`.
 
 Директор или админ открывает `/users`, видит входящие заявки и может:
 
-- **принять заявку** с назначением роли `admin`, `director` или `tender_specialist`;
+- **принять заявку** с назначением роли `director` или `tender_specialist`; роль `admin` может выдать только действующий администратор;
 - **отклонить заявку**;
 - **изменить роль существующего пользователя**;
 - **удалить пользователя**.
@@ -133,6 +135,8 @@ Backend endpoints:
 ```text
 POST /api/v1/auth/login
 POST /api/v1/auth/register-request
+GET /api/v1/auth/me
+POST /api/v1/auth/logout
 GET /api/v1/users
 PATCH /api/v1/users/{id}/role
 DELETE /api/v1/users/{id}
@@ -141,12 +145,14 @@ POST /api/v1/registration-requests/{id}/approve
 POST /api/v1/registration-requests/{id}/reject
 ```
 
-При первом запуске backend создаёт admin-пользователя, если в базе ещё нет ни одного пользователя с ролью `admin`. Значения можно переопределить через:
+Сессии хранятся на сервере; браузер получает `HttpOnly` cookie, а изменяющие запросы дополнительно защищены CSRF-токеном. При первом запуске admin создаётся только если в базе ещё нет администратора и явно заданы безопасные bootstrap-данные:
 
 ```env
 ADMIN_EMAIL=admin@tender.local
-ADMIN_PASSWORD=admin
+ADMIN_PASSWORD=замените-на-случайный-пароль-из-12-и-более-символов
 ```
+
+Слабый или пустой `ADMIN_PASSWORD` не создаёт учётную запись. После bootstrap удалите эту переменную из окружения.
 
 Лоты поддерживают рабочий процесс:
 
@@ -265,8 +271,8 @@ npm install
 VITE_BACK_API=http://localhost:8082
 VITE_LOCAL_API=http://localhost:8082
 
-# RAG-сервис (если запущен)
-VITE_RAG_API=http://localhost:8083
+# Браузер обращается к RAG только через защищённый Go proxy
+VITE_RAG_API=http://localhost:8082/api/v1/rag
 
 # Прокси для автозагрузки ТЗ из площадки
 VITE_FETCH_DOCUMENT_PROXY_URL=/api/v1/fetch-document
@@ -282,7 +288,7 @@ npm run dev
 
 Фронтенд откроется на **http://localhost:5173**.
 
-**Логин:** `admin` / `admin`
+Демо-пароля нет. Используйте созданную администратором учётную запись или подайте заявку на доступ.
 
 ---
 
@@ -292,9 +298,9 @@ npm run dev
 |------|--------|
 | `5173` | Фронтенд (Vite dev server) |
 | `8082` | Go-бэкенд |
-| `8083` | RAG-сервис |
-| `5433` | PostgreSQL (Go-бэкенд) |
-| `5437` | PostgreSQL + pgvector (RAG) |
+| `8083` | RAG-сервис (только loopback/Docker в production) |
+| `5433` | PostgreSQL (только локальная разработка) |
+| `5437` | PostgreSQL + pgvector (только локальная разработка) |
 
 ---
 
@@ -360,6 +366,6 @@ tender1/
 |----------|---------|
 | `connection refused` на 5433 | Проверьте `docker compose up -d` в `tenderai/` |
 | Тендеры возвращают 503 | Задайте `TENDERPLUS_TOKEN` в `tenderai/.env` |
-| AI-анализ не работает | Убедитесь, что RAG запущен и `VITE_RAG_API` указан в `.env` фронта |
+| AI-анализ не работает | Убедитесь, что RAG запущен, `BACKEND_INTERNAL_SERVICE_TOKEN` и `RAG_INTERNAL_SERVICE_TOKEN` заданы разными значениями и переданы нужным сервисам, а frontend использует `/api/v1/rag` |
 | «Автозагрузка ТЗ не работает» | Задайте `VITE_FETCH_DOCUMENT_PROXY_URL` и добавьте `tenderplus.kz` в `FETCH_DOCUMENT_ALLOWED_HOSTS` |
 | CORS-ошибки в браузере | Добавьте URL фронта в `CORS_ALLOWED_ORIGINS` бэкенда |

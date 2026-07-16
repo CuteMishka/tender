@@ -34,5 +34,6 @@ dist/
 backend-server-ai-positive
 
 # Local tool state
+.lazyweb/
 tenderflow-admin/.agents/
 tenderflow-admin/skills-lock.json

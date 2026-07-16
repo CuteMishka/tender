@@ -1,3 +1,5 @@
+import { apiFetch } from "./api-client.ts";
+
 // ─── Viewed-tenders tracker ───────────────────────────────────────────────────
 
 const VIEWED_KEY = "viewed_tenders";
@@ -653,7 +655,7 @@ export async function fetchTendersList(input: {
   if (input.suitable) params.set("suitable", "true");
 
   const url = `${base}/api/v1/tenders?${params.toString()}`;
-  const res = await fetch(url);
+  const res = await apiFetch(url);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Tenders API ${res.status}: ${text.slice(0, 240)}`);
@@ -674,7 +676,7 @@ export async function fetchTenderById(id: number): Promise<TenderItem> {
   const base = getLocalApiBase();
 
   // Сначала пробуем прямой GET /api/v1/tenders/:id
-  const detailRes = await fetch(`${base}/api/v1/tenders/${id}`);
+  const detailRes = await apiFetch(`${base}/api/v1/tenders/${id}`);
   if (detailRes.ok) {
     let body: unknown;
     try {
@@ -705,7 +707,7 @@ export async function removeTenderFromSuitable(id: number): Promise<void> {
     throw new Error("Некорректный ID тендера");
   }
   const base = getLocalApiBase();
-  const res = await fetch(`${base}/api/v1/tenders/${id}/suitable`, { method: "DELETE" });
+  const res = await apiFetch(`${base}/api/v1/tenders/${id}/suitable`, { method: "DELETE" });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Tenders API ${res.status}: ${text.slice(0, 240)}`);
@@ -773,7 +775,9 @@ function readRagServiceBaseFromEnv(): string | undefined {
 }
 
 export function getRagApiBase(): string {
-  return resolveRagBase(readRagServiceBaseFromEnv(), 8083, DEFAULT_LOT_ANALYZE_BASE);
+  // Browser traffic always traverses the authenticated Go API. The RAG
+  // container is an internal service and must never receive browser cookies.
+  return `${getLocalApiBase()}/api/v1/rag`;
 }
 
 /** @deprecated предпочтительно getRagApiBase */
@@ -904,13 +908,13 @@ export async function fetchLotAnalyze(lotText: string, options?: { cacheKey?: st
 
   const request = (async () => {
     const base = getRagApiBase();
-    const url = `${base}/v1/lot/analyze`;
+    const url = `${base}/lot/analyze`;
     const controller = new AbortController();
     const timeoutMs = options?.timeoutMs ?? 60_000;
     const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await apiFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json, text/plain;q=0.9, */*;q=0.8" },
         body: JSON.stringify({ lot_text: trimmed, profile: readCompanyProfile() }),
@@ -992,7 +996,7 @@ export async function fetchDocumentBlobViaBackendProxy(remoteUrl: string, option
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   let res: Response;
   try {
-    res = await fetch(proxy, {
+    res = await apiFetch(proxy, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1014,7 +1018,11 @@ export async function fetchDocumentBlobViaBackendProxy(remoteUrl: string, option
     const detail = readFetchDocumentProxyError(res.status, text);
     throw new Error(`Прокси документа (${res.status}): ${detail}`);
   }
-  return res.blob();
+  const blob = await res.blob();
+  if (blob.size === 0) {
+    throw new Error("Площадка вернула пустой файл. Попробуйте скачать другой документ или повторите позже.");
+  }
+  return blob;
 }
 
 function readBackendJsonError(status: number, rawText: string): string {
@@ -1043,7 +1051,7 @@ export async function autoExtractTenderSpecSummary(tenderId: number, options?: {
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   let res: Response;
   try {
-    res = await fetch(`${base}/api/v1/tenders/${tenderId}/spec-summary/auto`, {
+    res = await apiFetch(`${base}/api/v1/tenders/${tenderId}/spec-summary/auto`, {
       method: "POST",
       signal: controller.signal,
     });
@@ -1092,7 +1100,7 @@ export async function askTenderAssistant(
   try {
     const legacyAssistantSegment = decodeURIComponent(["%63", "%6c", "%6f", "%75", "%64", "%79"].join(""));
     const path = "/api/v1/tenders/" + tenderId + "/" + legacyAssistantSegment + "/chat";
-    res = await fetch(base + path, {
+    res = await apiFetch(base + path, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
@@ -1134,15 +1142,23 @@ function guessRagDocExtension(name: string, downloadLink: string): "pdf" | "docx
   return tryOne(name) ?? tryOne(downloadLink);
 }
 
+const cyrillicSpecAbbreviation = /(^|[^\p{L}\p{N}])т[\s._-]*[сз](?=$|[^\p{L}\p{N}])/iu;
+const explicitSpecMarker =
+  /спецификац|технич|тех[\s._-]*спек|тех[\s._-]*задан|(^|[^a-z0-9])(?:tech[\s._-]*spec(?:ification)?|technical(?:[\s._-]*specification)?|specification)(?=$|[^a-z0-9])/i;
+
+function looksLikeTechnicalSpecification(doc: TenderDocument): boolean {
+  const value = `${doc.name} ${doc.downloadLink}`.trim();
+  return explicitSpecMarker.test(value) || cyrillicSpecAbbreviation.test(value);
+}
+
 export function pickTenderDocumentForRag(documents: TenderDocument[] | undefined): TenderDocument | null {
   if (!documents?.length) return null;
   const ok = documents.filter((d) => {
     const ext = guessRagDocExtension(d.name, d.downloadLink);
-    return ext === "pdf" || ext === "docx";
+    return ext === "pdf" || ext === "docx" || ext === "doc";
   });
   if (!ok.length) return null;
-  const kw = /спецификац|технич|т\.?\s*з\.?|техзадан/i;
-  const preferred = ok.find((d) => kw.test(d.name));
+  const preferred = ok.find(looksLikeTechnicalSpecification);
   return preferred ?? ok[0];
 }
 
@@ -1219,7 +1235,7 @@ export async function indexLotDocument(
   if (!trimmedId) throw new Error("Пустой идентификатор лота");
 
   const base = getRagApiBase();
-  const url = `${base}/v1/lots/${encodeURIComponent(trimmedId)}/index-document`;
+  const url = `${base}/lots/${encodeURIComponent(trimmedId)}/index-document`;
   const form = new FormData();
   form.append("file", file);
   if (options?.sourceHint !== undefined && options.sourceHint !== "") {
@@ -1228,7 +1244,7 @@ export async function indexLotDocument(
   form.append("extract_spec_points", options?.extractSpecPoints === true ? "true" : "false");
   form.append("include_extracted_text", options?.includeExtractedText === false ? "false" : "true");
 
-  const res = await fetch(url, { method: "POST", body: form });
+  const res = await apiFetch(url, { method: "POST", body: form });
   const rawText = await res.text();
   let body: unknown = null;
   try {
@@ -1258,8 +1274,8 @@ export async function indexLotText(
   if (!trimmedText) throw new Error("Пустой текст спецификации");
 
   const base = getRagApiBase();
-  const url = `${base}/v1/lots/${encodeURIComponent(trimmedId)}/index`;
-  const res = await fetch(url, {
+  const url = `${base}/lots/${encodeURIComponent(trimmedId)}/index`;
+  const res = await apiFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1288,8 +1304,8 @@ export async function fetchLotSpecSummary(lotId: string): Promise<LotSpecSummary
   if (!trimmedId) return null;
 
   const base = getRagApiBase();
-  const url = `${base}/v1/lots/${encodeURIComponent(trimmedId)}/spec-summary`;
-  const res = await fetch(url);
+  const url = `${base}/lots/${encodeURIComponent(trimmedId)}/spec-summary`;
+  const res = await apiFetch(url);
   const rawText = await res.text();
   if (res.status === 404) return null;
   if (!res.ok) {
@@ -1389,7 +1405,7 @@ export const savedLotStatusLabels: Record<string, string> = {
 };
 
 async function fetchBackendJSON<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, options);
+  const res = await apiFetch(url, options);
   const rawText = await res.text();
   if (!res.ok) {
     throw new Error(readBackendJsonError(res.status, rawText));

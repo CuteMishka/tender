@@ -124,11 +124,13 @@ func (h *Handler) GetParserStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) RunParserNow(w http.ResponseWriter, r *http.Request) {
+	requestedBy := parserRequestedBy(r)
 	if h.DB == nil && h.TP != nil {
+		securityAudit(r, "parser_run_triggered", http.StatusOK, PrincipalFromContext(r.Context()))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(ParserRequestDTO{
 			RequestedAt: time.Now().Format(time.RFC3339),
-			RequestedBy: "system",
+			RequestedBy: requestedBy,
 			Status:      "not_required",
 			Message:     "Отдельный parser отключён: актуальные лоты берутся напрямую из TenderPlus API при каждом запросе.",
 		})
@@ -139,12 +141,9 @@ func (h *Handler) RunParserNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.expireStaleParserRequests()
-	requestedBy := strings.TrimSpace(r.Header.Get("X-User-Email"))
-	if requestedBy == "" {
-		requestedBy = "admin"
-	}
 	if parserUsesGitHub() {
 		if active := h.currentParserRequest(); active != nil && isActiveParserStatus(active.Status) {
+			securityAudit(r, "parser_run_triggered", http.StatusAccepted, PrincipalFromContext(r.Context()))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(active)
@@ -161,6 +160,7 @@ func (h *Handler) RunParserNow(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadGateway, err.Error())
 			return
 		}
+		securityAudit(r, "parser_run_triggered", http.StatusAccepted, PrincipalFromContext(r.Context()))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(parserRequestDTO(req))
@@ -168,6 +168,7 @@ func (h *Handler) RunParserNow(w http.ResponseWriter, r *http.Request) {
 	}
 	var existing domain.ParserRunRequest
 	if err := h.DB.Where("status IN ?", []string{"pending", "running"}).Order("requested_at DESC").First(&existing).Error; err == nil {
+		securityAudit(r, "parser_run_triggered", http.StatusAccepted, PrincipalFromContext(r.Context()))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(parserRequestDTO(existing))
@@ -182,17 +183,20 @@ func (h *Handler) RunParserNow(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "не удалось поставить парсер в очередь")
 		return
 	}
+	securityAudit(r, "parser_run_triggered", http.StatusAccepted, PrincipalFromContext(r.Context()))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(parserRequestDTO(req))
 }
 
 func (h *Handler) ReanalyzeExistingTenders(w http.ResponseWriter, r *http.Request) {
+	requestedBy := parserRequestedBy(r)
 	if h.DB == nil && h.TP != nil {
+		securityAudit(r, "parser_reanalysis_triggered", http.StatusOK, PrincipalFromContext(r.Context()))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(ParserRequestDTO{
 			RequestedAt: time.Now().Format(time.RFC3339),
-			RequestedBy: "system",
+			RequestedBy: requestedBy,
 			Status:      "not_required",
 			Message:     "AI/RAG-анализ запускается по документам TenderPlus в карточке лота; отдельная переоценка parser-а не нужна.",
 		})
@@ -208,14 +212,11 @@ func (h *Handler) ReanalyzeExistingTenders(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if active := h.currentParserRequest(); active != nil && isActiveParserStatus(active.Status) {
+		securityAudit(r, "parser_reanalysis_triggered", http.StatusAccepted, PrincipalFromContext(r.Context()))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(active)
 		return
-	}
-	requestedBy := strings.TrimSpace(r.Header.Get("X-User-Email"))
-	if requestedBy == "" {
-		requestedBy = "admin"
 	}
 	reanalyzeLimit := parserReanalyzeLimit()
 	if !parserUsesGitHub() {
@@ -228,6 +229,7 @@ func (h *Handler) ReanalyzeExistingTenders(w http.ResponseWriter, r *http.Reques
 			writeJSONError(w, http.StatusInternalServerError, "РЅРµ СѓРґР°Р»РѕСЃСЊ РїРѕСЃС‚Р°РІРёС‚СЊ AI-РїРµСЂРµРѕС†РµРЅРєСѓ РІ РѕС‡РµСЂРµРґСЊ")
 			return
 		}
+		securityAudit(r, "parser_reanalysis_triggered", http.StatusAccepted, PrincipalFromContext(r.Context()))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(parserRequestDTO(req))
@@ -248,9 +250,27 @@ func (h *Handler) ReanalyzeExistingTenders(w http.ResponseWriter, r *http.Reques
 		writeJSONError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	securityAudit(r, "parser_reanalysis_triggered", http.StatusAccepted, PrincipalFromContext(r.Context()))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(parserRequestDTO(req))
+}
+
+func parserRequestedBy(r *http.Request) string {
+	principal := PrincipalFromContext(r.Context())
+	if principal == nil {
+		return "unauthenticated"
+	}
+	if principal.Service {
+		return "internal-service"
+	}
+	if principal.User == nil {
+		return "unauthenticated"
+	}
+	if email := strings.TrimSpace(principal.User.Email); email != "" {
+		return email
+	}
+	return fmt.Sprintf("user:%d", principal.User.ID)
 }
 
 func (h *Handler) lastParserRequest() *ParserRequestDTO {

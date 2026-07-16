@@ -28,6 +28,7 @@ import {
   type SavedLotStatus,
 } from "@/lib/tenders-api";
 import { getCurrentUser, type UserRole } from "@/lib/auth";
+import { apiFetch } from "@/lib/api-client";
 import { pushNotification } from "@/hooks/use-notifications";
 
 export const Route = createFileRoute("/_admin/workflow")({
@@ -166,7 +167,7 @@ function Workflow() {
     setLoading(true);
     Promise.all([
       fetchSavedLots().catch(() => []),
-      fetch(`${getLocalApiBase()}/api/v1/users`).then((res) => res.ok ? res.json() : []).catch(() => []),
+      apiFetch(`${getLocalApiBase()}/api/v1/users`).then((res) => res.ok ? res.json() : []).catch(() => []),
     ])
       .then(([saved, backendUsers]) => {
         if (cancelled) return;

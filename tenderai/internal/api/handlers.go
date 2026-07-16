@@ -23,6 +23,9 @@ type Handler struct {
 	FetchDoc   *FetchDocumentProxy
 	TP         *tenderplus.Client
 	RagAPIBase string
+	Auth       *AuthManager
+	// RAGInternalServiceToken is sent only to the explicitly configured RAG service.
+	RAGInternalServiceToken string
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {

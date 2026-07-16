@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { getCurrentUser, roleLabels, type UserRole } from "@/lib/auth";
+import { apiFetch } from "@/lib/api-client";
 import { formatTenderAmount, getAllViewInfo, getLocalApiBase, type TenderViewInfo } from "@/lib/tenders-api";
 
 export const Route = createFileRoute("/_admin/cabinet")({
@@ -107,8 +108,8 @@ function Cabinet() {
     try {
       const base = getLocalApiBase();
       const [lotRows, userRows] = await Promise.all([
-        fetch(`${base}/api/v1/lots/saved`).then((res) => res.json()).catch(() => []),
-        fetch(`${base}/api/v1/users`).then((res) => res.json()).catch(() => []),
+        apiFetch(`${base}/api/v1/lots/saved`).then((res) => res.json()).catch(() => []),
+        apiFetch(`${base}/api/v1/users`).then((res) => res.json()).catch(() => []),
       ]);
       if (Array.isArray(lotRows)) setLots(lotRows);
       if (Array.isArray(userRows)) setUsers(userRows);
@@ -144,7 +145,7 @@ function Cabinet() {
   const updateLot = async (lot: SavedLot, patch: Partial<SavedLot>) => {
     setActionLoading(lot.id);
     try {
-      const res = await fetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
+      const res = await apiFetch(`${getLocalApiBase()}/api/v1/lots/participate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...lot, ...patch }),

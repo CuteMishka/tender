@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"log"
 	"os"
 	"strings"
@@ -30,7 +31,7 @@ func InitDB() *gorm.DB {
 		log.Fatalf("Ошибка подключения к базе данных: %v", err)
 	}
 
-	if err := db.AutoMigrate(&domain.User{}, &domain.RegistrationRequest{}, &domain.DictionaryItem{}, &domain.ParserRunRequest{}, &domain.TelegramSettings{}, &domain.UserTelegramBinding{}, &tenderplus.SavedLot{}, &tenderplus.TenderActivity{}, &tenderplus.TenderComment{}, &tenderplus.TenderTask{}, &analyticsModels.HistoricalLot{}, &analyticsModels.TrackedCustomer{}); err != nil {
+	if err := db.AutoMigrate(&domain.User{}, &domain.RegistrationRequest{}, &domain.AuthSession{}, &domain.DictionaryItem{}, &domain.ParserRunRequest{}, &domain.TelegramSettings{}, &domain.UserTelegramBinding{}, &tenderplus.SavedLot{}, &tenderplus.TenderActivity{}, &tenderplus.TenderComment{}, &tenderplus.TenderTask{}, &analyticsModels.HistoricalLot{}, &analyticsModels.TrackedCustomer{}); err != nil {
 		log.Fatalf("Ошибка AutoMigrate: %v", err)
 	}
 	ensureParserRuntimeSchema(db)
@@ -87,7 +88,7 @@ func ensureAdminUser(db *gorm.DB) {
 		email = "admin@tender.local"
 	}
 	var count int64
-	if err := db.Model(&domain.User{}).Where("role = ?", "admin").Count(&count).Error; err != nil || count > 0 {
+	if err := db.Model(&domain.User{}).Where("role = ? AND (status = ? OR status = '')", "admin", "active").Count(&count).Error; err != nil || count > 0 {
 		return
 	}
 	password := os.Getenv("ADMIN_PASSWORD")
@@ -110,7 +111,24 @@ func ensureAdminUser(db *gorm.DB) {
 		Role:         "admin",
 		Status:       "active",
 	}
-	_ = db.Create(&user).Error
+	var existing domain.User
+	lookupErr := db.Where("LOWER(email) = LOWER(?)", email).First(&existing).Error
+	if lookupErr == nil {
+		_ = db.Model(&existing).Updates(map[string]interface{}{
+			"password_hash": user.PasswordHash,
+			"role":          "admin",
+			"status":        "active",
+		}).Error
+		log.Print("restored configured break-glass administrator because no active administrator existed")
+		return
+	}
+	if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+		log.Printf("configured administrator lookup failed: %v", lookupErr)
+		return
+	}
+	if err := db.Create(&user).Error; err != nil {
+		log.Printf("configured administrator could not be created: %v", err)
+	}
 }
 
 func isStrongAdminPassword(password string) bool {
