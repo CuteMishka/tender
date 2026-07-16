@@ -419,7 +419,18 @@ fi
 
 echo "Starting databases and Ollama on private Docker networks..."
 NEW_PROJECT_STARTED=true
-"${compose[@]}" up -d --no-build --remove-orphans postgres rag-db llm
+if [ "$PRIMARY_CUTOVER" = true ]; then
+  # The provider currently presents an invalid certificate for Docker Hub.
+  # Reuse the image already held by the preserved legacy Ollama container so
+  # a cutover never depends on an outbound Docker Hub pull.
+  legacy_llm_image="$(sudo docker inspect --format '{{.Image}}' "${LEGACY_IDS[llm]}" 2>/dev/null || true)"
+  legacy_llm_config_image="$(sudo docker inspect --format '{{.Config.Image}}' "${LEGACY_IDS[llm]}" 2>/dev/null || true)"
+  if [ -n "$legacy_llm_image" ] && [[ "$legacy_llm_config_image" == ollama/ollama:* ]]; then
+    sudo docker tag "$legacy_llm_image" "$legacy_llm_config_image"
+  fi
+  unset legacy_llm_image legacy_llm_config_image
+fi
+"${compose[@]}" up -d --pull never --no-build --remove-orphans postgres rag-db llm
 
 echo "Ensuring the configured local model exists..."
 llm_container="$("${compose[@]}" ps -q llm)"
@@ -428,7 +439,7 @@ if [ -n "$llm_container" ]; then
 fi
 
 echo "Starting the internal APIs, frontend and parser..."
-"${compose[@]}" up -d --no-build --remove-orphans rag-api backend frontend parser
+"${compose[@]}" up -d --pull never --no-build --remove-orphans rag-api backend frontend parser
 
 echo "Waiting for loopback-only service health..."
 for _ in $(seq 1 60); do
