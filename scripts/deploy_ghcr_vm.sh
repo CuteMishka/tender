@@ -266,7 +266,10 @@ backup_database() {
     | sudo tee "$output" >/dev/null
   sudo chmod 0600 "$output"
   sudo test -s "$output"
-  sudo cat "$output" | sudo docker exec -i "$container" pg_restore --list >/dev/null
+  # Keep the file read and redirection inside the privileged shell.  A
+  # pipeline here can report 141 when pg_restore exits after reading its
+  # archive metadata, even though the archive is valid.
+  sudo sh -c "docker exec -i '$container' pg_restore --list < '$output' >/dev/null"
 }
 
 echo "Creating pre-deploy logical database backups..."
