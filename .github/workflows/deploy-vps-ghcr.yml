@@ -245,6 +245,7 @@ jobs:
             docker-compose.ghcr.yml
             scripts/deploy_ghcr_vm.sh
             scripts/enqueue_parser_vm.sh
+            scripts/rotate_vm_database_credentials.sh
             tender-rag/db/init.sql
             ops
           )
@@ -255,7 +256,7 @@ jobs:
           # rate-limits SSH and GitHub runners otherwise open too many short-lived
           # scp/ssh sessions in one minute.
           tar -czf - "${files[@]}" | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$user@$VPS_HOST" \
-            "mkdir -p '$APP_DIR/scripts' '$APP_DIR/tender-rag/db' '$APP_DIR/tender-rag/files' '$APP_DIR/ops' && tar -xzf - -C '$APP_DIR' && chmod 700 '$APP_DIR/scripts/deploy_ghcr_vm.sh' '$APP_DIR/scripts/enqueue_parser_vm.sh' '$APP_DIR/ops/harden_host.sh'"
+            "mkdir -p '$APP_DIR/scripts' '$APP_DIR/tender-rag/db' '$APP_DIR/tender-rag/files' '$APP_DIR/ops' && tar -xzf - -C '$APP_DIR' && chmod 700 '$APP_DIR/scripts/deploy_ghcr_vm.sh' '$APP_DIR/scripts/enqueue_parser_vm.sh' '$APP_DIR/scripts/rotate_vm_database_credentials.sh' '$APP_DIR/ops/harden_host.sh' && sudo env APP_DIR='$APP_DIR' bash '$APP_DIR/scripts/rotate_vm_database_credentials.sh'"
 
       - name: Pull images and restart services
         env:
