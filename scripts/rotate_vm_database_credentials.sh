@@ -124,6 +124,25 @@ compose+=(--env-file "$legacy_env")
 # Only recreate services that carry database credentials.  Pulling the whole
 # legacy stack would unnecessarily fetch the old Ollama image from Docker Hub
 # and could fail on a restricted outbound registry path.
+parser_container="$(sudo docker ps -aq --filter "label=com.docker.compose.project=$legacy_project" --filter 'label=com.docker.compose.service=parser' | head -n 1)"
+parser_image="$(sudo docker inspect --format '{{.Config.Image}}' "$parser_container" 2>/dev/null || true)"
+if [[ "$parser_image" == */parser:* ]]; then
+  ghcr_prefix="${parser_image%/parser:*}"
+else
+  ghcr_prefix="ghcr.io/cutemishka/tender"
+fi
+for service in backend parser rag-api frontend; do
+  service_container="$(sudo docker ps -aq --filter "label=com.docker.compose.project=$legacy_project" --filter "label=com.docker.compose.service=$service" | head -n 1)"
+  image_id=""
+  if [ -n "$service_container" ]; then
+    image_id="$(sudo docker inspect --format '{{.Image}}' "$service_container")"
+  fi
+  if [ -z "$image_id" ]; then
+    image_id="$(sudo docker image ls "$ghcr_prefix/$service" --format '{{.ID}}' | tail -n 1)"
+  fi
+  [ -n "$image_id" ] || { echo "No local legacy image remains for $service" >&2; exit 1; }
+  sudo docker tag "$image_id" "$ghcr_prefix/$service:latest"
+done
 "${compose[@]}" up -d --no-build --pull never --no-deps postgres rag-db backend parser rag-api frontend >/dev/null
 
 for service in postgres rag-db; do
