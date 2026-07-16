@@ -424,11 +424,14 @@ if [ "$PRIMARY_CUTOVER" = true ]; then
   # Reuse the image already held by the preserved legacy Ollama container so
   # a cutover never depends on an outbound Docker Hub pull.
   legacy_llm_image="$(sudo docker inspect --format '{{.Image}}' "${LEGACY_IDS[llm]}" 2>/dev/null || true)"
-  legacy_llm_config_image="$(sudo docker inspect --format '{{.Config.Image}}' "${LEGACY_IDS[llm]}" 2>/dev/null || true)"
-  if [ -n "$legacy_llm_image" ] && [[ "$legacy_llm_config_image" == ollama/ollama:* ]]; then
-    sudo docker tag "$legacy_llm_image" "$legacy_llm_config_image"
+  target_ollama_tag="$(env_value OLLAMA_IMAGE_TAG)"
+  target_ollama_tag="${target_ollama_tag:-0.30.0}"
+  if [ -z "$legacy_llm_image" ]; then
+    echo "The preserved legacy Ollama image is unavailable" >&2
+    exit 1
   fi
-  unset legacy_llm_image legacy_llm_config_image
+  sudo docker tag "$legacy_llm_image" "ollama/ollama:$target_ollama_tag"
+  unset legacy_llm_image target_ollama_tag
 fi
 "${compose[@]}" up -d --pull never --no-build --remove-orphans postgres rag-db llm
 
