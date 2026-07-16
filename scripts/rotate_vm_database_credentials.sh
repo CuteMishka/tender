@@ -3,7 +3,7 @@ set -Eeuo pipefail
 umask 077
 
 APP_DIR="${APP_DIR:-/home/cloud-user/tender1}"
-MARKER="${ROTATION_MARKER:-/var/lib/tender/db-credentials-rotated-v1}"
+MARKER="${ROTATION_MARKER:-/var/lib/tender/db-credentials-rotated-v2}"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/tender}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
@@ -44,12 +44,9 @@ is_weak() {
 
 current_pg="$(env_value "$canonical_env" POSTGRES_PASSWORD)"
 current_rag="$(env_value "$canonical_env" RAG_POSTGRES_PASSWORD)"
+credentials_already_strong=false
 if ! is_weak "$current_pg" && ! is_weak "$current_rag"; then
-  install -d -m 0700 "$(dirname "$MARKER")"
-  printf '%s\n' "$STAMP" > "$MARKER"
-  chmod 600 "$MARKER"
-  echo "Canonical database credentials are already strong; rotation marker recorded."
-  exit 0
+  credentials_already_strong=true
 fi
 
 legacy_project="${LEGACY_PROJECT:-cloud-user}"
@@ -76,8 +73,13 @@ for value in "$old_pg" "$old_rag" "$pg_user" "$pg_db" "$rag_user" "$rag_db"; do
   [ -n "$value" ] || { echo "Legacy database container metadata is incomplete" >&2; exit 1; }
 done
 
-new_pg="$(openssl rand -hex 32)"
-new_rag="$(openssl rand -hex 32)"
+if [ "$credentials_already_strong" = true ]; then
+  new_pg="$current_pg"
+  new_rag="$current_rag"
+else
+  new_pg="$(openssl rand -hex 32)"
+  new_rag="$(openssl rand -hex 32)"
+fi
 legacy_dir="$(sudo docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$legacy_container")"
 legacy_config="$(sudo docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "$legacy_container")"
 legacy_env="$legacy_dir/.env"
@@ -97,8 +99,10 @@ alter_role() {
         psql -v ON_ERROR_STOP=1 -U "$user" -d "$database" >/dev/null
 }
 
-alter_role "$legacy_container" "$old_pg" "$pg_user" "$pg_db" "$new_pg"
-alter_role "$legacy_rag_container" "$old_rag" "$rag_user" "$rag_db" "$new_rag"
+if [ "$credentials_already_strong" != true ]; then
+  alter_role "$legacy_container" "$old_pg" "$pg_user" "$pg_db" "$new_pg"
+  alter_role "$legacy_rag_container" "$old_rag" "$rag_user" "$rag_db" "$new_rag"
+fi
 
 replace_env_value "$canonical_env" POSTGRES_PASSWORD "$new_pg"
 replace_env_value "$canonical_env" RAG_POSTGRES_PASSWORD "$new_rag"
@@ -128,6 +132,18 @@ for service in postgres rag-db; do
     exit 1
   fi
 done
+
+legacy_container="$(sudo docker ps -q --filter "label=com.docker.compose.project=$legacy_project" --filter 'label=com.docker.compose.service=postgres' | head -n 1)"
+legacy_rag_container="$(sudo docker ps -q --filter "label=com.docker.compose.project=$legacy_project" --filter 'label=com.docker.compose.service=rag-db' | head -n 1)"
+if [ "$(container_env "$legacy_container" POSTGRES_PASSWORD)" != "$new_pg" ] || \
+   [ "$(container_env "$legacy_rag_container" POSTGRES_PASSWORD)" != "$new_rag" ]; then
+  echo "Legacy database container environments did not receive the rotated credentials" >&2
+  exit 1
+fi
+sudo docker exec -e "PGPASSWORD=$new_pg" "$legacy_container" \
+  psql -v ON_ERROR_STOP=1 -U "$pg_user" -d "$pg_db" -c 'SELECT 1' >/dev/null
+sudo docker exec -e "PGPASSWORD=$new_rag" "$legacy_rag_container" \
+  psql -v ON_ERROR_STOP=1 -U "$rag_user" -d "$rag_db" -c 'SELECT 1' >/dev/null
 
 install -d -m 0700 "$(dirname "$MARKER")"
 printf '%s\n' "$STAMP" > "$MARKER"
