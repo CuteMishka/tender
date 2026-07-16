@@ -294,3 +294,8 @@ jobs:
             sudo env APP_DIR=$q_app_dir GHCR_IMAGE_PREFIX=$q_image_prefix IMAGE_TAG=$q_image_tag bash $q_rotate_script
             bash $q_deploy_script
           "
+          curl --retry 10 --retry-all-errors --retry-delay 3 --max-time 15 -fsS "$PUBLIC_ORIGIN/healthz" >/dev/null
+          public_api_status="$(curl --retry 5 --retry-all-errors --retry-delay 2 --max-time 15 -sS -o /dev/null -w '%{http_code}' "$PUBLIC_ORIGIN/api/v1/tenders")"
+          public_rag_status="$(curl --retry 5 --retry-all-errors --retry-delay 2 --max-time 15 -sS -o /dev/null -w '%{http_code}' "$PUBLIC_ORIGIN/rag/health")"
+          test "$public_api_status" = "401"
+          test "$public_rag_status" = "404"
