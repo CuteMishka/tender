@@ -11,6 +11,7 @@ on:
       - "docker-compose.ghcr.yml"
       - "scripts/deploy_ghcr_vm.sh"
       - "scripts/enqueue_parser_vm.sh"
+      - "scripts/rotate_vm_database_credentials.sh"
       - "ops/**"
       - "tenderai/**"
       - "parser/**"
