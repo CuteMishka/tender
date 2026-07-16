@@ -2,6 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# The production compose mounts a named volume at /files/generated while the
+# container root filesystem is read-only.  Create both mount parents in the
+# image so OCI can attach the volume before the process starts.
+RUN mkdir -p /files/generated
+
 RUN set -eux; \
     export DEBIAN_FRONTEND=noninteractive; \
     apt-get update; \
