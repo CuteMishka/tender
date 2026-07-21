@@ -31,7 +31,7 @@ Set these explicitly in production:
   default `5`.
 - `AUTH_LOGIN_IP_RATE_LIMIT`: attempts per client IP per window, default `60`.
 - `AUTH_LOGIN_RATE_WINDOW`: default `15m`.
-- `AUTH_REGISTER_RATE_LIMIT`: requests per client IP, default `3`.
+- `AUTH_REGISTER_RATE_LIMIT`: requests per client IP, default `10`.
 - `AUTH_REGISTER_RATE_WINDOW`: default `1h`.
 - `AUTH_TRUSTED_PROXY_CIDRS`: immediate reverse-proxy networks. Narrow this to
   the actual Nginx/Docker network. Only a peer in this list may supply

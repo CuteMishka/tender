@@ -140,7 +140,14 @@ export const submitRegistrationRequest = async (payload: RegistrationRequestPayl
     { redirectOnUnauthorized: false },
   );
   if (!response.ok) {
-    if (response.status === 429) throw new Error("Слишком много заявок. Попробуйте позже.");
+    if (response.status === 429) {
+      const retryAfter = Number.parseInt(response.headers.get("Retry-After") || "", 10);
+      if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        const minutes = Math.max(1, Math.ceil(retryAfter / 60));
+        throw new Error(`Слишком много заявок. Повторите примерно через ${minutes} мин.`);
+      }
+      throw new Error("Слишком много заявок. Попробуйте позже.");
+    }
     if (response.status === 400) {
       throw new Error("Проверьте email и пароль: минимум 12 символов, заглавная и строчная буквы, цифра и спецсимвол.");
     }

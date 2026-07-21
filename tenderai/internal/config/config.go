@@ -117,7 +117,7 @@ func authFromEnv(corsOrigins []string) (AuthConfig, error) {
 	if err != nil {
 		return AuthConfig{}, err
 	}
-	registerLimit, err := positiveIntEnv("AUTH_REGISTER_RATE_LIMIT", 3)
+	registerLimit, err := positiveIntEnv("AUTH_REGISTER_RATE_LIMIT", 10)
 	if err != nil {
 		return AuthConfig{}, err
 	}

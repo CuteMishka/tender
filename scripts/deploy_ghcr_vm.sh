@@ -48,6 +48,20 @@ env_value() {
   sed -n "s/^${key}=//p" .env | tail -n 1 | tr -d '\r'
 }
 
+upgrade_env_default() {
+  local key="$1" old_value="$2" new_value="$3"
+  if [ "$(env_value "$key")" != "$old_value" ]; then
+    return
+  fi
+  sed -i -E "s|^${key}=${old_value}[[:space:]]*$|${key}=${new_value}|" .env
+  echo "Updated legacy default for $key."
+}
+
+# Three attempts per hour locked out legitimate users while they corrected
+# validation errors. Preserve custom operator values, but migrate the old
+# shipped default to the current, still edge-rate-limited value.
+upgrade_env_default AUTH_REGISTER_RATE_LIMIT 3 10
+
 require_env() {
   local key="$1"
   local value

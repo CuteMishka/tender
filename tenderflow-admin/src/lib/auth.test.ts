@@ -66,3 +66,23 @@ test("registration rejected by origin validation points to the canonical site", 
     globalThis.fetch = originalFetch;
   }
 });
+
+test("registration rate limit reports the server retry interval", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("too many attempts", {
+    status: 429,
+    headers: { "Retry-After": "2715" },
+  });
+  try {
+    await assert.rejects(
+      submitRegistrationRequest({
+        email: "user@example.com",
+        name: "User",
+        password: "StrongPassword1!",
+      }),
+      /через 46 мин/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
