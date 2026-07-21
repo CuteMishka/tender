@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getCurrentUser, getSession, logout, safeNextPath } from "./auth.ts";
+import { getCurrentUser, getSession, logout, safeNextPath, submitRegistrationRequest } from "./auth.ts";
 
 test("SSR never caches or fetches a browser session", async () => {
   const originalFetch = globalThis.fetch;
@@ -32,6 +32,36 @@ test("logout does not claim success when server revocation fails", async () => {
   globalThis.fetch = async () => new Response("failure", { status: 500 });
   try {
     await assert.rejects(logout(), /серверную сессию/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("registration explains invalid input instead of returning a generic error", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("invalid registration", { status: 400 });
+  try {
+    await assert.rejects(
+      submitRegistrationRequest({ email: "user@example.com", name: "User", password: "weak" }),
+      /минимум 12 символов/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("registration rejected by origin validation points to the canonical site", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("invalid request origin", { status: 403 });
+  try {
+    await assert.rejects(
+      submitRegistrationRequest({
+        email: "user@example.com",
+        name: "User",
+        password: "StrongPassword1!",
+      }),
+      /https:\/\/qolab\.kz/,
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

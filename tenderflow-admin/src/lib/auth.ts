@@ -141,6 +141,12 @@ export const submitRegistrationRequest = async (payload: RegistrationRequestPayl
   );
   if (!response.ok) {
     if (response.status === 429) throw new Error("Слишком много заявок. Попробуйте позже.");
+    if (response.status === 400) {
+      throw new Error("Проверьте email и пароль: минимум 12 символов, заглавная и строчная буквы, цифра и спецсимвол.");
+    }
+    if (response.status === 403) {
+      throw new Error("Откройте форму на https://qolab.kz и отправьте заявку ещё раз.");
+    }
     throw new Error("Не удалось отправить заявку");
   }
 };
