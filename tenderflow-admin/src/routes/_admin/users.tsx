@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/admin/PageHeader";
-import { Check, Search, Trash2, X } from "lucide-react";
+import { Check, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { canManageUsers, getCurrentUser, roleLabels, type UserRole } from "@/lib/auth";
 import { apiFetch } from "@/lib/api-client";
 import { getLocalApiBase } from "@/lib/tenders-api";
@@ -43,19 +43,26 @@ function Users() {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const loadInFlight = useRef(false);
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = useCallback(async (silent = false) => {
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
+    if (!silent) setLoading(true);
     setLoadError(null);
     try {
       const [usersRes, requestsRes] = await Promise.all([
-        apiFetch(`${getLocalApiBase()}/api/v1/users`),
-        apiFetch(`${getLocalApiBase()}/api/v1/registration-requests?status=pending`),
+        apiFetch(`${getLocalApiBase()}/api/v1/users`, { cache: "no-store" }),
+        apiFetch(`${getLocalApiBase()}/api/v1/registration-requests?status=pending`, {
+          cache: "no-store",
+        }),
       ]);
-      if (!usersRes.ok) throw new Error(`${usersRes.status}: ${(await usersRes.text()).slice(0, 160)}`);
-      if (!requestsRes.ok) throw new Error(`${requestsRes.status}: ${(await requestsRes.text()).slice(0, 160)}`);
-      const usersData = await usersRes.json() as BackendUser[];
-      const requestsData = await requestsRes.json() as RegistrationRequest[];
+      if (!usersRes.ok)
+        throw new Error(`${usersRes.status}: ${(await usersRes.text()).slice(0, 160)}`);
+      if (!requestsRes.ok)
+        throw new Error(`${requestsRes.status}: ${(await requestsRes.text()).slice(0, 160)}`);
+      const usersData = (await usersRes.json()) as BackendUser[];
+      const requestsData = (await requestsRes.json()) as RegistrationRequest[];
       setRows(Array.isArray(usersData) ? usersData : []);
       setRequests(Array.isArray(requestsData) ? requestsData : []);
       const nextRoles: Record<number, UserRole> = {};
@@ -64,29 +71,46 @@ function Users() {
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      loadInFlight.current = false;
+      if (!silent) setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     void loadData();
-  }, []);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void loadData(true);
+    };
+    const interval = window.setInterval(refreshWhenVisible, 15_000);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [loadData]);
 
   const visibleUsers = rows.filter((u) => {
     const q = searchText.trim().toLowerCase();
     if (!q) return true;
-    return `${u.name ?? ""} ${u.email} ${u.role ?? ""} ${u.company ?? ""} ${u.position ?? ""} ${u.status ?? ""}`.toLowerCase().includes(q);
+    return `${u.name ?? ""} ${u.email} ${u.role ?? ""} ${u.company ?? ""} ${u.position ?? ""} ${u.status ?? ""}`
+      .toLowerCase()
+      .includes(q);
   });
 
   const approveRequest = async (request: RegistrationRequest) => {
     const role = selectedRoles[request.id] || "tender_specialist";
     setActionLoading(`approve-${request.id}`);
     try {
-      const res = await apiFetch(`${getLocalApiBase()}/api/v1/registration-requests/${request.id}/approve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role }),
-      });
+      const res = await apiFetch(
+        `${getLocalApiBase()}/api/v1/registration-requests/${request.id}/approve`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role }),
+        },
+      );
       if (!res.ok) throw new Error(await res.text());
       await loadData();
     } catch (e) {
@@ -99,7 +123,10 @@ function Users() {
   const rejectRequest = async (request: RegistrationRequest) => {
     setActionLoading(`reject-${request.id}`);
     try {
-      const res = await apiFetch(`${getLocalApiBase()}/api/v1/registration-requests/${request.id}/reject`, { method: "POST" });
+      const res = await apiFetch(
+        `${getLocalApiBase()}/api/v1/registration-requests/${request.id}/reject`,
+        { method: "POST" },
+      );
       if (!res.ok) throw new Error(await res.text());
       await loadData();
     } catch (e) {
@@ -133,7 +160,9 @@ function Users() {
     }
     setActionLoading(`delete-${user.id}`);
     try {
-      const res = await apiFetch(`${getLocalApiBase()}/api/v1/users/${user.id}`, { method: "DELETE" });
+      const res = await apiFetch(`${getLocalApiBase()}/api/v1/users/${user.id}`, {
+        method: "DELETE",
+      });
       if (!res.ok) throw new Error(await res.text());
       await loadData();
     } catch (e) {
@@ -165,13 +194,32 @@ function Users() {
             {loadError}
           </div>
         )}
-        <div className="rounded-xl border border-border bg-card p-5" style={{ boxShadow: "var(--shadow-sm)" }}>
+        <div
+          className="rounded-xl border border-border bg-card p-5"
+          style={{ boxShadow: "var(--shadow-sm)" }}
+        >
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-semibold text-foreground">Заявки на регистрацию</h2>
-              <p className="text-sm text-muted-foreground">Директор или админ принимает заявку и назначает роль</p>
+              <p className="text-sm text-muted-foreground">
+                Директор или админ принимает заявку и назначает роль
+              </p>
             </div>
-            <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">{requests.length}</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void loadData()}
+                disabled={loading || actionLoading !== null}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-50"
+                aria-label="Обновить заявки"
+                title="Обновить заявки"
+              >
+                <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              </button>
+              <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+                {requests.length}
+              </span>
+            </div>
           </div>
           <div className="space-y-3">
             {requests.map((req) => (
@@ -180,16 +228,30 @@ function Users() {
                   <div>
                     <div className="font-medium text-foreground">{req.name}</div>
                     <div className="text-xs text-muted-foreground">{req.email}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">{req.company || "Компания не указана"} · {req.position || "Должность не указана"}</div>
-                    {req.comment && <div className="mt-2 text-sm text-muted-foreground">{req.comment}</div>}
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {req.company || "Компания не указана"} ·{" "}
+                      {req.position || "Должность не указана"}
+                    </div>
+                    {req.comment && (
+                      <div className="mt-2 text-sm text-muted-foreground">{req.comment}</div>
+                    )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <select
                       value={selectedRoles[req.id] || "tender_specialist"}
-                      onChange={(e) => setSelectedRoles((prev) => ({ ...prev, [req.id]: e.target.value as UserRole }))}
+                      onChange={(e) =>
+                        setSelectedRoles((prev) => ({
+                          ...prev,
+                          [req.id]: e.target.value as UserRole,
+                        }))
+                      }
                       className="rounded-lg border border-input bg-background px-3 py-2 text-sm"
                     >
-                      {roleOptions.map((role) => <option key={role} value={role}>{roleLabels[role]}</option>)}
+                      {roleOptions.map((role) => (
+                        <option key={role} value={role}>
+                          {roleLabels[role]}
+                        </option>
+                      ))}
                     </select>
                     <button
                       onClick={() => approveRequest(req)}
@@ -247,10 +309,17 @@ function Users() {
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
                       <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
-                        {(u.name || u.email).split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}
+                        {(u.name || u.email)
+                          .split(" ")
+                          .map((n) => n[0])
+                          .join("")
+                          .slice(0, 2)
+                          .toUpperCase()}
                       </div>
                       <div>
-                        <div className="font-medium text-foreground">{u.name?.trim() || u.email}</div>
+                        <div className="font-medium text-foreground">
+                          {u.name?.trim() || u.email}
+                        </div>
                         <div className="text-xs text-muted-foreground">{u.email}</div>
                       </div>
                     </div>
@@ -262,7 +331,11 @@ function Users() {
                       disabled={actionLoading !== null}
                       className="rounded-lg border border-input bg-background px-2 py-1 text-xs font-medium"
                     >
-                      {roleOptions.map((role) => <option key={role} value={role}>{roleLabels[role]}</option>)}
+                      {roleOptions.map((role) => (
+                        <option key={role} value={role}>
+                          {roleLabels[role]}
+                        </option>
+                      ))}
                     </select>
                   </td>
                   <td className="px-6 py-4 text-muted-foreground">
@@ -270,7 +343,9 @@ function Users() {
                     {u.position && <div className="text-xs">{u.position}</div>}
                   </td>
                   <td className="px-6 py-4">
-                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${(u.status || "active") === "active" ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"}`}>
+                    <span
+                      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${(u.status || "active") === "active" ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"}`}
+                    >
                       {(u.status || "active") === "active" ? "Активен" : u.status}
                     </span>
                   </td>
