@@ -102,6 +102,11 @@ jobs:
             -f docker-compose.ghcr.yml \
             -f ops/access/docker-compose.db-access.yml \
             config --quiet
+          docker compose \
+            -f docker-compose.prod.yml \
+            -f docker-compose.ghcr.yml \
+            -f ops/gpu/docker-compose.gpu.yml \
+            config --quiet
 
   build:
     name: Build and push images

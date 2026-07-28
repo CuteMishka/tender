@@ -140,6 +140,7 @@ sudo install -d -m 0700 -o root -g root "$BACKUP_ROOT"
 declare -A LEGACY_IDS=()
 PRIMARY_CUTOVER=false
 LEGACY_STOPPED=false
+LEGACY_LLM_WAS_RUNNING=true
 NEW_PROJECT_STARTED=false
 
 project_service_ids() {
@@ -256,6 +257,11 @@ discover_cutover_source() {
     LEGACY_IDS[$service]="${service_ids[0]}"
     state="$(sudo docker inspect --format '{{.State.Status}}' "${LEGACY_IDS[$service]}")"
     if [ "$state" != "running" ]; then
+      if [ "$service" = "llm" ]; then
+        echo "Legacy LLM is $state; continuing because the canonical CPU-safe LLM will replace it."
+        LEGACY_LLM_WAS_RUNNING=false
+        continue
+      fi
       echo "Legacy $service container is $state; starting it before backup and cutover..."
       sudo docker start "${LEGACY_IDS[$service]}" >/dev/null
       wait_for_container "${LEGACY_IDS[$service]}" || exit 1
@@ -332,11 +338,15 @@ restore_nginx() {
 
 restart_legacy() {
   local service
+  local -a infrastructure=(postgres rag-db)
+  if [ "$LEGACY_LLM_WAS_RUNNING" = true ]; then
+    infrastructure+=(llm)
+  fi
   echo "Restarting preserved legacy rollback containers..." >&2
-  for service in postgres rag-db llm; do
+  for service in "${infrastructure[@]}"; do
     sudo docker start "${LEGACY_IDS[$service]}" >/dev/null
   done
-  for service in postgres rag-db llm; do
+  for service in "${infrastructure[@]}"; do
     wait_for_container "${LEGACY_IDS[$service]}" || return 1
   done
   for service in rag-api backend frontend parser; do

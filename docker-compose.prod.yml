@@ -55,13 +55,6 @@ services:
   llm:
     image: ollama/ollama:${OLLAMA_IMAGE_TAG:-0.30.0}
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-24h}
