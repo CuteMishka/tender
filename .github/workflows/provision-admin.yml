@@ -1,0 +1,72 @@
+name: Provision portal administrator
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: Pending registration email to promote
+        required: true
+        type: string
+
+concurrency:
+  group: provision-portal-administrator
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  APP_DIR: /home/cloud-user/tender1
+
+jobs:
+  provision:
+    name: Promote pending registration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate email
+        env:
+          ADMIN_EMAIL: ${{ inputs.email }}
+        run: |
+          if [ -z "$ADMIN_EMAIL" ] || [[ "$ADMIN_EMAIL" == *[[:space:]]* ]] ||
+            [[ "$ADMIN_EMAIL" != *@*.* ]] || [ "${#ADMIN_EMAIL}" -gt 254 ]; then
+            echo "Invalid administrator email" >&2
+            exit 1
+          fi
+
+      - name: Install SSH key
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST || '85.116.182.35' }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          test -n "$VPS_HOST"
+          test -n "$VPS_SSH_KEY"
+          test -n "$VPS_SSH_KNOWN_HOSTS"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh-keygen -F "$VPS_HOST" -f ~/.ssh/known_hosts >/dev/null
+
+      - name: Promote registration on VPS
+        env:
+          ADMIN_EMAIL: ${{ inputs.email }}
+          VPS_HOST: ${{ secrets.VPS_HOST || '85.116.182.35' }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          user="${VPS_USER:-cloud-user}"
+          printf -v q_email '%q' "$ADMIN_EMAIL"
+          printf -v q_app_dir '%q' "$APP_DIR"
+          tar -czf - ops/access/promote_registration_admin.sh |
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$user@$VPS_HOST" \
+              "mkdir -p '$APP_DIR/ops/access' && tar -xzf - -C '$APP_DIR'"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$user@$VPS_HOST" \
+            "chmod 700 '$APP_DIR/ops/access/promote_registration_admin.sh' &&
+             sudo env APP_DIR=$q_app_dir COMPOSE_PROJECT=tender-prod \
+               bash '$APP_DIR/ops/access/promote_registration_admin.sh' $q_email"
