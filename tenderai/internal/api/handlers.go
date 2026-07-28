@@ -809,19 +809,7 @@ func (h *Handler) listParserTenders(w http.ResponseWriter, r *http.Request, suit
 	if !parseBoolQuery(r.URL.Query().Get("includeExcluded")) {
 		query = applyExcludedTenderTextFilter(query, h.activeDictionaryValues("stop_words"))
 	}
-	aiScoreExpr := "COALESCE(ai_score, CASE WHEN (raw->>'ai_score') ~ '^[0-9]+$' THEN (raw->>'ai_score')::int ELSE 0 END)"
-	if suitable {
-		query = query.
-			Where("(is_suitable IS TRUE OR raw::jsonb @> ?::jsonb)", `{"is_suitable": true}`).
-			Where(aiScoreExpr+" > 50").
-			Where("(raw::jsonb @> ?::jsonb OR COALESCE(raw->>'ai_passed', '') = ?)", `{"ai_passed": true}`, "true").
-			Where("COALESCE(ai_provider, raw->>'ai_provider', '') = ?", "local-llm").
-			Where("COALESCE(raw->>'manual_suitable_removed', 'false') != ?", "true")
-	} else {
-		query = query.
-			Where(aiScoreExpr+" > 0").
-			Where("COALESCE(ai_provider, raw->>'ai_provider', '') = ?", "local-llm")
-	}
+	query = applyParserAIVisibilityFilter(query, suitable)
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -831,6 +819,11 @@ func (h *Handler) listParserTenders(w http.ResponseWriter, r *http.Request, suit
 			return
 		}
 		http.Error(w, `{"error":"ошибка получения количества тендеров"}`, http.StatusInternalServerError)
+		return
+	}
+	if total == 0 && !suitable && h.TP != nil {
+		log.Printf("no visible parser tenders, falling back to live TenderPlus API")
+		h.listTenderPlusTenders(w, r)
 		return
 	}
 
@@ -880,6 +873,24 @@ func (h *Handler) listParserTenders(w http.ResponseWriter, r *http.Request, suit
 		meta[key] = value
 	}
 	writeJSON(w, http.StatusOK, TendersListResponse{Items: items, Meta: meta})
+}
+
+func applyParserAIVisibilityFilter(query *gorm.DB, suitable bool) *gorm.DB {
+	if !suitable {
+		// The "Все" feed must not disappear when AI scoring is delayed or
+		// unavailable. Profile, keyword, status and stop-word filters above
+		// already keep the feed relevant; AI is required only for
+		// "Подходящие".
+		return query
+	}
+
+	aiScoreExpr := "COALESCE(ai_score, CASE WHEN (raw->>'ai_score') ~ '^[0-9]+$' THEN (raw->>'ai_score')::int ELSE 0 END)"
+	return query.
+		Where("(is_suitable IS TRUE OR raw::jsonb @> ?::jsonb)", `{"is_suitable": true}`).
+		Where(aiScoreExpr+" > 50").
+		Where("(raw::jsonb @> ?::jsonb OR COALESCE(raw->>'ai_passed', '') = ?)", `{"ai_passed": true}`, "true").
+		Where("COALESCE(ai_provider, raw->>'ai_provider', '') = ?", "local-llm").
+		Where("COALESCE(raw->>'manual_suitable_removed', 'false') != ?", "true")
 }
 
 func (h *Handler) listTenderPlusTenders(w http.ResponseWriter, r *http.Request) {

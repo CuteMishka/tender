@@ -92,6 +92,7 @@ jobs:
           bash -n ops/backup/tender-backup.sh
           bash -n ops/firewall/tender-docker-firewall.sh
           bash -n ops/harden_host.sh
+          bash -n ops/access/create_readonly_db_user.sh
           docker compose \
             -f docker-compose.prod.yml \
             -f docker-compose.ghcr.yml \

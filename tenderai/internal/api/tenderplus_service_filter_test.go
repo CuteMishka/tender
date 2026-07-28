@@ -2,8 +2,41 @@ package api
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
+
+func TestParserAIVisibilityFilterKeepsAllFeedIndependentFromAI(t *testing.T) {
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		DSN:                  "host=localhost user=test dbname=test sslmode=disable",
+		PreferSimpleProtocol: true,
+	}), &gorm.Config{
+		DryRun:               true,
+		DisableAutomaticPing: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allSQL := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		return applyParserAIVisibilityFilter(tx.Model(&ParserLot{}), false).Find(&[]ParserLot{})
+	})
+	if strings.Contains(allSQL, "ai_score") || strings.Contains(allSQL, "local-llm") {
+		t.Fatalf("all feed unexpectedly depends on AI scoring: %s", allSQL)
+	}
+
+	suitableSQL := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		return applyParserAIVisibilityFilter(tx.Model(&ParserLot{}), true).Find(&[]ParserLot{})
+	})
+	for _, required := range []string{"ai_score", "local-llm", "is_suitable"} {
+		if !strings.Contains(suitableSQL, required) {
+			t.Fatalf("suitable feed query is missing %q: %s", required, suitableSQL)
+		}
+	}
+}
 
 func TestParserLotIsServiceCandidate(t *testing.T) {
 	tests := []struct {
