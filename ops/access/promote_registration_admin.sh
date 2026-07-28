@@ -16,11 +16,6 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
-
 compose=(
   sudo docker compose
   -p "$COMPOSE_PROJECT"
@@ -30,12 +25,16 @@ compose=(
 )
 
 result="$(
-  "${compose[@]}" exec -T postgres psql \
-    -v ON_ERROR_STOP=1 \
-    -v admin_email="$admin_email" \
-    -Atq \
-    -U "${POSTGRES_USER:-tender}" \
-    -d "${POSTGRES_DB:-tender}" <<'SQL'
+  "${compose[@]}" exec -T \
+    -e PSQL_ADMIN_EMAIL="$admin_email" \
+    postgres sh -c '
+      exec psql \
+        -v ON_ERROR_STOP=1 \
+        -v admin_email="$PSQL_ADMIN_EMAIL" \
+        -Atq \
+        -U "$POSTGRES_USER" \
+        -d "$POSTGRES_DB"
+    ' <<'SQL'
 WITH candidate AS (
   SELECT id, email, password, name, company, position
   FROM registration_requests
