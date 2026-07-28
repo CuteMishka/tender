@@ -39,9 +39,12 @@ compose=(
   --env-file "$ENV_FILE"
   -f "$APP_DIR/docker-compose.prod.yml"
   -f "$APP_DIR/docker-compose.ghcr.yml"
+  -f "$APP_DIR/ops/access/docker-compose.db-access.yml"
 )
 
 sql_password="${developer_db_password//\'/\'\'}"
+
+"${compose[@]}" up -d postgres rag-db
 
 provision_role() {
   local service="$1"

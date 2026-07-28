@@ -1,0 +1,8 @@
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_SSH_PORT:-15432}:5432"
+
+  rag-db:
+    ports:
+      - "127.0.0.1:${RAG_POSTGRES_SSH_PORT:-15433}:5432"
