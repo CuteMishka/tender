@@ -196,6 +196,21 @@ single_running_service_container() {
   printf '%s\n' "${containers[0]}"
 }
 
+wait_for_container() {
+  local container="$1"
+  local state health
+  for _ in $(seq 1 60); do
+    state="$(sudo docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || true)"
+    health="$(sudo docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || true)"
+    if [ "$state" = "running" ] && { [ "$health" = "healthy" ] || [ "$health" = "none" ]; }; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "Container $container did not become ready" >&2
+  return 1
+}
+
 write_legacy_manifest() {
   local service details
   {
@@ -238,12 +253,13 @@ discover_cutover_source() {
       echo "Expected exactly one legacy $service container, found ${#service_ids[@]}" >&2
       exit 1
     fi
-    state="$(sudo docker inspect --format '{{.State.Status}}' "${service_ids[0]}")"
-    if [ "$state" != "running" ]; then
-      echo "Legacy $service container is $state; rollback set must be fully running before cutover" >&2
-      exit 1
-    fi
     LEGACY_IDS[$service]="${service_ids[0]}"
+    state="$(sudo docker inspect --format '{{.State.Status}}' "${LEGACY_IDS[$service]}")"
+    if [ "$state" != "running" ]; then
+      echo "Legacy $service container is $state; starting it before backup and cutover..."
+      sudo docker start "${LEGACY_IDS[$service]}" >/dev/null
+      wait_for_container "${LEGACY_IDS[$service]}" || exit 1
+    fi
   done
 
   assert_named_volume "${LEGACY_IDS[postgres]}" cloud-user_tender_postgres_data /var/lib/postgresql/data
@@ -312,21 +328,6 @@ restore_nginx() {
   else
     echo "WARNING: the restored Nginx tree did not pass nginx -t" >&2
   fi
-}
-
-wait_for_container() {
-  local container="$1"
-  local state health
-  for _ in $(seq 1 60); do
-    state="$(sudo docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || true)"
-    health="$(sudo docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || true)"
-    if [ "$state" = "running" ] && { [ "$health" = "healthy" ] || [ "$health" = "none" ]; }; then
-      return 0
-    fi
-    sleep 2
-  done
-  echo "Container $container did not become ready during rollback" >&2
-  return 1
 }
 
 restart_legacy() {
