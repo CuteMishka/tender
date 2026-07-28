@@ -12,6 +12,7 @@ ENV VITE_BACK_API=$VITE_BACK_API \
     VITE_FETCH_DOCUMENT_PROXY_URL=$VITE_FETCH_DOCUMENT_PROXY_URL
 
 COPY package*.json ./
+COPY scripts/patch-brace-expansion.cjs ./scripts/patch-brace-expansion.cjs
 RUN npm config set registry https://registry.npmjs.org/ \
     && npm config set fetch-retries 5 \
     && npm config set fetch-retry-mintimeout 20000 \
