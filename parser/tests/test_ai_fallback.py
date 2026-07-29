@@ -76,6 +76,24 @@ class DeterministicSuitabilityFallbackTest(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertEqual(result["fallback_source"], "card")
 
+    def test_vps_rental_card_is_high_confidence_service(self) -> None:
+        lot = TenderLot(
+            source="tenderplus",
+            external_id="74338",
+            url="https://example.test/74338",
+            title="Услуги по аренде виртуального выделенного сервера (VPS)",
+            description="Аренда VPS для информационной системы",
+            purchase_type="Услуга",
+        )
+
+        result = suitability_client(require_spec_text=False).deterministic_fallback(lot)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertTrue(result["passed"])
+        self.assertGreater(result["score"], 50)
+        self.assertIn("Аренда VPS/VDS / выделенного сервера", result["required_services"])
+
 
 class SchedulerFallbackTest(unittest.TestCase):
     def scheduler(self, client: GroqSuitabilityClient) -> ParserScheduler:
