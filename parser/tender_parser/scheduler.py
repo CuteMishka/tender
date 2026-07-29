@@ -516,6 +516,13 @@ class ParserScheduler:
                 if self._looks_like_rate_limit(exc):
                     self._ai_cooldown_until = time.monotonic() + self.settings.ai_rate_limit_cooldown_seconds
                     status = "rate_limited"
+                else:
+                    # LLM transport/status failures otherwise serialize one full
+                    # request timeout per lot behind _ai_lock. Open the circuit
+                    # after the first failure so the remaining lots can use the
+                    # conservative deterministic fallback immediately.
+                    self._ai_cooldown_until = time.monotonic() + self.settings.ai_rate_limit_cooldown_seconds
+                    status = "unavailable"
                 if previous_ai_completed:
                     self._record_ai_retry_failure(lot, status, exc)
                     self.log.warning(

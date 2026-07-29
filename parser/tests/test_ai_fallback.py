@@ -95,7 +95,7 @@ class SchedulerFallbackTest(unittest.TestCase):
         self.assertEqual(lot.raw["ai_filter_status"], "deterministic_fallback")
         self.assertGreater(lot.raw["ai_score"], 50)
         self.assertTrue(lot.raw["is_suitable"])
-        self.assertEqual(lot.raw["ai_last_error_status"], "error")
+        self.assertEqual(lot.raw["ai_last_error_status"], "unavailable")
         self.assertIn("connection refused", lot.raw["ai_last_error"])
         self.assertEqual(lot.raw["match_method"], "deterministic_spec_fallback")
 
@@ -115,9 +115,25 @@ class SchedulerFallbackTest(unittest.TestCase):
 
         scheduler._analyze_lot_with_ai(lot)
 
-        self.assertEqual(lot.raw["ai_filter_status"], "error")
+        self.assertEqual(lot.raw["ai_filter_status"], "unavailable")
         self.assertEqual(lot.raw["ai_score"], 0)
         self.assertFalse(lot.raw["is_suitable"])
+
+    def test_transport_failure_opens_circuit_for_next_lot(self) -> None:
+        client = suitability_client()
+        client.analyze = Mock(side_effect=RuntimeError("connection refused"))
+        scheduler = self.scheduler(client)
+        first = gpu_lot()
+        second = gpu_lot()
+        second.external_id = "74307"
+
+        scheduler._analyze_lot_with_ai(first)
+        scheduler._analyze_lot_with_ai(second)
+
+        self.assertEqual(first.raw["ai_last_error_status"], "unavailable")
+        self.assertEqual(second.raw["ai_last_error_status"], "cooldown")
+        self.assertEqual(second.raw["ai_filter_status"], "deterministic_fallback")
+        self.assertEqual(client.analyze.call_count, 1)
 
     def test_rate_limit_uses_fallback_and_enables_cooldown(self) -> None:
         client = suitability_client()
