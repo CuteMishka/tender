@@ -131,6 +131,8 @@ function renderAiStatusLabel(status?: string | null): string {
       return "AI временно недоступен";
     case "rate_limited":
       return "AI ждёт лимит";
+    case "deterministic_fallback":
+      return "Резервная оценка";
     case "manual_removed":
       return "Убрано вручную";
     case "no_spec_text":
@@ -151,6 +153,7 @@ function renderAiStatusClass(status?: string | null, suitable?: boolean | null):
   const value = (status || "").trim().toLowerCase();
   if (suitable) return "border-green-200 bg-green-50 text-green-700";
   if (value === "ok") return "border-sky-200 bg-sky-50 text-sky-700";
+  if (value === "deterministic_fallback") return "border-amber-200 bg-amber-50 text-amber-700";
   if (value === "cooldown" || value === "rate_limited") return "border-amber-200 bg-amber-50 text-amber-700";
   if (value === "manual_removed") return "border-red-200 bg-red-50 text-red-700";
   if (value === "no_relevant_spec_signals") return "border-slate-200 bg-slate-50 text-slate-600";

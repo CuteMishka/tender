@@ -483,17 +483,27 @@ class ParserScheduler:
         if self.settings.ai_require_spec_text:
             spec_signals = self._spec_relevance_signals(lot)
             lot.raw = {**lot.raw, "spec_relevance_signals": spec_signals}
-        if self._cooldown_active(self._ai_cooldown_until):
-            lot.raw = {**lot.raw, "ai_filter_status": "cooldown"}
-            return
         previous_ai_completed = (
             lot.raw.get("ai_provider") == self.ai_suitability.provider_name
             and lot.raw.get("ai_filter_status") == "ok"
             and isinstance(lot.raw.get("is_suitable"), bool)
             and isinstance(lot.raw.get("ai_score"), (int, float))
         )
+        if self._cooldown_active(self._ai_cooldown_until):
+            if previous_ai_completed:
+                self._record_ai_retry_failure(lot, "cooldown")
+                return
+            if self._apply_deterministic_ai_fallback(lot, "cooldown"):
+                return
+            lot.raw = {**lot.raw, "ai_filter_status": "cooldown"}
+            return
         with self._ai_lock:
             if self._cooldown_active(self._ai_cooldown_until):
+                if previous_ai_completed:
+                    self._record_ai_retry_failure(lot, "cooldown")
+                    return
+                if self._apply_deterministic_ai_fallback(lot, "cooldown"):
+                    return
                 lot.raw = {**lot.raw, "ai_filter_status": "cooldown"}
                 return
             self._wait_for_ai_delay()
@@ -507,17 +517,20 @@ class ParserScheduler:
                     self._ai_cooldown_until = time.monotonic() + self.settings.ai_rate_limit_cooldown_seconds
                     status = "rate_limited"
                 if previous_ai_completed:
-                    lot.raw = {
-                        **lot.raw,
-                        "ai_last_error": str(exc),
-                        "ai_last_error_status": status,
-                        "ai_last_error_at": datetime.now(timezone.utc).isoformat(),
-                    }
+                    self._record_ai_retry_failure(lot, status, exc)
                     self.log.warning(
                         "ai_lot_filter_failed",
                         lot=lot.stable_id,
                         error=str(exc),
                         preserved_previous=True,
+                    )
+                    return
+                if self._apply_deterministic_ai_fallback(lot, status, exc):
+                    self.log.warning(
+                        "ai_lot_filter_failed_using_deterministic_fallback",
+                        lot=lot.stable_id,
+                        error=str(exc),
+                        failure_status=status,
                     )
                     return
                 lot.raw = {
@@ -554,6 +567,56 @@ class ParserScheduler:
             "match_method": "ai_spec_services" if passed and has_spec_context else ("ai_semantic" if passed else None),
             "match_reason": result.get("reason"),
         }
+
+    def _record_ai_retry_failure(self, lot: TenderLot, status: str, exc: Exception | None = None) -> None:
+        lot.raw = {
+            **lot.raw,
+            "ai_last_error": str(exc) if exc is not None else "AI cooldown is active",
+            "ai_last_error_status": status,
+            "ai_last_error_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _apply_deterministic_ai_fallback(
+        self,
+        lot: TenderLot,
+        failure_status: str,
+        exc: Exception | None = None,
+    ) -> bool:
+        try:
+            result = self.ai_suitability.deterministic_fallback(lot)
+        except Exception as fallback_exc:
+            self.log.warning(
+                "deterministic_ai_fallback_failed",
+                lot=lot.stable_id,
+                error=str(fallback_exc),
+                original_error=str(exc) if exc is not None else None,
+            )
+            return False
+        if result is None:
+            return False
+
+        score = int(result.get("score") or 0)
+        passed = bool(result.get("passed"))
+        is_suitable = passed
+        matched_keyword = str(result.get("matched_theme") or "Детерминированная оценка") if is_suitable else None
+        fallback_source = str(result.get("fallback_source") or "rules")
+        lot.raw = {
+            **lot.raw,
+            "ai_filter": result,
+            "ai_filter_status": "deterministic_fallback",
+            "ai_provider": self.ai_suitability.provider_name,
+            "ai_score": score,
+            "ai_passed": passed,
+            "is_suitable": is_suitable,
+            "matched_keyword": matched_keyword,
+            "match_score": score / 100,
+            "match_method": f"deterministic_{fallback_source}_fallback",
+            "match_reason": result.get("reason"),
+            "ai_last_error": str(exc) if exc is not None else "AI cooldown is active",
+            "ai_last_error_status": failure_status,
+            "ai_last_error_at": datetime.now(timezone.utc).isoformat(),
+        }
+        return True
 
     def _wait_for_ai_delay(self) -> None:
         delay = self.settings.ai_request_delay_seconds

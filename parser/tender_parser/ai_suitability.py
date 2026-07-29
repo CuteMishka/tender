@@ -420,6 +420,36 @@ class GroqSuitabilityClient:
         result["model"] = self.model
         return result
 
+    def deterministic_fallback(self, lot: TenderLot) -> dict[str, Any] | None:
+        """Conservatively classify a lot when the configured LLM is unavailable.
+
+        A read technical specification always takes precedence over the shorter
+        card text.  Card-only promotion is allowed only when the deployment is
+        explicitly configured to evaluate lots without a specification.
+        """
+        result = self._hard_negative_result(lot)
+        fallback_source = "hard_negative"
+        has_spec_context = self._has_spec_context(lot)
+        if result is None and has_spec_context:
+            result = self._deterministic_spec_result(lot)
+            fallback_source = "spec"
+        elif result is None and not self.require_spec_text:
+            result = self._deterministic_card_result(lot)
+            fallback_source = "card"
+        if result is None:
+            return None
+
+        normalized = dict(result)
+        score = self._normalize_score(normalized.get("score"))
+        is_suitable = bool(normalized.get("is_suitable"))
+        normalized["score"] = score
+        normalized["passed"] = score > self.min_score and is_suitable
+        normalized["provider"] = self.provider_name
+        normalized["model"] = self.model
+        normalized["deterministic_fallback"] = True
+        normalized["fallback_source"] = fallback_source
+        return normalized
+
     def _analyze_gemini(self, lot: TenderLot) -> dict[str, Any]:
         hard_negative = self._hard_negative_result(lot)
         if hard_negative is not None:

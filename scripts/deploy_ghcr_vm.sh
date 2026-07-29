@@ -68,6 +68,12 @@ upgrade_env_default AUTH_REGISTER_RATE_LIMIT 3 10
 # excluded from "Suitable".
 upgrade_env_default AI_REQUIRE_SPEC_TEXT true false
 
+# The former sample environment used a provider label as the Ollama model
+# name. Ollama has no model named "local-llm"; the deploy already provisions
+# qwen2.5:3b, so migrate only that shipped invalid value and preserve any
+# operator-selected model.
+upgrade_env_default GROQ_MODEL local-llm qwen2.5:3b
+
 require_env() {
   local key="$1"
   local value
