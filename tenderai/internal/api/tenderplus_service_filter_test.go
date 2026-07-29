@@ -31,10 +31,13 @@ func TestParserAIVisibilityFilterKeepsAllFeedIndependentFromAI(t *testing.T) {
 	suitableSQL := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
 		return applyParserAIVisibilityFilter(tx.Model(&ParserLot{}), true).Find(&[]ParserLot{})
 	})
-	for _, required := range []string{"ai_score", "local-llm", "is_suitable"} {
+	for _, required := range []string{"ai_score", "is_suitable", "ai_passed"} {
 		if !strings.Contains(suitableSQL, required) {
 			t.Fatalf("suitable feed query is missing %q: %s", required, suitableSQL)
 		}
+	}
+	if strings.Contains(suitableSQL, "local-llm") {
+		t.Fatalf("suitable feed unexpectedly rejects valid non-local AI providers: %s", suitableSQL)
 	}
 }
 

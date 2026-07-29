@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import html
 import re
+import time
 from typing import Any
 from urllib.parse import urljoin
 
@@ -39,15 +40,24 @@ class TenderPlusPlatform(TenderPlatform):
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
         lots: dict[str, TenderLot] = {}
-        with httpx.Client(timeout=self.settings.request_timeout_seconds) as client:
+        with httpx.Client(timeout=self.settings.request_timeout_seconds, trust_env=False) as client:
             page = 1
             while True:
                 if max_pages > 0 and page > max_pages:
                     break
                 payload = {"query": self._query(api_keywords, page, page_size, end_date_from)}
-                response = client.post(self.settings.tenderplus_url, headers=headers, json=payload)
-                response.raise_for_status()
-                body = response.json()
+                try:
+                    body = self._request_page(client, headers, payload, page)
+                except Exception as exc:
+                    if page == 1 or not self._is_retryable_request_error(exc):
+                        raise
+                    self.log.warning(
+                        "tenderplus_partial_search",
+                        page=page,
+                        total=len(lots),
+                        error=str(exc),
+                    )
+                    break
                 errors = body.get("errors")
                 if errors:
                     raise RuntimeError(f"tenderplus graphql error: {str(errors)[:500]}")
@@ -94,6 +104,48 @@ class TenderPlusPlatform(TenderPlatform):
                 page += 1
 
         return list(lots.values())[:max_lots]
+
+    def _request_page(
+        self,
+        client: httpx.Client,
+        headers: dict[str, str],
+        payload: dict[str, str],
+        page: int,
+    ) -> dict[str, Any]:
+        attempts = max(1, self.settings.retry_attempts)
+        backoff = max(0.0, self.settings.retry_backoff_seconds)
+        for attempt in range(1, attempts + 1):
+            try:
+                response = client.post(self.settings.tenderplus_url, headers=headers, json=payload)
+                response.raise_for_status()
+                body = response.json()
+                if not isinstance(body, dict):
+                    raise RuntimeError("tenderplus response is not a JSON object")
+                return body
+            except Exception as exc:
+                if not self._is_retryable_request_error(exc) or attempt >= attempts:
+                    raise
+                delay = min(backoff * (2 ** (attempt - 1)), backoff * 8)
+                self.log.warning(
+                    "tenderplus_page_retry",
+                    page=page,
+                    attempt=attempt,
+                    attempts=attempts,
+                    delay_seconds=delay,
+                    error=str(exc),
+                )
+                if delay > 0:
+                    time.sleep(delay)
+        raise RuntimeError("tenderplus page request exhausted without a result")
+
+    @staticmethod
+    def _is_retryable_request_error(exc: Exception) -> bool:
+        if isinstance(exc, httpx.TransportError):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            status = exc.response.status_code
+            return status == 429 or 500 <= status < 600
+        return False
 
     def _is_service_candidate(self, lot: TenderLot) -> bool:
         subject_type = clean_text(str(lot.raw.get("subject_type") or "")).lower()

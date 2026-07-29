@@ -62,6 +62,12 @@ upgrade_env_default() {
 # shipped default to the current, still edge-rate-limited value.
 upgrade_env_default AUTH_REGISTER_RATE_LIMIT 3 10
 
+# TenderPlus frequently exposes a relevant card without an attached PDF/DOCX.
+# Preserve custom values, but migrate the former production default so those
+# lots receive a card-based AI assessment instead of remaining permanently
+# excluded from "Suitable".
+upgrade_env_default AI_REQUIRE_SPEC_TEXT true false
+
 require_env() {
   local key="$1"
   local value

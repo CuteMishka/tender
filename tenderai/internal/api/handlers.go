@@ -769,8 +769,6 @@ func (h *Handler) ListTenders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.listParserTenders(w, r, parseBoolQuery(r.URL.Query().Get("suitable")), map[string]interface{}{
-		"source":   "tenderplus",
-		"apiOnly":  true,
 		"pipeline": "tenderplus_api_local_llm",
 	})
 }
@@ -889,7 +887,6 @@ func applyParserAIVisibilityFilter(query *gorm.DB, suitable bool) *gorm.DB {
 		Where("(is_suitable IS TRUE OR raw::jsonb @> ?::jsonb)", `{"is_suitable": true}`).
 		Where(aiScoreExpr+" > 50").
 		Where("(raw::jsonb @> ?::jsonb OR COALESCE(raw->>'ai_passed', '') = ?)", `{"ai_passed": true}`, "true").
-		Where("COALESCE(ai_provider, raw->>'ai_provider', '') = ?", "local-llm").
 		Where("COALESCE(raw->>'manual_suitable_removed', 'false') != ?", "true")
 }
 

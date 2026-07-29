@@ -332,6 +332,9 @@ export type TendersListResponse = {
     actualTotalCount?: number;
     limited?: boolean;
     resultWindow?: number;
+    source?: string;
+    apiOnly?: boolean;
+    pipeline?: string;
   };
 };
 
@@ -606,6 +609,9 @@ function metaFromRecord(
     actualTotalCount: typeof m.actualTotalCount === "number" ? m.actualTotalCount : undefined,
     limited: typeof m.limited === "boolean" ? m.limited : undefined,
     resultWindow: typeof m.resultWindow === "number" ? m.resultWindow : undefined,
+    source: typeof m.source === "string" ? m.source : undefined,
+    apiOnly: typeof m.apiOnly === "boolean" ? m.apiOnly : undefined,
+    pipeline: typeof m.pipeline === "string" ? m.pipeline : undefined,
   };
 }
 

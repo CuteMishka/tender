@@ -172,37 +172,6 @@ function aiScoreBarTone(score?: number | null): string {
   return "bg-red-500";
 }
 
-const obviousNonProfileMarkers = [
-  "станок",
-  "видеопроектор",
-  "dlp-проектор",
-  "dlp проектор",
-  "проектор",
-  "кабель-канал",
-  "кабель канал",
-  "канцеляр",
-  "принтер",
-  "сканер",
-  "компьютер",
-  "ноутбук",
-  "планшет",
-  "научно-технической обработке документов",
-  "научно технической обработке документов",
-  "обработке документов",
-  "экспертизе образовательных программ",
-  "образовательных программ",
-];
-
-function isObviousNonProfileTender(tender: TenderItem): boolean {
-  const text = sanitizeApiText([
-    tender.title,
-    tender.description,
-    tender.purchaseType,
-    tender.matchedKeyword,
-  ].filter(Boolean).join(" ")).toLowerCase().replace(/ё/g, "е");
-  return obviousNonProfileMarkers.some((marker) => text.includes(marker));
-}
-
 type PaginationItem = number | "ellipsis-start" | "ellipsis-end";
 
 function buildPaginationItems(currentPage: number, pageCount: number): PaginationItem[] {
@@ -307,7 +276,6 @@ function TendersList() {
 
   const baseItems = activeTab === "Участвуем" ? participatingItems : (data?.items ?? []);
   const filteredItems = baseItems.filter((t) => {
-    if (activeTab !== "Участвуем" && isObviousNonProfileTender(t)) return false;
     const status = getTenderStatus(t.endDate);
     if (activeTab === "Активные" && status.color === "gray") return false;
     if (activeTab === "Истекающие" && status.color !== "red" && status.color !== "orange") return false;
@@ -603,7 +571,9 @@ function TendersList() {
                                 {t.aiProvider && <div className="mt-1 text-[10px] text-muted-foreground">{t.aiProvider}</div>}
                               </div>
                             ) : (
-                              <span className="text-xs text-muted-foreground">ожидает AI</span>
+                              <span className="text-xs text-muted-foreground">
+                                {data?.meta.apiOnly ? "ещё не оценён AI" : renderAiStatusLabel(t.aiStatus)}
+                              </span>
                             )}
                           </td>
                           <td className="px-4 py-4 text-right align-top font-semibold tabular-nums">{formatTenderAmount(t.cost)}</td>
