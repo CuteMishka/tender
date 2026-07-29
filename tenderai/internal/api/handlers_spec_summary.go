@@ -41,10 +41,6 @@ var (
 )
 
 func (h *Handler) AutoExtractTenderSpecSummary(w http.ResponseWriter, r *http.Request) {
-	if h.DB == nil {
-		writeJSONError(w, http.StatusServiceUnavailable, "database is not configured")
-		return
-	}
 	ragBase := strings.TrimRight(h.RagAPIBase, "/")
 	if ragBase == "" {
 		ragBase = "http://127.0.0.1:8083"
@@ -56,12 +52,11 @@ func (h *Handler) AutoExtractTenderSpecSummary(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	row, docs, ok := h.loadParserLotForSpec(w, id)
+	tender, ok := h.loadTenderForRAG(r.Context(), w, id)
 	if !ok {
 		return
 	}
-	dto := parserLotToDTO(row, docs)
-	dto.Documents = h.documentsForSpec(r.Context(), row, dto)
+	dto := tender.DTO
 
 	ragLotID := specRagLotID(dto)
 	if ragLotID == "" {
@@ -81,23 +76,25 @@ func (h *Handler) AutoExtractTenderSpecSummary(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if text := specTextFromRow(row); text != "" {
-		indexed, err := indexRAGText(r.Context(), ragBase, ragLotID, text, fmt.Sprintf("%s;backend_auto_spec_text", derefString(dto.Source)), h.RAGInternalServiceToken)
-		if err != nil {
-			writeJSONError(w, http.StatusBadGateway, err.Error())
+	if tender.ParserRow != nil {
+		if text := specTextFromRow(*tender.ParserRow); text != "" {
+			indexed, err := indexRAGText(r.Context(), ragBase, ragLotID, text, fmt.Sprintf("%s;backend_auto_spec_text", derefString(dto.Source)), h.RAGInternalServiceToken)
+			if err != nil {
+				writeJSONError(w, http.StatusBadGateway, err.Error())
+				return
+			}
+			if len(indexed.SpecSummary) == 0 {
+				writeJSONError(w, http.StatusBadGateway, "ТС обработана, но AI не выделил услуги")
+				return
+			}
+			writeSpecSummaryAuto(w, SpecSummaryAutoResponse{
+				RagLotID:      ragLotID,
+				Source:        "text",
+				ExtractedText: text,
+				SpecSummary:   indexed.SpecSummary,
+			})
 			return
 		}
-		if len(indexed.SpecSummary) == 0 {
-			writeJSONError(w, http.StatusBadGateway, "ТС обработана, но AI не выделил услуги")
-			return
-		}
-		writeSpecSummaryAuto(w, SpecSummaryAutoResponse{
-			RagLotID:      ragLotID,
-			Source:        "text",
-			ExtractedText: text,
-			SpecSummary:   indexed.SpecSummary,
-		})
-		return
 	}
 
 	doc := pickSpecDocumentDTO(dto.Documents)
@@ -128,20 +125,52 @@ func (h *Handler) AutoExtractTenderSpecSummary(w http.ResponseWriter, r *http.Re
 	})
 }
 
-func (h *Handler) loadParserLotForSpec(w http.ResponseWriter, id int) (ParserLot, []ParserDocument, bool) {
-	var row ParserLot
-	err := h.DB.Select(parserLotSelectExpr()).Where("id = ? AND source IN ?", id, parserTenderSources).First(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+type tenderRAGContext struct {
+	DTO       LotDTO
+	ParserRow *ParserLot
+}
+
+func (h *Handler) loadTenderForRAG(ctx context.Context, w http.ResponseWriter, id int) (tenderRAGContext, bool) {
+	if h.DB != nil {
+		var row ParserLot
+		err := h.DB.WithContext(ctx).
+			Select(parserLotSelectExpr()).
+			Where("id = ? AND source IN ?", id, parserTenderSources).
+			First(&row).Error
+		if err == nil {
+			var docs []ParserDocument
+			_ = h.DB.WithContext(ctx).
+				Where("lot_stable_id = ?", row.StableID).
+				Order("updated_at desc, id desc").
+				Find(&docs).Error
+			dto := parserLotToDTO(row, docs)
+			dto.Documents = h.documentsForSpec(ctx, row, dto)
+			return tenderRAGContext{DTO: dto, ParserRow: &row}, true
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			writeJSONError(w, http.StatusInternalServerError, "ошибка получения тендера")
+			return tenderRAGContext{}, false
+		}
+	}
+
+	if h.TP == nil {
 		writeJSONError(w, http.StatusNotFound, "тендер не найден")
-		return ParserLot{}, nil, false
+		return tenderRAGContext{}, false
 	}
+	lot, err := h.TP.LotByID(ctx, id)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "ошибка получения тендера")
-		return ParserLot{}, nil, false
+		if strings.Contains(strings.ToLower(err.Error()), "lot not found") {
+			writeJSONError(w, http.StatusNotFound, "тендер не найден")
+		} else {
+			writeJSONError(w, http.StatusBadGateway, "TenderPlus недоступен: "+err.Error())
+		}
+		return tenderRAGContext{}, false
 	}
-	var docs []ParserDocument
-	_ = h.DB.Where("lot_stable_id = ?", row.StableID).Order("updated_at desc, id desc").Find(&docs).Error
-	return row, docs, true
+	if lot == nil {
+		writeJSONError(w, http.StatusNotFound, "тендер не найден")
+		return tenderRAGContext{}, false
+	}
+	return tenderRAGContext{DTO: tenderPlusLotToDTO(*lot)}, true
 }
 
 func (h *Handler) documentsForSpec(ctx context.Context, row ParserLot, dto LotDTO) []LotDocumentDTO {

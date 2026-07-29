@@ -2,9 +2,12 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/dauren/tender/internal/tenderplus"
 )
 
 func specTestDocument(name, downloadLink string) LotDocumentDTO {
@@ -77,5 +80,49 @@ func TestGetRAGSpecSummaryAuthenticatesInternalRequest(t *testing.T) {
 	}
 	if gotToken != "internal-service-secret" {
 		t.Fatalf("internal token header = %q", gotToken)
+	}
+}
+
+func TestLoadTenderForRAGFallsBackToLiveTenderPlus(t *testing.T) {
+	const tenderID = 52018766
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("authorization header = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"lot": []map[string]interface{}{
+					{
+						"id":            tenderID,
+						"lot":           "264335",
+						"lot_source_id": "52018766",
+						"title":         "Live TenderPlus lot",
+						"description":   "Tender available in the live feed before parser synchronization.",
+						"documents":     []interface{}{},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	handler := &Handler{TP: tenderplus.NewClient(server.URL, "test-token")}
+	recorder := httptest.NewRecorder()
+	loaded, ok := handler.loadTenderForRAG(context.Background(), recorder, tenderID)
+	if !ok {
+		t.Fatalf("loadTenderForRAG failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if loaded.ParserRow != nil {
+		t.Fatal("live TenderPlus fallback must not report a parser row")
+	}
+	if loaded.DTO.ID != tenderID {
+		t.Fatalf("id = %d, want %d", loaded.DTO.ID, tenderID)
+	}
+	if got := derefString(loaded.DTO.LotSourceID); got != "52018766" {
+		t.Fatalf("lot source id = %q", got)
+	}
+	if got := derefString(loaded.DTO.Title); got != "Live TenderPlus lot" {
+		t.Fatalf("title = %q", got)
 	}
 }

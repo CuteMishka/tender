@@ -6,7 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/dauren/tender/internal/tenderplus"
+	"github.com/go-chi/chi/v5"
 )
 
 func TestNormalizeCloudyDocumentRange(t *testing.T) {
@@ -135,5 +139,72 @@ func TestPostCloudyChatToRAG(t *testing.T) {
 	}
 	if gotInternalToken != "internal-service-secret" {
 		t.Fatalf("internal token header = %q", gotInternalToken)
+	}
+}
+
+func TestCloudyChatUsesLiveTenderPlusLotBeforeParserSynchronization(t *testing.T) {
+	tenderPlusServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"lot": [{
+					"id": 52018766,
+					"lot": "264335",
+					"lot_source_id": "52018766",
+					"title": "Live TenderPlus lot",
+					"description": "Server infrastructure services",
+					"documents": []
+				}]
+			}
+		}`))
+	}))
+	defer tenderPlusServer.Close()
+
+	ragServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/lots/52018766/spec-summary":
+			http.NotFound(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/lots/52018766/cloudy/chat":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(ragCloudyChatResponse{
+				Answer:        "Лот доступен по данным TenderPlus.",
+				Sources:       []CloudySourceDTO{},
+				FollowUp:      []string{},
+				UsedDocuments: []string{},
+				Warnings:      []string{},
+				Provider:      "test",
+				Model:         "fake",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ragServer.Close()
+
+	handler := &Handler{
+		TP:         tenderplus.NewClient(tenderPlusServer.URL, "test-token"),
+		RagAPIBase: ragServer.URL,
+	}
+	router := chi.NewRouter()
+	router.Post("/api/v1/tenders/{tenderId}/cloudy/chat", handler.CloudyChat)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/tenders/52018766/cloudy/chat",
+		strings.NewReader(`{"question":"Какая услуга требуется?"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response CloudyChatResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Answer != "Лот доступен по данным TenderPlus." {
+		t.Fatalf("answer = %q", response.Answer)
 	}
 }

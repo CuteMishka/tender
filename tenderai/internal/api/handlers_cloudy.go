@@ -146,17 +146,11 @@ func (h *Handler) CloudyChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, cloudyInstantResponse(question))
 		return
 	}
-	if h.DB == nil {
-		writeJSONError(w, http.StatusServiceUnavailable, "database is not configured")
-		return
-	}
-
-	row, docs, ok := h.loadParserLotForSpec(w, id)
+	tender, ok := h.loadTenderForRAG(r.Context(), w, id)
 	if !ok {
 		return
 	}
-	dto := parserLotToDTO(row, docs)
-	dto.Documents = h.documentsForSpec(r.Context(), row, dto)
+	dto := tender.DTO
 
 	ragLotID := specRagLotID(dto)
 	if ragLotID == "" {
