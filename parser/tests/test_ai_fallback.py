@@ -65,6 +65,17 @@ class DeterministicSuitabilityFallbackTest(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertEqual(result["fallback_source"], "card")
 
+    def test_strong_card_is_used_when_available_spec_has_no_profile_signals(self) -> None:
+        lot = gpu_lot()
+        lot.raw["spec_text_sample"] = "Общие условия договора, сроки оплаты и порядок подписания актов."
+
+        result = suitability_client(require_spec_text=False).deterministic_fallback(lot)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["fallback_source"], "card")
+
 
 class SchedulerFallbackTest(unittest.TestCase):
     def scheduler(self, client: GroqSuitabilityClient) -> ParserScheduler:

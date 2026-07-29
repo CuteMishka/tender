@@ -433,7 +433,7 @@ class GroqSuitabilityClient:
         if result is None and has_spec_context:
             result = self._deterministic_spec_result(lot)
             fallback_source = "spec"
-        elif result is None and not self.require_spec_text:
+        if result is None and not self.require_spec_text:
             result = self._deterministic_card_result(lot)
             fallback_source = "card"
         if result is None:
