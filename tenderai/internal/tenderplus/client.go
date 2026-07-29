@@ -569,6 +569,14 @@ func (c *Client) ListLotOffersByOrgBIN(ctx context.Context, bin string, page, li
 }
 
 func (c *Client) LotByID(ctx context.Context, id int) (*Lot, error) {
+	// The list API exposes TenderPlus' internal numeric ID as Lot.ID. It cannot
+	// be queried through LotFilter (and lot_source_id is often null), so use the
+	// cursor lookup first. Keep the filter lookup as a fallback for callers that
+	// pass a numeric public lot/source number.
+	if lot, err := c.GetLotByID(ctx, id, nil); err == nil && lot != nil {
+		return lot, nil
+	}
+
 	return c.FindLot(ctx, []LotLookup{
 		{Field: "lotNumOrSourceId", Value: strconv.Itoa(id)},
 		{Field: "lotNumber", Value: strconv.Itoa(id)},
